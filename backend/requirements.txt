@@ -1,0 +1,17 @@
+flask
+flask-cors
+flask-socketio
+psycopg2-binary
+python-dotenv
+pyjwt
+bcrypt
+gunicorn
+requests
+faster-whisper
+soundfile
+numpy
+opencv-python-headless
+mediapipe
+pillow
+pydub
+werkzeug
