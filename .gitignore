@@ -1,12 +1,25 @@
+# Secrets
 *.pem
 .env
 .env.local
 .env.production
 infra.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.pytest_cache/
+
+# Node
 node_modules/
 dist/
-venv/
-__pycache__/
-.pm2/
-.DS_Store
 
+# Logs
+*.log
+.pm2/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/

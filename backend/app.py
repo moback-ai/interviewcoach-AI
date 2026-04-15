@@ -1157,6 +1157,578 @@ def handle_reset_calibration():
         emit("response", {"error": str(e)})
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  COMPATIBILITY HELPERS / LEGACY ROUTES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _normalize_metrics(value):
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_list(value):
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else [value]
+        except Exception:
+            return [value]
+    return [value]
+
+
+def _pairing_key(resume_id, jd_id):
+    return f"{resume_id}:{jd_id}"
+
+
+def _serialize_question(row):
+    data = dict(row)
+    difficulty = data.get('difficulty_level') or data.get('difficulty_category') or 'medium'
+    data['difficulty_level'] = difficulty
+    data['difficulty_category'] = difficulty
+    data['difficulty_experience'] = data.get('difficulty_experience') or 'beginner'
+    data['question'] = data.get('question_text')
+    data['answer'] = data.get('expected_answer')
+    return data
+
+
+def _build_dashboard_pairings(user_id):
+    resumes = {
+        str(row['id']): dict(row)
+        for row in query_all(
+            "SELECT id, file_url, file_name, stored_path, uploaded_at FROM resumes WHERE user_id=%s ORDER BY uploaded_at DESC",
+            (user_id,)
+        )
+    }
+    job_descriptions = {
+        str(row['id']): dict(row)
+        for row in query_all(
+            "SELECT id, title, description, file_url, technical, created_at FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC",
+            (user_id,)
+        )
+    }
+    questions = [
+        _serialize_question(row)
+        for row in query_all(
+            """
+            SELECT q.*
+            FROM questions q
+            LEFT JOIN resumes r ON r.id = q.resume_id
+            LEFT JOIN job_descriptions jd ON jd.id = q.jd_id
+            WHERE COALESCE(r.user_id, jd.user_id) = %s
+            ORDER BY q.created_at ASC
+            """,
+            (user_id,)
+        )
+    ]
+    feedback_rows = {
+        str(row['interview_id']): dict(row)
+        for row in query_all("SELECT * FROM interview_feedback", ())
+    }
+    interviews = [
+        dict(row)
+        for row in query_all(
+            "SELECT * FROM interviews WHERE user_id=%s ORDER BY scheduled_at DESC",
+            (user_id,)
+        )
+    ]
+
+    pairings = {}
+
+    def ensure_pairing(resume_id, jd_id):
+        if not resume_id or not jd_id:
+            return None
+        key = _pairing_key(resume_id, jd_id)
+        if key not in pairings:
+            resume = resumes.get(str(resume_id), {})
+            jd = job_descriptions.get(str(jd_id), {})
+            pairings[key] = {
+                'id': key,
+                'resume_id': str(resume_id),
+                'jd_id': str(jd_id),
+                'resumeName': resume.get('file_name', 'Resume'),
+                'resumeUrl': resume.get('file_url') or public_url(resume.get('stored_path', '')) if resume.get('stored_path') else resume.get('file_url'),
+                'jobTitle': jd.get('title', 'Untitled role'),
+                'jobDescription': jd.get('description', ''),
+                'technical': jd.get('technical', True),
+                'questionSets': {},
+            }
+        return pairings[key]
+
+    for question in questions:
+        pairing = ensure_pairing(question.get('resume_id'), question.get('jd_id'))
+        if not pairing:
+            continue
+        set_number = int(question.get('question_set') or 1)
+        pairing['questionSets'].setdefault(set_number, {
+            'questionSetNumber': set_number,
+            'questions': [],
+            'interviews': [],
+            'total_attempts': 0,
+        })['questions'].append(question)
+
+    for interview in interviews:
+        pairing = ensure_pairing(interview.get('resume_id'), interview.get('jd_id'))
+        if not pairing:
+            continue
+        set_number = int(interview.get('question_set') or 1)
+        feedback = feedback_rows.get(str(interview['id']))
+        metrics = _normalize_metrics(feedback.get('metrics') if feedback else None)
+        pairing['questionSets'].setdefault(set_number, {
+            'questionSetNumber': set_number,
+            'questions': [],
+            'interviews': [],
+            'total_attempts': 0,
+        })['interviews'].append({
+            **interview,
+            'metrics': metrics,
+            'summary': feedback.get('summary') if feedback else None,
+            'key_strengths': _normalize_list(feedback.get('key_strengths') if feedback else None),
+            'improvement_areas': _normalize_list(feedback.get('improvement_areas') if feedback else None),
+            'audio_url': feedback.get('audio_url') if feedback else None,
+        })
+
+    result = []
+    for pairing in pairings.values():
+        question_sets = []
+        for set_number, set_data in sorted(pairing['questionSets'].items(), key=lambda item: item[0], reverse=True):
+            interviews_for_set = sorted(
+                set_data['interviews'],
+                key=lambda row: row.get('attempt_number') or 0,
+                reverse=True,
+            )
+            question_sets.append({
+                'questionSetNumber': set_number,
+                'questions': set_data['questions'],
+                'interviews': interviews_for_set,
+                'total_attempts': len(interviews_for_set),
+            })
+        pairing['questionSets'] = question_sets
+        result.append(pairing)
+
+    result.sort(key=lambda pairing: pairing['questionSets'][0]['questionSetNumber'] if pairing['questionSets'] else 0, reverse=True)
+    return result
+
+
+def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, question_set=None, status='success'):
+    base = DOMAIN.rstrip('/')
+    params = [
+        f"interview_id={interview_id}",
+        f"payment_id={payment_id}",
+        f"status={status}",
+    ]
+    if resume_id:
+        params.append(f"resume_id={resume_id}")
+    if jd_id:
+        params.append(f"jd_id={jd_id}")
+    if question_set is not None:
+        params.append(f"question_set={question_set}")
+    return f"{base}/payment-status?{'&'.join(params)}"
+
+
+@app.route('/api/me', methods=['PUT', 'OPTIONS'])
+@verify_supabase_token
+def update_me():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json() or {}
+    updates = []
+    params = []
+    full_name = data.get('full_name') or (data.get('data') or {}).get('full_name')
+    password = data.get('password')
+    if full_name is not None:
+        updates.append('full_name=%s')
+        params.append(full_name.strip())
+    if password:
+        updates.append('password_hash=%s')
+        params.append(hash_password(password))
+    if not updates:
+        user = query_one('SELECT id, email, full_name, plan, created_at FROM users WHERE id=%s', (request.user['id'],))
+        return jsonify({'success': True, 'user': dict(user) if user else None})
+    params.append(request.user['id'])
+    user = execute(
+        f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING id, email, full_name, plan, created_at",
+        tuple(params),
+    )
+    return jsonify({'success': True, 'user': dict(user) if user else None})
+
+
+@app.route('/api/resumes', methods=['GET', 'POST', 'OPTIONS'])
+@verify_supabase_token
+def resumes_api():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    user_id = request.user['id']
+    if request.method == 'GET':
+        rows = query_all('SELECT * FROM resumes WHERE user_id=%s ORDER BY uploaded_at DESC', (user_id,))
+        return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+    data = request.get_json() or {}
+    file_url = data.get('file_url')
+    file_name = data.get('file_name') or 'resume'
+    stored_path = data.get('stored_path')
+    row = execute(
+        'INSERT INTO resumes (user_id, file_url, file_name, stored_path) VALUES (%s, %s, %s, %s) RETURNING *',
+        (user_id, file_url, file_name, stored_path),
+    )
+    return jsonify({'success': True, 'data': dict(row)}), 201
+
+
+@app.route('/api/payments', methods=['GET'])
+@verify_supabase_token
+def get_payments():
+    rows = query_all('SELECT * FROM payments WHERE user_id=%s ORDER BY paid_at DESC', (request.user['id'],))
+    return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+
+
+@app.route('/api/create-payment', methods=['POST', 'OPTIONS'])
+@verify_supabase_token
+def create_payment():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json() or {}
+    user_id = request.user['id']
+    interview_id = data.get('interview_id')
+    resume_id = data.get('resume_id')
+    jd_id = data.get('jd_id')
+    question_set = data.get('question_set')
+    retake_from = data.get('retake_from')
+    amount = data.get('amount', 49900)
+    payment_id = f"pay_{uuid.uuid4().hex[:12]}"
+
+    if interview_id:
+        execute(
+            """
+            UPDATE interviews
+            SET resume_id = COALESCE(%s, resume_id),
+                jd_id = COALESCE(%s, jd_id),
+                question_set = COALESCE(%s, question_set),
+                retake_from = COALESCE(%s, retake_from),
+                status = 'STARTED'
+            WHERE id = %s AND user_id = %s
+            """,
+            (resume_id, jd_id, question_set, retake_from, interview_id, user_id),
+        )
+
+    payment = execute(
+        """
+        INSERT INTO payments (user_id, interview_id, amount, provider, payment_status, transaction_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (user_id, interview_id, amount, 'internal', 'success', payment_id),
+    )
+
+    return jsonify({
+        'success': True,
+        'payment_id': payment_id,
+        'payment_url': _payment_redirect_url(interview_id, payment_id, resume_id, jd_id, question_set, 'success'),
+        'data': dict(payment) if payment else None,
+    })
+
+
+@app.route('/api/check-payment-status', methods=['GET'])
+@verify_supabase_token
+def check_payment_status():
+    transaction_id = request.args.get('transaction_id')
+    row = query_one(
+        'SELECT * FROM payments WHERE user_id=%s AND transaction_id=%s ORDER BY paid_at DESC LIMIT 1',
+        (request.user['id'], transaction_id),
+    )
+    if not row:
+        return jsonify({'success': False, 'status': 'not_found'}), 404
+    return jsonify({'success': True, 'status': row['payment_status'], 'data': dict(row)})
+
+
+@app.route('/api/interviews/<interview_id>', methods=['GET'])
+@verify_supabase_token
+def get_interview(interview_id):
+    row = query_one('SELECT * FROM interviews WHERE id=%s AND user_id=%s', (interview_id, request.user['id']))
+    if not row:
+        return jsonify({'success': False, 'message': 'Interview not found'}), 404
+    return jsonify({'success': True, 'data': dict(row)})
+
+
+@app.route('/api/interviews/<interview_id>', methods=['DELETE', 'OPTIONS'])
+@verify_supabase_token
+def delete_interview(interview_id):
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    execute('DELETE FROM interviews WHERE id=%s AND user_id=%s', (interview_id, request.user['id']))
+    return jsonify({'success': True})
+
+
+@app.route('/api/support-bot-data', methods=['GET'])
+@verify_supabase_token
+def support_bot_data():
+    user_id = request.user['id']
+    user = query_one('SELECT id, email, full_name, plan, created_at FROM users WHERE id=%s', (user_id,))
+    payments = query_all('SELECT * FROM payments WHERE user_id=%s ORDER BY paid_at DESC LIMIT 10', (user_id,))
+    interviews = query_all(
+        """
+        SELECT i.*, jd.title AS job_title, i.scheduled_at AS created_at
+        FROM interviews i
+        LEFT JOIN job_descriptions jd ON jd.id = i.jd_id
+        WHERE i.user_id=%s
+        ORDER BY i.scheduled_at DESC
+        LIMIT 10
+        """,
+        (user_id,),
+    )
+    resumes = query_all('SELECT * FROM resumes WHERE user_id=%s ORDER BY uploaded_at DESC LIMIT 10', (user_id,))
+    jds = query_all('SELECT * FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC LIMIT 10', (user_id,))
+    feedback = query_all(
+        """
+        SELECT f.*
+        FROM interview_feedback f
+        JOIN interviews i ON i.id = f.interview_id
+        WHERE i.user_id=%s
+        ORDER BY f.created_at DESC
+        LIMIT 10
+        """,
+        (user_id,),
+    )
+    return jsonify({'success': True, 'data': {
+        'user_info': dict(user) if user else {},
+        'payments': [dict(row) for row in payments],
+        'interviews': [dict(row) for row in interviews],
+        'resumes': [dict(row) for row in resumes],
+        'job_descriptions': [dict(row) for row in jds],
+        'interview_feedback': [dict(row) for row in feedback],
+    }})
+
+
+@app.route('/functions/v1/upload-file', methods=['POST', 'OPTIONS'])
+@app.route('/api/functions/v1/upload-file', methods=['POST', 'OPTIONS'])
+@verify_supabase_token
+def legacy_upload_file():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': 'No file uploaded'}), 400
+    file = request.files['file']
+    folder = (request.form.get('folder') or 'general').strip('/')
+    filename = secure_filename(file.filename)
+    result = save_bytes(file.read(), folder, filename)
+    return jsonify({'success': True, 'data': result})
+
+
+@app.route('/functions/v1/resumes', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/api/functions/v1/resumes', methods=['GET', 'POST', 'OPTIONS'])
+@verify_supabase_token
+def legacy_resumes():
+    return resumes_api()
+
+
+@app.route('/functions/v1/job-descriptions', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/api/functions/v1/job-descriptions', methods=['GET', 'POST', 'OPTIONS'])
+@verify_supabase_token
+def legacy_job_descriptions():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    if request.method == 'GET':
+        return get_job_descriptions()
+    data = request.get_json() or {}
+    jd = execute(
+        'INSERT INTO job_descriptions (user_id, title, description, file_url, technical) VALUES (%s, %s, %s, %s, %s) RETURNING *',
+        (request.user['id'], data.get('title'), data.get('description'), data.get('file_url'), data.get('technical', True)),
+    )
+    return jsonify({'success': True, 'data': dict(jd)}), 201
+
+
+@app.route('/functions/v1/interviews', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/api/functions/v1/interviews', methods=['GET', 'POST', 'OPTIONS'])
+@verify_supabase_token
+def legacy_interviews():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    if request.method == 'GET':
+        resume_id = request.args.get('resume_id')
+        jd_id = request.args.get('jd_id')
+        question_set = request.args.get('question_set')
+        sql = 'SELECT * FROM interviews WHERE user_id=%s'
+        params = [request.user['id']]
+        if resume_id:
+            sql += ' AND resume_id=%s'
+            params.append(resume_id)
+        if jd_id:
+            sql += ' AND jd_id=%s'
+            params.append(jd_id)
+        if question_set:
+            sql += ' AND question_set=%s'
+            params.append(int(question_set))
+        sql += ' ORDER BY scheduled_at DESC'
+        rows = query_all(sql, tuple(params))
+        return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+    return create_interview()
+
+
+@app.route('/functions/v1/interviews/<interview_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@app.route('/api/functions/v1/interviews/<interview_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@verify_supabase_token
+def legacy_interview_detail(interview_id):
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    if request.method == 'GET':
+        return get_interview(interview_id)
+    if request.method == 'DELETE':
+        return delete_interview(interview_id)
+    return update_interview(interview_id)
+
+
+@app.route('/functions/v1/questions', methods=['GET', 'POST', 'OPTIONS'])
+@app.route('/api/functions/v1/questions', methods=['GET', 'POST', 'OPTIONS'])
+@verify_supabase_token
+def legacy_questions():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    if request.method == 'GET':
+        resume_id = request.args.get('resume_id')
+        jd_id = request.args.get('jd_id')
+        question_set = request.args.get('question_set')
+        sql = 'SELECT * FROM questions WHERE 1=1'
+        params = []
+        if resume_id:
+            sql += ' AND resume_id=%s'
+            params.append(resume_id)
+        if jd_id:
+            sql += ' AND jd_id=%s'
+            params.append(jd_id)
+        if question_set:
+            sql += ' AND question_set=%s'
+            params.append(int(question_set))
+        sql += ' ORDER BY created_at ASC'
+        rows = [_serialize_question(row) for row in query_all(sql, tuple(params))]
+        return jsonify({'success': True, 'data': rows})
+    data = request.get_json() or {}
+    resume_id = data.get('resume_id')
+    jd_id = data.get('jd_id')
+    question_set = data.get('question_set', 1)
+    saved = []
+    for question in data.get('questions', []):
+        row = execute(
+            """
+            INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, question_set, requires_code)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                question.get('interview_id') or data.get('interview_id'),
+                resume_id,
+                jd_id,
+                question.get('question_text') or question.get('question'),
+                question.get('expected_answer') or question.get('answer'),
+                question.get('difficulty_category') or question.get('difficulty_level') or 'medium',
+                question.get('question_set') or question_set,
+                question.get('requires_code', False),
+            ),
+        )
+        saved.append(_serialize_question(row))
+    return jsonify({'success': True, 'data': saved}), 201
+
+
+@app.route('/functions/v1/dashboard', methods=['GET'])
+@app.route('/api/functions/v1/dashboard', methods=['GET'])
+@verify_supabase_token
+def legacy_dashboard():
+    return jsonify({'success': True, 'data': _build_dashboard_pairings(request.user['id'])})
+
+
+@app.route('/functions/v1/payments', methods=['GET'])
+@app.route('/api/functions/v1/payments', methods=['GET'])
+@verify_supabase_token
+def legacy_payments():
+    return get_payments()
+
+
+@app.route('/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
+@app.route('/api/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
+@verify_supabase_token
+def legacy_create_payment():
+    return create_payment()
+
+
+@app.route('/functions/v1/interview-feedback', methods=['GET'])
+@app.route('/api/functions/v1/interview-feedback', methods=['GET'])
+@verify_supabase_token
+def legacy_interview_feedback():
+    interview_id = request.args.get('interview_id')
+    if interview_id:
+        row = query_one('SELECT * FROM interview_feedback WHERE interview_id=%s', (interview_id,))
+        return jsonify({'success': True, 'data': [dict(row)] if row else []})
+    limit = int(request.args.get('limit', 100))
+    rows = query_all(
+        """
+        SELECT f.*
+        FROM interview_feedback f
+        JOIN interviews i ON i.id = f.interview_id
+        WHERE i.user_id=%s
+        ORDER BY f.created_at ASC
+        LIMIT %s
+        """,
+        (request.user['id'], limit),
+    )
+    return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+
+
+@app.route('/functions/v1/transcripts', methods=['GET'])
+@app.route('/api/functions/v1/transcripts', methods=['GET'])
+@verify_supabase_token
+def legacy_transcripts():
+    interview_id = request.args.get('interview_id')
+    row = query_one('SELECT * FROM transcripts WHERE interview_id=%s', (interview_id,))
+    return jsonify({'success': True, 'data': [dict(row)] if row else []})
+
+
+@app.route('/functions/v1/chat-history', methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
+@app.route('/api/functions/v1/chat-history', methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
+@verify_supabase_token
+def legacy_chat_history():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    interview_id = request.args.get('interview_id') or (request.get_json(silent=True) or {}).get('interview_id')
+    if not interview_id:
+        return jsonify({'success': False, 'error': 'interview_id required'}), 400
+    if request.method == 'GET':
+        rows = query_all('SELECT * FROM chat_history WHERE interview_id=%s ORDER BY created_at ASC', (interview_id,))
+        content = '\n'.join(f"{row['role']}:{row['content']}" for row in rows)
+        return jsonify({'success': True, 'history': [{'content': content}] if content else []})
+    if request.method == 'DELETE':
+        execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
+        return jsonify({'success': True})
+    data = request.get_json() or {}
+    content = data.get('content', '')
+    if '\n' in content:
+        execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
+        lines = [line for line in content.splitlines() if line.strip()]
+    else:
+        lines = [content] if content else []
+    for line in lines:
+        role = 'assistant'
+        message = line
+        if ':' in line:
+            speaker, message = line.split(':', 1)
+            role = 'assistant' if speaker.strip().lower() in {'assistant', 'interviewer'} else 'user'
+        execute('INSERT INTO chat_history (interview_id, role, content) VALUES (%s, %s, %s)', (interview_id, role, message.strip()))
+    return jsonify({'success': True})
+
+
+@app.route('/functions/v1/support-bot-data', methods=['GET'])
+@app.route('/api/functions/v1/support-bot-data', methods=['GET'])
+@verify_supabase_token
+def legacy_support_bot_data():
+    return support_bot_data()
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  STARTUP
 # ─────────────────────────────────────────────────────────────────────────────
 

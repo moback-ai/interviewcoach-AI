@@ -11,66 +11,37 @@ import re
 # Load environment variables
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
-# Supabase Configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+# Local backend API configuration
+BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://127.0.0.1:5000")
 
 
-def fetch_interview_metrics_from_edge_function(auth_token: str, limit: int = 100):
+def fetch_interview_metrics(auth_token: str, limit: int = 100):
     """
-    Fetch interview feedback with metrics from the Supabase edge function.
+    Fetch interview feedback with metrics from the local backend API.
     Returns interviews ordered chronologically (oldest first).
-    
-    Args:
-        auth_token: User's authentication token (Bearer token)
-        limit: Maximum number of interviews to fetch
-    
-    Returns:
-        List of interview feedback objects with metrics, or None if error
     """
     try:
-        edge_function_url = f"{SUPABASE_URL}/functions/v1/interview-feedback"
-        
-        # Query parameters for chronological order
-        params = {
-            'limit': limit,
-            'offset': 0,
-            'sort_by': 'interviews.created_at',
-            'sort_order': 'asc'  # Oldest first (chronological)
-        }
-        
+        endpoint = f"{BACKEND_API_BASE}/api/functions/v1/interview-feedback"
         headers = {
             'Authorization': f'Bearer {auth_token}',
             'Content-Type': 'application/json',
-            'apikey': SUPABASE_ANON_KEY
         }
-        
-        print(f"[INFO] Fetching interview metrics from edge function...")
-        response = requests.get(edge_function_url, headers=headers, params=params)
-        
+        params = {'limit': limit}
+
+        print('[INFO] Fetching interview metrics from local backend API...')
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+
         if response.status_code != 200:
-            print(f"[ERROR] Edge function returned status {response.status_code}: {response.text}")
+            print(f"[ERROR] Backend API returned status {response.status_code}: {response.text}")
             return None
-        
+
         data = response.json()
-        
-        if not data.get('success'):
-            print(f"[ERROR] Edge function returned error: {data.get('error', 'Unknown error')}")
-            return None
-        
-        feedbacks = data.get('data', [])
-        
-        # Filter to only include feedbacks with metrics
-        feedbacks_with_metrics = [
-            fb for fb in feedbacks 
-            if fb.get('metrics') is not None
-        ]
-        
+        feedbacks = data.get('data', []) if data.get('success') else []
+        feedbacks_with_metrics = [fb for fb in feedbacks if fb.get('metrics') is not None]
+
         print(f"[INFO] Found {len(feedbacks_with_metrics)} interviews with metrics out of {len(feedbacks)} total")
-        
         return feedbacks_with_metrics
-    
+
     except Exception as e:
         print(f"[ERROR] Failed to fetch interview metrics: {e}")
         import traceback
@@ -837,7 +808,7 @@ def analyze_user_performance(auth_token: str, model="llama3", limit=100):
     print(f"[INFO] Starting performance trend analysis...")
     
     # Fetch interviews from edge function
-    feedbacks = fetch_interview_metrics_from_edge_function(auth_token, limit)
+    feedbacks = fetch_interview_metrics(auth_token, limit)
     
     if not feedbacks:
         return {

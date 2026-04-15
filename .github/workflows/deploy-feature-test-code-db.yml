@@ -1,0 +1,91 @@
+name: Deploy Feature Branch
+
+on:
+  push:
+    branches:
+      - feature/test-code-DB
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: current
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          echo "VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}" > .env
+          echo "VITE_STORAGE_URL=${{ secrets.VITE_STORAGE_URL }}" >> .env
+          npm install --legacy-peer-deps
+          npm run build
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          ssh-keyscan -H ${{ secrets.BACKEND_HOST }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ secrets.FRONTEND_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync backend source
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key.pem" \
+            backend/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/apps/backend/
+
+      - name: Configure backend and restart
+        run: |
+          ssh -i ~/.ssh/deploy_key.pem ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          set -e
+          cat > /apps/backend/.env <<'ENVEOF'
+          DB_HOST=${{ secrets.DB_HOST }}
+          DB_PORT=${{ secrets.DB_PORT }}
+          DB_NAME=${{ secrets.DB_NAME }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          DOMAIN=https://interviewcoach.com
+          STORAGE_PATH=/apps/storage
+          PUBLIC_STORAGE_URL=https://interviewcoach.com/storage
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          WHISPER_MODEL=base
+          UPLOAD_FOLDER=/apps/storage
+          MAX_CONTENT_MB=200
+          BACKEND_API_BASE=http://127.0.0.1:5000
+          ENVEOF
+          cd /apps/backend
+          if [ ! -d venv ]; then python3 -m venv venv; fi
+          . venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pm2 delete backend >/dev/null 2>&1 || true
+          pm2 start "venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 --worker-class eventlet app:app" --name backend
+          pm2 save
+          curl -f http://127.0.0.1:5000/api/health
+          EOFSSH
+
+      - name: Upload frontend build
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key.pem" \
+            frontend/dist/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
+
+      - name: Publish frontend
+        run: |
+          ssh -i ~/.ssh/deploy_key.pem ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
+          set -e
+          sudo mkdir -p /var/www/interview
+          sudo rsync -av --delete /tmp/frontend-dist/ /var/www/interview/
+          sudo nginx -t
+          sudo systemctl reload nginx
+          EOFSSH

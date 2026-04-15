@@ -263,10 +263,10 @@ function InterviewFeedbackPage() {
         throw new Error('No active session');
       }
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
       
       // Fetch feedback data using the interview_id via Supabase Edge Function
-      const response = await fetch(`${supabaseUrl}/functions/v1/interview-feedback?interview_id=${interviewId}`, {
+      const response = await fetch(`${backendOrigin}/functions/v1/interview-feedback?interview_id=${interviewId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -443,10 +443,10 @@ function InterviewFeedbackPage() {
       // Fetch transcript data if not already available
       let transcriptData = null;
       if (feedbackData?.interview_id) {
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
         const { data: { session } } = await supabase.auth.getSession();
         
-        const transcriptResponse = await fetch(`${supabaseUrl}/functions/v1/transcripts?interview_id=${feedbackData.interview_id}`, {
+        const transcriptResponse = await fetch(`${backendOrigin}/functions/v1/transcripts?interview_id=${feedbackData.interview_id}`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${session.access_token}`,

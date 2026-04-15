@@ -28,13 +28,12 @@ def hash_password(password: str) -> str:
 def check_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
-# ── Decorator — same name as before so all routes work unchanged ───────────────
+# ── Decorators ───────────────────────────────────────────────────────────────
 
-def verify_supabase_token(f):
+def verify_auth_token(f):
     """
-    Drop-in replacement for the old Supabase token decorator.
-    Verifies our own JWT and populates request.user with the same shape
-    that app.py expects: request.user.get('id'), request.user.get('email')
+    Verifies our own JWT and populates request.user with the shape the app
+    expects: request.user.get('id'), request.user.get('email').
     """
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -65,6 +64,15 @@ def verify_supabase_token(f):
             return jsonify({"error": "Token verification failed"}), 401
 
     return decorated
+
+
+def verify_supabase_token(f):
+    """
+    Backward-compatible alias kept only so older imports continue to work while
+    the rest of the codebase finishes moving away from Supabase naming.
+    """
+    return verify_auth_token(f)
+
 
 
 def optional_auth(f):
