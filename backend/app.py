@@ -41,9 +41,26 @@ from common.auth import verify_supabase_token, create_token, hash_password, chec
 from common.db import query_one, query_all, execute
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 
-from INTERVIEW.Interview_manager import InterviewManager
-from INTERVIEW.analyze_performance_trends import analyze_user_performance, analyze_performance_from_feedbacks
-from Piper.voiceCloner import synthesize_text_to_wav
+try:
+    from INTERVIEW.Interview_manager import InterviewManager
+    from INTERVIEW.analyze_performance_trends import analyze_user_performance, analyze_performance_from_feedbacks
+except Exception as interview_import_error:
+    InterviewManager = None
+
+    def _missing_interview_dependency(*args, **kwargs):
+        raise RuntimeError(f"Interview AI dependencies are unavailable: {interview_import_error}")
+
+    analyze_user_performance = _missing_interview_dependency
+    analyze_performance_from_feedbacks = _missing_interview_dependency
+    print(f"[WARN] Interview modules unavailable: {interview_import_error}")
+
+try:
+    from Piper.voiceCloner import synthesize_text_to_wav
+except Exception as voice_import_error:
+    def synthesize_text_to_wav(*args, **kwargs):
+        raise RuntimeError(f"Voice cloning dependencies are unavailable: {voice_import_error}")
+
+    print(f"[WARN] Voice cloning unavailable: {voice_import_error}")
 
 device = get_device()
 interview_instances = {}
