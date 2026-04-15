@@ -411,10 +411,10 @@ export default function QuestionsPage() {
           throw new Error('No active session');
         }
 
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
         
         // First, get all available question sets for this specific resume_id + jd_id combination
-        const questionSetsResponse = await fetch(`${supabaseUrl}/functions/v1/questions?resume_id=${resumeIdFromUrl}&jd_id=${jdIdFromUrl}`, {
+        const questionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeIdFromUrl}&jd_id=${jdIdFromUrl}`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
@@ -450,7 +450,7 @@ export default function QuestionsPage() {
         
         if (targetQuestionSet) {
           // Fetch questions from the specific question set for this combination
-          const questionsResponse = await fetch(`${supabaseUrl}/functions/v1/questions?resume_id=${resumeIdFromUrl}&jd_id=${jdIdFromUrl}&question_set=${targetQuestionSet}`, {
+          const questionsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeIdFromUrl}&jd_id=${jdIdFromUrl}&question_set=${targetQuestionSet}`, {
             method: 'GET',
             headers: {
               'Authorization': `Bearer ${session.access_token}`,
@@ -501,10 +501,10 @@ export default function QuestionsPage() {
   // ✅ New function to fetch interview history for the current question set
   const fetchInterviewHistory = async (resumeId, jdId, questionSet, accessToken) => {
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
       
       // Fetch interview history for this specific question set
-      const response = await fetch(`${supabaseUrl}/functions/v1/dashboard`, {
+      const response = await fetch(`${backendOrigin}/functions/v1/dashboard`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${accessToken}`,
@@ -642,7 +642,7 @@ export default function QuestionsPage() {
       }
 
       // Create blank interview with minimal data
-      const blankInterviewResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews`, {
+      const blankInterviewResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -667,7 +667,7 @@ export default function QuestionsPage() {
       console.log('✅ Blank interview created:', blankInterviewId);
 
       // ✅ STEP 2: Create payment with interview_id in metadata
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
+      const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/create-payment`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -683,7 +683,7 @@ export default function QuestionsPage() {
       
       if (!response.ok) {
         // ✅ If payment creation fails, delete the blank interview
-        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews/${blankInterviewId}`, {
+        await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${blankInterviewId}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${session.access_token}`
@@ -729,7 +729,7 @@ export default function QuestionsPage() {
       }
 
       // Find existing interviews to determine attempt number
-      const existingInterviewsResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews?resume_id=${currentResumeId}&jd_id=${currentJdId}&question_set=${currentQuestionSet}`, {
+      const existingInterviewsResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews?resume_id=${currentResumeId}&jd_id=${currentJdId}&question_set=${currentQuestionSet}`, {
         headers: {
           'Authorization': `Bearer ${session.access_token}`
         }
@@ -743,7 +743,7 @@ export default function QuestionsPage() {
         : 1;
 
       // Create blank interview with PENDING status
-      const blankInterviewResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews`, {
+      const blankInterviewResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -770,7 +770,7 @@ export default function QuestionsPage() {
       console.log('✅ Blank interview created:', blankInterviewId);
 
       // ✅ STEP 2: Create payment with interview_id in metadata
-      const paymentResponse = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-payment`, {
+      const paymentResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/create-payment`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -787,7 +787,7 @@ export default function QuestionsPage() {
       
       if (!paymentResponse.ok) {
         // ✅ If payment creation fails, delete the blank interview
-        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews/${blankInterviewId}`, {
+        await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${blankInterviewId}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${session.access_token}`

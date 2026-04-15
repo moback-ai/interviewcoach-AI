@@ -11,8 +11,8 @@ import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
-# Get Supabase URL from environment
-SUPABASE_URL = os.getenv("SUPABASE_URL", "http://localhost:54321")
+# Get local backend API base from environment
+BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://127.0.0.1:5000")
 
 # -------------------------------
 # Embedding Model + FAISS Globals
@@ -152,14 +152,13 @@ def needs_db_context(user_input, model="llama3"):
 # -------------------------------
 # Edge Function Caller
 # -------------------------------
-def call_edge_function(auth_token, supabase_url=None):
+def call_backend_user_context(auth_token, backend_api_base=None):
     """
-    Call the support-bot-data edge function to fetch user context.
+    Fetch user context from the local backend API.
     Returns formatted user context string or error message.
     """
-    # Use environment variable if no URL provided
-    if supabase_url is None:
-        supabase_url = SUPABASE_URL
+    if backend_api_base is None:
+        backend_api_base = BACKEND_API_BASE
     
     try:
         headers = {
@@ -168,7 +167,7 @@ def call_edge_function(auth_token, supabase_url=None):
         }
         
         response = requests.get(
-            f"{supabase_url}/functions/v1/support-bot-data",
+            f"{backend_api_base}/api/support-bot-data",
             headers=headers,
             timeout=30
         )
@@ -261,13 +260,12 @@ def format_user_context(user_data):
 # -------------------------------
 # Enhanced Generate Reply with LLM Classifier
 # -------------------------------
-def generate_support_reply(faq_sections, conversation_history, user_input, model="llama3", auth_token=None, supabase_url=None):
+def generate_support_reply(faq_sections, conversation_history, user_input, model="llama3", auth_token=None, backend_api_base=None):
     """
     Generate a contextual support reply using LLM-based classification and optional user data.
     """
-    # Use environment variable if no URL provided
-    if supabase_url is None:
-        supabase_url = SUPABASE_URL
+    if backend_api_base is None:
+        backend_api_base = BACKEND_API_BASE
     
     # Step 1: Classify if database context is needed
     needs_db = needs_db_context(user_input, model)
@@ -276,12 +274,12 @@ def generate_support_reply(faq_sections, conversation_history, user_input, model
     print(f"[INFO] Query classification: {'DB context needed' if needs_db else 'FAQ only'}")
     print(f"[DEBUG] User input: '{user_input}'")
     print(f"[DEBUG] Auth token available: {bool(auth_token)}")
-    print(f"[DEBUG] Using Supabase URL: {supabase_url}")
+    print(f"[DEBUG] Using backend API base: {backend_api_base}")
     
     # Step 2: Fetch user data if needed and auth token is available
     if needs_db and auth_token:
-        print(f"[INFO] Fetching user data from edge function...")
-        user_context, error = call_edge_function(auth_token, supabase_url)
+        print(f"[INFO] Fetching user data from backend API...")
+        user_context, error = call_backend_user_context(auth_token, backend_api_base)
         
         if user_context:
             print(f"[INFO] User data retrieved successfully")
@@ -291,7 +289,7 @@ def generate_support_reply(faq_sections, conversation_history, user_input, model
             user_context = "Unable to retrieve your personal data at the moment. Please try again later."
     elif needs_db and not auth_token:
         print(f"[INFO] Database context needed but no auth token provided")
-        user_context = "To answer questions about your account, payments, or interviews, please provide authentication."
+        user_context = "To answer questions about your account, payments, or interviews, please sign in first."
     else:
         print(f"[INFO] No database context needed for this query")
     

@@ -186,7 +186,7 @@ const PaymentsSection = () => {
       }
 
       // Fetch all payments for the user using the edge function
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/payments?get_all=true`, {
+      const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/payments?get_all=true`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -495,7 +495,7 @@ const AnalyticsSection = () => {
             }
 
             // Fetch all interviews for the user using the edge function
-            const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews`, {
+            const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews`, {
                 method: 'GET',
                 headers:{
                     'Authorization': `Bearer ${session.access_token}`,
@@ -533,7 +533,7 @@ const AnalyticsSection = () => {
             }
 
             // Fetch all resume uploads for the user using the edge function
-            const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/resumes`, {
+            const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/resumes`, {
                 method: 'GET',
                 headers:{
                     'Authorization': `Bearer ${session.access_token}`,
@@ -571,7 +571,7 @@ const AnalyticsSection = () => {
             }
 
             // Fetch all uploaded job descriptions for the user using the edge function
-            const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/job-descriptions`, {
+            const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/job-descriptions`, {
                 method: 'GET',
                 headers:{
                     'Authorization': `Bearer ${session.access_token}`,

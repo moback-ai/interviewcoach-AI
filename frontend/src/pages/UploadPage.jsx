@@ -184,8 +184,8 @@ function UploadPage() {
   const uploadFileToStorage = async (file, bucket, folder) => {
     try {
       // Use the Supabase edge function URL directly
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'http://127.0.0.1:54321';
-      const edgeFunctionUrl = `${supabaseUrl}/functions/v1/upload-file`;
+      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const edgeFunctionUrl = `${backendOrigin}/functions/v1/upload-file`;
       
       // Get current user session
       const { data: { session } } = await supabase.auth.getSession();
@@ -234,10 +234,10 @@ function UploadPage() {
         throw new Error('No active session');
       }
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
       
       // 1. Save resume to database
-      const resumeResponse = await fetch(`${supabaseUrl}/functions/v1/resumes`, {
+      const resumeResponse = await fetch(`${backendOrigin}/functions/v1/resumes`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -257,7 +257,7 @@ function UploadPage() {
       const resumeData = await resumeResponse.json();
 
       // 2. Save job description to database
-      const jdResponse = await fetch(`${supabaseUrl}/functions/v1/job-descriptions`, {
+      const jdResponse = await fetch(`${backendOrigin}/functions/v1/job-descriptions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -490,10 +490,10 @@ function UploadPage() {
         throw new Error('No active session');
       }
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
       
       // First, get the current highest question set number for this specific resume_id + jd_id combination
-      const getCurrentQuestionSetsResponse = await fetch(`${supabaseUrl}/functions/v1/questions?resume_id=${resumeId}&jd_id=${jdId}`, {
+      const getCurrentQuestionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeId}&jd_id=${jdId}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -520,7 +520,7 @@ function UploadPage() {
       }
       
       // Now save the new questions with the incremented question set number
-      const response = await fetch(`${supabaseUrl}/functions/v1/questions`, {
+      const response = await fetch(`${backendOrigin}/functions/v1/questions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,

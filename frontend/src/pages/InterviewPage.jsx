@@ -457,7 +457,7 @@ function InterviewPage() {
         }
         
         // Check if interview exists and get its status
-        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interviews/${interviewId}`, {
+        const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${interviewId}`, {
           headers: {
             'Authorization': `Bearer ${session.access_token}`
           }

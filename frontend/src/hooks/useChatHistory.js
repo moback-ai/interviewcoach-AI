@@ -19,7 +19,7 @@ export const useChatHistory = () => {
       }
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-history?interview_id=${interviewId}`,
+        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'GET',
           headers: {
@@ -111,7 +111,7 @@ export const useChatHistory = () => {
         .join('\n');
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-history`,
+        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history`,
         {
           method: 'POST',
           headers: {
@@ -157,7 +157,7 @@ export const useChatHistory = () => {
       const newContent = `${speaker}:${message}`;
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-history`,
+        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history`,
         {
           method: 'POST',
           headers: {
@@ -206,7 +206,7 @@ export const useChatHistory = () => {
 
       console.log('🔑 Session found, making DELETE request...');
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat-history?interview_id=${interviewId}`,
+        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'DELETE',
           headers: {

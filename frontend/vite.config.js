@@ -1,14 +1,14 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import path from 'path';
-import { loadEnv } from 'vite'
+import path from 'path'
 
-// https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  // Load env file from frontend directory
   const env = loadEnv(mode, path.resolve(__dirname), '')
-  
+  const apiBaseUrl = env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+  const legacyBaseUrl = apiBaseUrl.replace(/\/api\/?$/, '')
+  const storageUrl = env.VITE_STORAGE_URL || `${legacyBaseUrl}/storage`
+
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
@@ -16,29 +16,21 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
-    // ⚡ PERFORMANCE OPTIMIZATIONS
     build: {
-      // Use esbuild for faster minification (already included with Vite)
       minify: 'esbuild',
-      // Remove console.logs in production
       esbuild: {
         drop: ['console', 'debugger'],
       },
-      // Code splitting - split vendor chunks
       rollupOptions: {
         output: {
           manualChunks: {
-            // Separate large libraries into their own chunks
             'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-            'supabase-vendor': ['@supabase/supabase-js'],
             'ui-vendor': ['framer-motion', 'recharts', 'lucide-react'],
             'utils-vendor': ['jspdf', 'jspdf-autotable', 'prismjs'],
           },
         },
       },
-      // Chunk size warnings
       chunkSizeWarningLimit: 1000,
-      // Source maps for production (optional, remove for smaller builds)
       sourcemap: false,
     },
     server: {
@@ -52,10 +44,9 @@ export default defineConfig(({ mode }) => {
       },
     },
     define: {
-      // Map Supabase variables to VITE_ prefixed versions for frontend
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.SUPABASE_URL || env.VITE_SUPABASE_URL),
-      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY),
-      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(env.VITE_API_BASE_URL),
-    }
+      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBaseUrl),
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(legacyBaseUrl),
+      'import.meta.env.VITE_STORAGE_URL': JSON.stringify(storageUrl),
+    },
   }
 })
