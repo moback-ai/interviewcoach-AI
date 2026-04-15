@@ -6,6 +6,7 @@ python-dotenv
 pyjwt
 bcrypt
 gunicorn
+eventlet>=0.40.3
 requests
 faster-whisper
 soundfile
