@@ -56,7 +56,6 @@ jobs:
           DOMAIN=https://interviewcoach.com
           STORAGE_PATH=/apps/storage
           PUBLIC_STORAGE_URL=https://interviewcoach.com/storage
-          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
           WHISPER_MODEL=base
           UPLOAD_FOLDER=/apps/storage
           MAX_CONTENT_MB=200
