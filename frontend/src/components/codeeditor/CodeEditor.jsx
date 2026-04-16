@@ -80,7 +80,6 @@ const CodeEditor = ({
       roundedSelection: false,
       readOnly: false,
       cursorStyle: 'line',
-      automaticLayout: true,
     });
 
     // Add custom keybindings
@@ -246,7 +245,6 @@ const CodeEditor = ({
             roundedSelection: false,
             readOnly: false,
             cursorStyle: 'line',
-            automaticLayout: true,
             tabSize: 2,
             insertSpaces: true,
             detectIndentation: true,
