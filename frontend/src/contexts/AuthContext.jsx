@@ -5,6 +5,8 @@ import {
   signIn,
   signOut,
   signUp,
+  verifyEmail,
+  resendVerification,
   updateCurrentUser,
 } from '../lib/authClient';
 import { getApiBaseUrl } from '../utils/apiConfig';
@@ -26,17 +28,29 @@ export const AuthProvider = ({ children }) => {
     setLoading(false);
   }, []);
 
-  const signup = async (email, password, full_name = '') => {
-    const data = await signUp({ email, password, fullName: full_name });
+  const signup = async (username, email, password, full_name = '') => {
+    const data = await signUp({ username, email, password, fullName: full_name });
+    if (data.user && data.token) {
+      setUser(data.user);
+    } else {
+      setUser(null);
+    }
+    return data;
+  };
+
+  const login = async (identifier, password) => {
+    const data = await signIn({ identifier, password });
     setUser(data.user);
     return data;
   };
 
-  const login = async (email, password) => {
-    const data = await signIn({ email, password });
+  const confirmEmail = async (token) => {
+    const data = await verifyEmail(token);
     setUser(data.user);
     return data;
   };
+
+  const resendVerificationEmail = async (email) => resendVerification(email);
 
   const logout = async () => {
     await signOut();
@@ -58,6 +72,8 @@ export const AuthProvider = ({ children }) => {
     isAuthenticated: !!user,
     signup,
     login,
+    confirmEmail,
+    resendVerificationEmail,
     logout,
     getToken,
     updateProfile,

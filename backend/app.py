@@ -8,6 +8,8 @@ import tempfile
 import hashlib
 import base64
 import io
+import secrets
+from urllib.parse import urlencode
 
 import soundfile as sf
 import cv2
@@ -39,6 +41,7 @@ if SUPPORT_BOT_PATH not in sys.path:
 from common.GPU_Check import get_device
 from common.auth import verify_auth_token, create_token, hash_password, check_password
 from common.db import query_one, query_all, execute
+from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 
 try:
@@ -70,6 +73,7 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv("MAX_CONTENT_MB", 200)) * 1024 * 1024
 
 DOMAIN = os.getenv("DOMAIN", "http://localhost")
+EMAIL_VERIFICATION_TTL_HOURS = int(os.getenv("EMAIL_VERIFICATION_TTL_HOURS", "24"))
 
 CORS(app,
      supports_credentials=True,
@@ -78,6 +82,130 @@ CORS(app,
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+
+def get_public_origin():
+    return os.getenv("DOMAIN", DOMAIN).rstrip("/")
+
+
+def build_public_url(path: str, **params):
+    base = f"{get_public_origin()}/{path.lstrip('/')}"
+    if not params:
+        return base
+    return f"{base}?{urlencode(params)}"
+
+
+def hash_verification_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def normalize_username(raw_username: str) -> str:
+    username = (raw_username or "").strip().lower()
+    if not username:
+        return ""
+    if not all(ch.isalnum() or ch in "._-" for ch in username):
+        raise ValueError("Username can only contain letters, numbers, dots, underscores, and hyphens.")
+    if len(username) < 3:
+        raise ValueError("Username must be at least 3 characters long.")
+    return username
+
+
+def ensure_auth_schema():
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ")
+    execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_unique
+        ON users ((lower(username)))
+        WHERE username IS NOT NULL
+    """)
+    execute("""
+        CREATE TABLE IF NOT EXISTS email_verification_tokens (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            email TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            consumed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    """)
+    execute("CREATE INDEX IF NOT EXISTS idx_email_verification_lookup ON email_verification_tokens (user_id, expires_at DESC)")
+
+
+def serialize_user(user):
+    if not user:
+        return None
+    payload = dict(user)
+    payload["id"] = str(payload["id"])
+    payload["email_verified"] = bool(payload.get("email_verified_at"))
+    payload.setdefault("user_metadata", {})
+    payload["user_metadata"]["full_name"] = payload.get("full_name", "")
+    return payload
+
+
+def build_verification_payload(user, verification_link, delivery="email"):
+    payload = {
+        "verification_required": True,
+        "message": "Please verify your email before logging in.",
+        "email": user["email"],
+        "delivery": delivery,
+    }
+    if delivery != "email":
+        payload["verification_link"] = verification_link
+    return payload
+
+
+def issue_email_verification(user, allow_manual_fallback=False):
+    execute("UPDATE email_verification_tokens SET consumed_at = now() WHERE user_id = %s AND consumed_at IS NULL", (user["id"],))
+    token = secrets.token_urlsafe(32)
+    token_hash = hash_verification_token(token)
+    verification_link = build_public_url("verify-email", token=token)
+    execute(
+        """
+        INSERT INTO email_verification_tokens (user_id, email, token_hash, expires_at)
+        VALUES (%s, %s, %s, now() + (%s || ' hours')::interval)
+        """,
+        (user["id"], user["email"], token_hash, EMAIL_VERIFICATION_TTL_HOURS),
+    )
+    execute("UPDATE users SET verification_sent_at = now() WHERE id = %s", (user["id"],))
+
+    text_body = (
+        f"Hi {user.get('full_name') or user.get('username') or 'there'},\n\n"
+        f"Verify your InterviewCoach account by opening this link:\n{verification_link}\n\n"
+        f"This link expires in {EMAIL_VERIFICATION_TTL_HOURS} hours."
+    )
+    html_body = (
+        f"<p>Hi {user.get('full_name') or user.get('username') or 'there'},</p>"
+        f"<p>Verify your InterviewCoach account by clicking the link below:</p>"
+        f"<p><a href=\"{verification_link}\">{verification_link}</a></p>"
+        f"<p>This link expires in {EMAIL_VERIFICATION_TTL_HOURS} hours.</p>"
+    )
+
+    if smtp_is_configured():
+        send_email("Verify your InterviewCoach account", user["email"], text_body, html_body)
+        return build_verification_payload(user, verification_link, delivery="email")
+
+    if allow_manual_fallback:
+        print(f"[WARN] SMTP not configured. Verification link for {user['email']}: {verification_link}")
+        return build_verification_payload(user, verification_link, delivery="manual")
+
+    raise RuntimeError("SMTP is not configured for verification emails.")
+
+
+def get_user_for_auth(identifier: str):
+    normalized = (identifier or "").strip().lower()
+    return query_one(
+        """
+        SELECT id, email, username, password_hash, full_name, plan, created_at, email_verified_at
+        FROM users
+        WHERE lower(email) = %s OR lower(coalesce(username, '')) = %s
+        """,
+        (normalized, normalized),
+    )
+
+
+ensure_auth_schema()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
@@ -333,20 +461,38 @@ def signup():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     data = request.get_json() or {}
+    try:
+        username = normalize_username(data.get('username', ''))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     email = data.get('email', '').strip().lower()
     password = data.get('password', '')
     full_name = data.get('full_name', '').strip()
-    if not email or not password:
-        return jsonify({"error": "Email and password required"}), 400
+    if not username or not email or not password:
+        return jsonify({"error": "Username, email, and password are required"}), 400
+    if len(password) < 8:
+        return jsonify({"error": "Password must be at least 8 characters"}), 400
     try:
         user = execute(
-            "INSERT INTO users (email, password_hash, full_name) VALUES (%s, %s, %s) RETURNING id, email, full_name, plan",
-            (email, hash_password(password), full_name)
+            """
+            INSERT INTO users (username, email, password_hash, full_name)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id, username, email, full_name, plan, created_at, email_verified_at
+            """,
+            (username, email, hash_password(password), full_name)
         )
-        token = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
-        return jsonify({"token": token, "user": dict(user)}), 201
+        verification_payload = issue_email_verification(user, allow_manual_fallback=True)
+        return jsonify({
+            "user": serialize_user(user),
+            **verification_payload,
+        }), 201
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
     except Exception as e:
-        if 'unique' in str(e).lower():
+        message = str(e).lower()
+        if 'idx_users_username_unique' in message or 'username' in message and 'unique' in message:
+            return jsonify({"error": "Username is already taken"}), 409
+        if 'email' in message and 'unique' in message:
             return jsonify({"error": "Email already registered"}), 409
         print(f"[ERROR] signup: {e}")
         return jsonify({"error": "Signup failed"}), 500
@@ -357,16 +503,21 @@ def login():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     data = request.get_json() or {}
-    email = data.get('email', '').strip().lower()
+    identifier = data.get('identifier', data.get('email', '')).strip().lower()
     password = data.get('password', '')
-    user = query_one("SELECT * FROM users WHERE email = %s", (email,))
+    user = get_user_for_auth(identifier)
     if not user or not check_password(password, user['password_hash']):
         return jsonify({"error": "Invalid credentials"}), 401
+    if not user.get('email_verified_at'):
+        return jsonify({
+            "error": "Please verify your email before logging in.",
+            "verification_required": True,
+            "email": user['email'],
+        }), 403
     token = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
     return jsonify({
         "token": token,
-        "user": {"id": str(user['id']), "email": user['email'],
-                 "full_name": user['full_name'], "plan": user['plan']}
+        "user": serialize_user(user)
     })
 
 
@@ -380,14 +531,89 @@ def check_email():
     return jsonify({"exists": user is not None})
 
 
+@app.route('/api/check-username', methods=['POST', 'OPTIONS'])
+def check_username():
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    data = request.get_json() or {}
+    try:
+        username = normalize_username(data.get('username', ''))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    user = query_one("SELECT id FROM users WHERE lower(coalesce(username, '')) = %s", (username,))
+    return jsonify({"exists": user is not None})
+
+
+@app.route('/api/resend-verification', methods=['POST', 'OPTIONS'])
+def resend_verification():
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    data = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    if not email:
+        return jsonify({"error": "Email is required"}), 400
+    user = query_one(
+        """
+        SELECT id, username, email, full_name, plan, created_at, email_verified_at
+        FROM users WHERE lower(email) = %s
+        """,
+        (email,),
+    )
+    if not user:
+        return jsonify({"error": "Account not found"}), 404
+    if user.get('email_verified_at'):
+        return jsonify({"message": "Email already verified"}), 200
+    try:
+        verification_payload = issue_email_verification(user, allow_manual_fallback=True)
+        return jsonify(verification_payload), 200
+    except Exception as exc:
+        print(f"[ERROR] resend_verification: {exc}")
+        return jsonify({"error": "Unable to send verification email"}), 500
+
+
+@app.route('/api/verify-email', methods=['GET'])
+def verify_email():
+    token = request.args.get('token', '').strip()
+    if not token:
+        return jsonify({"error": "Verification token is required"}), 400
+    token_hash = hash_verification_token(token)
+    record = query_one(
+        """
+        SELECT evt.user_id, u.email, u.username, u.full_name, u.plan, u.created_at, u.email_verified_at
+        FROM email_verification_tokens evt
+        JOIN users u ON u.id = evt.user_id
+        WHERE evt.token_hash = %s AND evt.consumed_at IS NULL AND evt.expires_at > now()
+        """,
+        (token_hash,),
+    )
+    if not record:
+        return jsonify({"error": "Verification link is invalid or expired"}), 400
+    execute("UPDATE email_verification_tokens SET consumed_at = now() WHERE token_hash = %s", (token_hash,))
+    user = execute(
+        """
+        UPDATE users
+        SET email_verified_at = COALESCE(email_verified_at, now())
+        WHERE id = %s
+        RETURNING id, username, email, full_name, plan, created_at, email_verified_at
+        """,
+        (record['user_id'],),
+    )
+    token_value = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
+    return jsonify({
+        "message": "Email verified successfully.",
+        "token": token_value,
+        "user": serialize_user(user),
+    }), 200
+
+
 @app.route('/api/me', methods=['GET'])
 @verify_auth_token
 def get_me():
-    user = query_one("SELECT id, email, full_name, plan, created_at FROM users WHERE id = %s",
+    user = query_one("SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id = %s",
                      (request.user['id'],))
     if not user:
         return jsonify({"error": "User not found"}), 404
-    return jsonify({"user": dict(user)})
+    return jsonify({"user": serialize_user(user)})
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  RESUME UPLOAD  (replaces the legacy storage layer)
@@ -1362,22 +1588,32 @@ def update_me():
     updates = []
     params = []
     full_name = data.get('full_name') or (data.get('data') or {}).get('full_name')
+    username = data.get('username')
     password = data.get('password')
     if full_name is not None:
         updates.append('full_name=%s')
         params.append(full_name.strip())
+    if username is not None:
+        username = normalize_username(username)
+        updates.append('username=%s')
+        params.append(username)
     if password:
         updates.append('password_hash=%s')
         params.append(hash_password(password))
     if not updates:
-        user = query_one('SELECT id, email, full_name, plan, created_at FROM users WHERE id=%s', (request.user['id'],))
-        return jsonify({'success': True, 'user': dict(user) if user else None})
+        user = query_one('SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s', (request.user['id'],))
+        return jsonify({'success': True, 'user': serialize_user(user)})
     params.append(request.user['id'])
-    user = execute(
-        f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING id, email, full_name, plan, created_at",
-        tuple(params),
-    )
-    return jsonify({'success': True, 'user': dict(user) if user else None})
+    try:
+        user = execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING id, username, email, full_name, plan, created_at, email_verified_at",
+            tuple(params),
+        )
+    except Exception as exc:
+        if 'idx_users_username_unique' in str(exc).lower():
+            return jsonify({'error': 'Username is already taken'}), 409
+        raise
+    return jsonify({'success': True, 'user': serialize_user(user)})
 
 
 @app.route('/api/resumes', methods=['GET', 'POST', 'OPTIONS'])

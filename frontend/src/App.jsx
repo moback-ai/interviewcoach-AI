@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import Landing from './pages/Landing';
 import Signup from './pages/SignUp';
 import Login from './pages/Login';
+import VerifyEmail from './pages/VerifyEmail';
 import ProtectedRoute from './components/ProtectedRoute';
 import SupportBot from './components/SupportBot';
 import IdleTimeoutModal from './components/IdleTimeoutModal';
@@ -47,6 +48,7 @@ function App() {
           <Route path="/"              element={<Landing />} />
           <Route path="/signup"        element={<Signup />} />
           <Route path="/login"         element={<Login />} />
+          <Route path="/verify-email"  element={<VerifyEmail />} />
           <Route path="/faq"           element={<FAQPage />} />
 
           {/* Protected routes */}
