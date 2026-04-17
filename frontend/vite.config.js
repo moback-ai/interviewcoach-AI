@@ -5,9 +5,10 @@ import path from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname), '')
-  const apiBaseUrl = env.VITE_API_BASE_URL || 'http://localhost:5000/api'
+  const isDev = mode === 'development'
+  const apiBaseUrl = env.VITE_API_BASE_URL || (isDev ? 'http://localhost:5000/api' : '/api')
   const legacyBaseUrl = apiBaseUrl.replace(/\/api\/?$/, '')
-  const storageUrl = env.VITE_STORAGE_URL || `${legacyBaseUrl}/storage`
+  const storageUrl = env.VITE_STORAGE_URL || (isDev ? `${legacyBaseUrl}/storage` : '/storage')
 
   return {
     plugins: [react(), tailwindcss()],

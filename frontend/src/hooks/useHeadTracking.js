@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => {
   const [isCalibrated, setIsCalibrated] = useState(false);
@@ -161,8 +162,9 @@ export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => 
     }
 
     console.log('🔗 Initializing socket connection for head tracking');
-    const socket = io(import.meta.env.VITE_API_BASE_URL, {
+    const socket = io(getBackendOrigin() || window.location.origin, {
       transports: ['websocket', 'polling'],
+      path: '/socket.io',
       timeout: 20000,
       forceNew: true,
       reconnection: true,
