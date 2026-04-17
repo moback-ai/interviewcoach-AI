@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
 import { trackEvents } from '../services/mixpanel';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 function UploadPage() {
   const { theme } = useTheme();
@@ -75,7 +76,7 @@ function UploadPage() {
           return;
         }
 
-        const backendUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+        const backendUrl = getBackendOrigin();
         
         const requestPayload = {
           job_title: trimmedTitle,
@@ -184,7 +185,7 @@ function UploadPage() {
   const uploadFileToStorage = async (file, bucket, folder) => {
     try {
       // Use the Supabase edge function URL directly
-      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const backendOrigin = getBackendOrigin();
       const edgeFunctionUrl = `${backendOrigin}/functions/v1/upload-file`;
       
       // Get current user session
@@ -234,7 +235,7 @@ function UploadPage() {
         throw new Error('No active session');
       }
 
-      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const backendOrigin = getBackendOrigin();
       
       // 1. Save resume to database
       const resumeResponse = await fetch(`${backendOrigin}/functions/v1/resumes`, {
@@ -442,7 +443,7 @@ function UploadPage() {
         throw new Error('No active session');
       }
 
-      const backendUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+      const backendUrl = getBackendOrigin();
       
       const response = await fetch(`${backendUrl}/api/generate-questions`, {
         method: 'POST',
@@ -490,7 +491,7 @@ function UploadPage() {
         throw new Error('No active session');
       }
 
-      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const backendOrigin = getBackendOrigin();
       
       // First, get the current highest question set number for this specific resume_id + jd_id combination
       const getCurrentQuestionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeId}&jd_id=${jdId}`, {

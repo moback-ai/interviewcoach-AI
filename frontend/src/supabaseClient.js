@@ -1,5 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
-const STORAGE_BASE = import.meta.env.VITE_STORAGE_URL || `${API_BASE.replace(/\/api$/, '')}/storage`;
+import { getApiBaseUrl, getStorageBaseUrl } from './utils/apiConfig';
+
+const API_BASE = getApiBaseUrl();
+const STORAGE_BASE = getStorageBaseUrl();
 
 const getToken = () => localStorage.getItem('ic_token');
 const getStoredUser = () => {
