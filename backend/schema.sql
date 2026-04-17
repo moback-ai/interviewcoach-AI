@@ -6,10 +6,23 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- Users table for application authentication
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT UNIQUE,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     full_name TEXT NOT NULL DEFAULT '',
     plan TEXT NOT NULL DEFAULT 'basic',
+    email_verified_at TIMESTAMPTZ,
+    verification_sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE email_verification_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 

@@ -66,11 +66,12 @@ export const refreshCurrentUser = async (token = getAccessToken()) => {
   return user;
 };
 
-export const signUp = async ({ email, password, fullName = '' }) => {
+export const signUp = async ({ username, email, password, fullName = '' }) => {
   const response = await fetch(`${API_BASE}/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      username: username.toLowerCase().trim(),
       email: email.toLowerCase().trim(),
       password,
       full_name: fullName.trim(),
@@ -81,16 +82,20 @@ export const signUp = async ({ email, password, fullName = '' }) => {
     throw new Error(data.error || 'Signup failed');
   }
   const user = normalizeUser(data.user);
-  persistAuth(data.token, user);
-  return { token: data.token, user };
+  if (data.token) {
+    persistAuth(data.token, user);
+  } else {
+    clearStoredAuth();
+  }
+  return { token: data.token, user, ...data };
 };
 
-export const signIn = async ({ email, password }) => {
+export const signIn = async ({ identifier, password }) => {
   const response = await fetch(`${API_BASE}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email: email.toLowerCase().trim(),
+      identifier: identifier.toLowerCase().trim(),
       password,
     }),
   });
@@ -101,6 +106,30 @@ export const signIn = async ({ email, password }) => {
   const user = normalizeUser(data.user);
   persistAuth(data.token, user);
   return { token: data.token, user };
+};
+
+export const resendVerification = async (email) => {
+  const response = await fetch(`${API_BASE}/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.toLowerCase().trim() }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Unable to resend verification email');
+  }
+  return data;
+};
+
+export const verifyEmail = async (token) => {
+  const response = await fetch(`${API_BASE}/verify-email?token=${encodeURIComponent(token)}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || 'Email verification failed');
+  }
+  const user = normalizeUser(data.user);
+  persistAuth(data.token, user);
+  return { token: data.token, user, ...data };
 };
 
 export const signOut = async () => {
@@ -132,3 +161,5 @@ export const formatAuthError = (error) => {
   if (typeof error === 'string') return error;
   return error.message || 'Something went wrong.';
 };
+
+export const isValidUsername = (username) => /^[a-zA-Z0-9._-]{3,}$/.test(username);

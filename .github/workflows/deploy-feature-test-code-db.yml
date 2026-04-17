@@ -59,6 +59,12 @@ jobs:
           DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           DOMAIN=$PUBLIC_ORIGIN
+          SMTP_HOST=${{ secrets.SMTP_HOST }}
+          SMTP_PORT=${{ secrets.SMTP_PORT }}
+          SMTP_USER=${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+          SMTP_USE_SSL=${{ secrets.SMTP_USE_SSL }}
+          MAIL_FROM=${{ secrets.MAIL_FROM }}
           STORAGE_PATH=/apps/storage
           PUBLIC_STORAGE_URL=$PUBLIC_ORIGIN/storage
           WHISPER_MODEL=base
