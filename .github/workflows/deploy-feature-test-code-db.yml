@@ -32,19 +32,21 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
-          ssh-keyscan -H ${{ secrets.BACKEND_HOST }} >> ~/.ssh/known_hosts
-          ssh-keyscan -H ${{ secrets.FRONTEND_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Define SSH options
+        run: |
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
       - name: Sync backend source
         run: |
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/deploy_key.pem" \
+            -e "ssh $SSH_OPTS" \
             backend/ \
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/apps/backend/
 
       - name: Configure backend and restart
         run: |
-          ssh -i ~/.ssh/deploy_key.pem ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
           PUBLIC_ORIGIN="http://${{ secrets.FRONTEND_HOST }}"
@@ -86,13 +88,13 @@ jobs:
       - name: Upload frontend build
         run: |
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/deploy_key.pem" \
+            -e "ssh $SSH_OPTS" \
             frontend/dist/ \
             ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
 
       - name: Publish frontend
         run: |
-          ssh -i ~/.ssh/deploy_key.pem ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
           BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
