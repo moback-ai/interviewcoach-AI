@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../supabaseClient';
 import Navbar from '../components/Navbar';
 import UploadBox from '../components/upload/UploadBox';
 import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
@@ -11,6 +10,7 @@ import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
 import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
+import { getSession } from '../lib/authClient';
 
 function UploadPage() {
   const { theme } = useTheme();
@@ -70,7 +70,7 @@ function UploadPage() {
       setClassifyingTechnical(true);
       
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getSession();
         if (!session) {
           console.warn('[WARNING] No session for technical role classification');
           return;
@@ -184,12 +184,12 @@ function UploadPage() {
 
   const uploadFileToStorage = async (file, bucket, folder) => {
     try {
-      // Use the Supabase edge function URL directly
+      // Upload through the app API
       const backendOrigin = getBackendOrigin();
       const edgeFunctionUrl = `${backendOrigin}/functions/v1/upload-file`;
       
       // Get current user session
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
@@ -230,7 +230,7 @@ function UploadPage() {
   const saveToDatabase = async (resumeUrl, jobDescUrl) => {
     try {
       // Get current user session
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
@@ -334,8 +334,8 @@ function UploadPage() {
     try {
       console.log('[DEBUG] Starting complete workflow...');
 
-      // Step 1: Upload resume file to Supabase Storage
-      console.log('[DEBUG] Step 1: Uploading resume to storage...');
+      // Step 1: Upload the resume file
+      console.log('[DEBUG] Step 1: Uploading resume file...');
       const resumeUrl = await uploadFileToStorage(resume, 'resumes', 'user_files');
 
       // Track resume upload
@@ -438,7 +438,7 @@ function UploadPage() {
   // Updated function to call backend API for question generation with new parameters
   const generateQuestionsFromBackend = async (resumeUrl, jobTitle, jobDescription) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
@@ -486,7 +486,7 @@ function UploadPage() {
   // New function to save questions to database via edge function
   const saveQuestionsToDatabase = async (resumeId, jdId, questions) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }

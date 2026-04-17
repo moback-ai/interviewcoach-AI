@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FiCheckCircle, FiLoader, FiXCircle } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
-import { supabase } from '../supabaseClient';
+import { getSession } from '../lib/authClient';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 export default function PaymentSuccess() {
   const navigate = useNavigate();
@@ -65,9 +66,9 @@ export default function PaymentSuccess() {
             // ✅ Fallback: Try to fetch from interview if URL params are missing
             console.log('⚠️ URL parameters missing, fetching from interview...');
             try {
-              const { data: { session } } = await supabase.auth.getSession();
+              const session = await getSession();
               if (session?.access_token) {
-                const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${interviewId}`, {
+                const response = await fetch(`${getBackendOrigin()}/functions/v1/interviews/${interviewId}`, {
                   headers: {
                     'Authorization': `Bearer ${session.access_token}`
                   }

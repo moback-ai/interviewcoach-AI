@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useOperation } from '../contexts/OperationContext';
-import { supabase } from '../supabaseClient';
 
 /**
  * Custom hook to handle idle timeout and automatic logout
@@ -10,7 +9,7 @@ import { supabase } from '../supabaseClient';
  * @returns {object} { showWarning, timeRemaining, resetTimer }
  */
 export const useIdleTimeout = (idleTimeoutMinutes = 30, warningTimeSeconds = 30) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, logout } = useAuth();
   const { isOperationInProgress } = useOperation();
   const [showWarning, setShowWarning] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState(warningTimeSeconds);
@@ -31,9 +30,8 @@ export const useIdleTimeout = (idleTimeoutMinutes = 30, warningTimeSeconds = 30)
   // Handle logout
   const handleLogout = useCallback(async () => {
     console.log('[Idle Timeout] Logging out due to inactivity');
-    await supabase.auth.signOut();
-    window.location.href = '/login';
-  }, []);
+    await logout();
+  }, [logout]);
 
   // Reset the idle timer
   const resetTimer = useCallback(() => {
@@ -180,4 +178,3 @@ export const useIdleTimeout = (idleTimeoutMinutes = 30, warningTimeSeconds = 30)
 };
 
 export default useIdleTimeout;
-

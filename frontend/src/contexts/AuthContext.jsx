@@ -1,8 +1,16 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import {
+  getAccessToken,
+  getStoredUser,
+  signIn,
+  signOut,
+  signUp,
+  updateCurrentUser,
+} from '../lib/authClient';
+import { getApiBaseUrl } from '../utils/apiConfig';
 
 const AuthContext = createContext();
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+const API_BASE = getApiBaseUrl();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -10,55 +18,39 @@ export const AuthProvider = ({ children }) => {
 
   // Load user from localStorage on mount
   useEffect(() => {
-    const stored = localStorage.getItem('ic_user');
-    const token = localStorage.getItem('ic_token');
-    if (stored && token) {
-      try {
-        setUser(JSON.parse(stored));
-      } catch (e) {
-        localStorage.removeItem('ic_user');
-        localStorage.removeItem('ic_token');
-      }
+    const storedUser = getStoredUser();
+    const token = getAccessToken();
+    if (storedUser && token) {
+      setUser(storedUser);
     }
     setLoading(false);
   }, []);
 
   const signup = async (email, password, full_name = '') => {
-    const res = await fetch(`${API_BASE}/signup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, full_name })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Signup failed');
-    localStorage.setItem('ic_token', data.token);
-    localStorage.setItem('ic_user', JSON.stringify(data.user));
+    const data = await signUp({ email, password, fullName: full_name });
     setUser(data.user);
     return data;
   };
 
   const login = async (email, password) => {
-    const res = await fetch(`${API_BASE}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Login failed');
-    localStorage.setItem('ic_token', data.token);
-    localStorage.setItem('ic_user', JSON.stringify(data.user));
+    const data = await signIn({ email, password });
     setUser(data.user);
     return data;
   };
 
-  const logout = () => {
-    localStorage.removeItem('ic_token');
-    localStorage.removeItem('ic_user');
+  const logout = async () => {
+    await signOut();
     setUser(null);
     window.location.href = '/login';
   };
 
-  const getToken = () => localStorage.getItem('ic_token');
+  const getToken = () => getAccessToken();
+
+  const updateProfile = async (payload) => {
+    const nextUser = await updateCurrentUser(payload);
+    setUser(nextUser);
+    return nextUser;
+  };
 
   const value = useMemo(() => ({
     user,
@@ -68,17 +60,9 @@ export const AuthProvider = ({ children }) => {
     login,
     logout,
     getToken,
-    // Shim for any code that still calls supabase.auth.signOut()
-    auth: {
-      signOut: logout,
-      getSession: async () => ({ data: { session: { access_token: getToken() } } }),
-      getUser: async () => ({ data: { user }, error: null }),
-      onAuthStateChange: (cb) => {
-        // No-op shim — returns unsubscribe shape
-        return { data: { subscription: { unsubscribe: () => {} } } };
-      }
-    }
-  }), [user, loading]);
+    updateProfile,
+    apiBase: API_BASE,
+  }), [user, loading, API_BASE]);
 
   return (
     <AuthContext.Provider value={value}>

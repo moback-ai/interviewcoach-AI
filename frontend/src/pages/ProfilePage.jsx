@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../supabaseClient';
+import { getSession } from '../lib/authClient';
 import { 
   FiUser, 
   FiMail, 
@@ -25,6 +25,7 @@ import {
   FiRefreshCw
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 // Component for Profile Section
 const ProfileSection = ({ user, profileData, setProfileData, isEditing, setIsEditing, loading, setLoading, handleSave, handleCancel, formatDate }) => {
@@ -177,7 +178,7 @@ const PaymentsSection = () => {
       setError(null);
 
       // Get user session
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       
       if (!session?.access_token) {
         setError('Authentication required');
@@ -186,7 +187,7 @@ const PaymentsSection = () => {
       }
 
       // Fetch all payments for the user using the edge function
-      const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/payments?get_all=true`, {
+      const response = await fetch(`${getBackendOrigin()}/functions/v1/payments?get_all=true`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -486,7 +487,7 @@ const AnalyticsSection = () => {
             setError(null);
 
             // Get user session
-            const { data: {session} } = await supabase.auth.getSession();
+            const session = await getSession();
 
             if (!session?.access_token) {
                 setError('Authentication required');
@@ -495,7 +496,7 @@ const AnalyticsSection = () => {
             }
 
             // Fetch all interviews for the user using the edge function
-            const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews`, {
+            const response = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
                 method: 'GET',
                 headers:{
                     'Authorization': `Bearer ${session.access_token}`,
@@ -524,7 +525,7 @@ const AnalyticsSection = () => {
             setError(null);
 
             // Get user session
-            const { data: {session} } = await supabase.auth.getSession();
+            const session = await getSession();
 
             if (!session?.access_token) {
                 setError('Authentication required');
@@ -533,7 +534,7 @@ const AnalyticsSection = () => {
             }
 
             // Fetch all resume uploads for the user using the edge function
-            const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/resumes`, {
+            const response = await fetch(`${getBackendOrigin()}/functions/v1/resumes`, {
                 method: 'GET',
                 headers:{
                     'Authorization': `Bearer ${session.access_token}`,
@@ -562,7 +563,7 @@ const AnalyticsSection = () => {
             setError(null);
 
             // Get user session
-            const { data: {session} } = await supabase.auth.getSession();
+            const session = await getSession();
 
             if (!session?.access_token) {
                 setError('Authentication required');
@@ -571,7 +572,7 @@ const AnalyticsSection = () => {
             }
 
             // Fetch all uploaded job descriptions for the user using the edge function
-            const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/job-descriptions`, {
+            const response = await fetch(`${getBackendOrigin()}/functions/v1/job-descriptions`, {
                 method: 'GET',
                 headers:{
                     'Authorization': `Bearer ${session.access_token}`,
@@ -932,7 +933,7 @@ const PaymentHistoryLink = () => {
 };
 
 function ProfilePage() {
-  const { user } = useAuth();
+  const { user, updateProfile } = useAuth();
   const [activeSection, setActiveSection] = useState('profile');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -954,20 +955,12 @@ function ProfilePage() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: {
-          full_name: profileData.full_name,
-          avatar_url: profileData.avatar_url
-        }
+      await updateProfile({
+        full_name: profileData.full_name,
+        avatar_url: profileData.avatar_url,
       });
-
-      if (error) {
-        console.error('Error updating profile:', error);
-        alert('Failed to update profile');
-      } else {
-        setIsEditing(false);
-        alert('Profile updated successfully!');
-      }
+      setIsEditing(false);
+      alert('Profile updated successfully!');
     } catch (error) {
       console.error('Error updating profile:', error);
       alert('Failed to update profile');

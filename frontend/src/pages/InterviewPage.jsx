@@ -4,12 +4,13 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PhoneOff } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
-import { supabase } from '../supabaseClient';
 import ChatWindow from '@/components/interview/ChatWindow';
 import { trackEvents } from '../services/mixpanel';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
 import WaveAnimation from '@/components/interview/WaveAnimation';
+import { getSession } from '../lib/authClient';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 function InterviewPage() {
   const { isDark } = useTheme();
@@ -449,7 +450,7 @@ function InterviewPage() {
         console.log('🔍 Validating interview:', interviewId);
         
         // Get user session
-        const { data: { session } } = await supabase.auth.getSession();
+        const session = await getSession();
         if (!session?.access_token) {
           console.log('❌ No session found');
           navigate('/upload');
@@ -457,7 +458,7 @@ function InterviewPage() {
         }
         
         // Check if interview exists and get its status
-        const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${interviewId}`, {
+        const response = await fetch(`${getBackendOrigin()}/functions/v1/interviews/${interviewId}`, {
           headers: {
             'Authorization': `Bearer ${session.access_token}`
           }

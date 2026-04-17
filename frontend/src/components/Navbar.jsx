@@ -3,11 +3,10 @@ import { Link } from 'react-router-dom';
 import { FiUser, FiMenu, FiX, FiLogIn, FiLogOut } from 'react-icons/fi';
 import ThemeToggle from './ThemeToggle';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../supabaseClient';
 import { trackEvents } from '../services/mixpanel';
 
 function Navbar({ disableNavigation = false }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -26,8 +25,7 @@ function Navbar({ disableNavigation = false }) {
       logout_timestamp: new Date().toISOString()
     });
     
-    await supabase.auth.signOut();
-    window.location.reload();
+    await logout();
   };
 
   useEffect(() => {

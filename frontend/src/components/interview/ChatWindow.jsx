@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, Square, Code } from 'lucide-react'; // ✅ Add Square icon for end button
 import { uploadFile, apiPost, apiDelete } from '../../api';
 import { useAuth } from '../../contexts/AuthContext'; // ✅ Use useAuth hook
-import { supabase } from '../../supabaseClient'; // ✅ Import supabase client
 
 import { useChatHistory } from '../../hooks/useChatHistory';
 

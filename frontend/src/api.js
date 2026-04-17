@@ -1,11 +1,14 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+import { getAccessToken } from './lib/authClient';
+import { getApiBaseUrl } from './utils/apiConfig';
+
+const API_BASE = getApiBaseUrl();
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
 export const getToken = () => localStorage.getItem('ic_token');
 export const isLoggedIn = () => !!getToken();
 
 function getHeaders(isFileUpload = false) {
-  const token = getToken();
+  const token = getAccessToken();
   const headers = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (!isFileUpload) headers['Content-Type'] = 'application/json';

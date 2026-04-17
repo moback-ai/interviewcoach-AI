@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { FiTrendingUp, FiTrendingDown, FiChevronDown, FiChevronUp, FiInfo, FiAlertCircle, FiCheckCircle, FiTarget, FiHelpCircle } from 'react-icons/fi';
-import { supabase } from '../supabaseClient';
+import { apiGet } from '../api';
 
 const PerformanceGraph = ({ resumeJobPairings }) => {
   // State for collapsible section
@@ -17,20 +17,9 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
     const fetchOverallEvaluation = async () => {
       try {
         setLoadingEvaluation(true);
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
-
-        const { data, error } = await supabase
-          .from('overall_evaluation')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
-          console.error('Error fetching overall evaluation:', error);
-        } else if (data) {
-          setOverallEvaluation(data);
+        const result = await apiGet('/api/overall-performance');
+        if (result?.data?.[0]) {
+          setOverallEvaluation(result.data[0]);
         }
       } catch (error) {
         console.error('Error fetching overall evaluation:', error);

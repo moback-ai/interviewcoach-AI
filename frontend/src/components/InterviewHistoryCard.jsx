@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../supabaseClient';
+import { getSession } from '../lib/authClient';
 import { trackEvents } from '../services/mixpanel';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegenerating, isAnyRegenerating = false }) => {
   const { user } = useAuth();
@@ -76,13 +77,13 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
       }
       
       // ✅ STEP 1: Create blank interview record first
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session?.access_token) {
         throw new Error('No active session');
       }
 
       // Create blank interview with PENDING status
-      const blankInterviewResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews`, {
+      const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -106,7 +107,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
       console.log('✅ Blank interview created:', blankInterviewId);
 
       // ✅ STEP 2: Create payment with interview_id in metadata
-      const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/create-payment`, {
+      const response = await fetch(`${getBackendOrigin()}/functions/v1/create-payment`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -123,7 +124,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
       
       if (!response.ok) {
         // ✅ If payment creation fails, delete the blank interview
-        await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${blankInterviewId}`, {
+        await fetch(`${getBackendOrigin()}/functions/v1/interviews/${blankInterviewId}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${session.access_token}`
@@ -179,13 +180,13 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
                 onClick={async () => {
                   try {
                     // ✅ STEP 1: Create blank interview record first
-                    const { data: { session } } = await supabase.auth.getSession();
+                    const session = await getSession();
                     if (!session?.access_token) {
                       throw new Error('No active session');
                     }
 
                     // Find existing interviews to determine attempt number
-                    const existingInterviewsResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}&question_set=${questionSet.questionSetNumber}`, {
+                    const existingInterviewsResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}&question_set=${questionSet.questionSetNumber}`, {
                       headers: {
                         'Authorization': `Bearer ${session.access_token}`
                       }
@@ -199,7 +200,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
                       : 1;
 
                     // Create blank interview with PENDING status
-                    const blankInterviewResponse = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews`, {
+                    const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
                       method: 'POST',
                       headers: {
                         'Authorization': `Bearer ${session.access_token}`,
@@ -224,7 +225,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
                     console.log('✅ Blank interview created:', blankInterviewId);
 
                     // ✅ STEP 2: Create payment with interview_id in metadata
-                    const response = await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/create-payment`, {
+                    const response = await fetch(`${getBackendOrigin()}/functions/v1/create-payment`, {
                       method: 'POST',
                       headers: {
                         'Authorization': `Bearer ${session.access_token}`,
@@ -240,7 +241,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
                     
                     if (!response.ok) {
                       // ✅ If payment creation fails, delete the blank interview
-                      await fetch(`${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/interviews/${blankInterviewId}`, {
+                      await fetch(`${getBackendOrigin()}/functions/v1/interviews/${blankInterviewId}`, {
                         method: 'DELETE',
                         headers: {
                           'Authorization': `Bearer ${session.access_token}`

@@ -46,7 +46,6 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBaseUrl),
-      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(legacyBaseUrl),
       'import.meta.env.VITE_STORAGE_URL': JSON.stringify(storageUrl),
     },
   }
