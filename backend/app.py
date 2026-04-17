@@ -37,7 +37,7 @@ if SUPPORT_BOT_PATH not in sys.path:
 
 # ── Internal modules ──────────────────────────────────────────────────────────
 from common.GPU_Check import get_device
-from common.auth import verify_supabase_token, create_token, hash_password, check_password
+from common.auth import verify_auth_token, create_token, hash_password, check_password
 from common.db import query_one, query_all, execute
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 
@@ -325,7 +325,7 @@ def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "version": "2.0.0"})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  AUTH  (replaces Supabase Auth entirely)
+#  AUTH  (replaces the legacy hosted auth layer)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/signup', methods=['POST', 'OPTIONS'])
@@ -381,7 +381,7 @@ def check_email():
 
 
 @app.route('/api/me', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_me():
     user = query_one("SELECT id, email, full_name, plan, created_at FROM users WHERE id = %s",
                      (request.user['id'],))
@@ -390,11 +390,11 @@ def get_me():
     return jsonify({"user": dict(user)})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  RESUME UPLOAD  (replaces Supabase Storage)
+#  RESUME UPLOAD  (replaces the legacy storage layer)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/upload-resume', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def upload_resume():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -423,11 +423,11 @@ def upload_resume():
     }})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  JOB DESCRIPTIONS  (replaces Supabase edge function)
+#  JOB DESCRIPTIONS  (implements the app API)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/job-descriptions', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def create_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -440,7 +440,7 @@ def create_job_description():
 
 
 @app.route('/api/job-descriptions', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_job_descriptions():
     rows = query_all("SELECT * FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC",
                      (request.user['id'],))
@@ -451,7 +451,7 @@ def get_job_descriptions():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/interviews', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def create_interview():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -466,7 +466,7 @@ def create_interview():
 
 
 @app.route('/api/interviews', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_interviews():
     rows = query_all("SELECT * FROM interviews WHERE user_id=%s ORDER BY scheduled_at DESC",
                      (request.user['id'],))
@@ -474,7 +474,7 @@ def get_interviews():
 
 
 @app.route('/api/interviews/<interview_id>', methods=['PUT', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def update_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -484,11 +484,11 @@ def update_interview(interview_id):
     return jsonify({"success": True})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  INTERVIEW DATA  (replaces Supabase edge function interview-data)
+#  INTERVIEW DATA  (implements the app API interview-data)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/interview-data', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_interview_data():
     interview_id = request.args.get('interview_id')
     interview = query_one(
@@ -513,7 +513,7 @@ def get_interview_data():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/questions', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def save_questions():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -535,17 +535,17 @@ def save_questions():
 
 
 @app.route('/api/questions/<interview_id>', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_questions(interview_id):
     rows = query_all("SELECT * FROM questions WHERE interview_id=%s ORDER BY created_at", (interview_id,))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  TRANSCRIPTS  (replaces Supabase edge function)
+#  TRANSCRIPTS  (implements the app API)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/transcripts', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def save_transcript():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -560,7 +560,7 @@ def save_transcript():
 
 
 @app.route('/api/transcripts/<interview_id>', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_transcript(interview_id):
     row = query_one("SELECT * FROM transcripts WHERE interview_id=%s", (interview_id,))
     if not row:
@@ -568,11 +568,11 @@ def get_transcript(interview_id):
     return jsonify({"success": True, "data": dict(row)})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  INTERVIEW FEEDBACK  (replaces Supabase edge function)
+#  INTERVIEW FEEDBACK  (implements the app API)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/interview-feedback', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def save_feedback():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -590,7 +590,7 @@ def save_feedback():
 
 
 @app.route('/api/interview-feedback/<interview_id>', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_feedback(interview_id):
     row = query_one("SELECT * FROM interview_feedback WHERE interview_id=%s", (interview_id,))
     if not row:
@@ -602,17 +602,17 @@ def get_feedback(interview_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/chat-history/<interview_id>', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_chat_history(interview_id):
     rows = query_all("SELECT * FROM chat_history WHERE interview_id=%s ORDER BY created_at", (interview_id,))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  DASHBOARD  (replaces Supabase edge function dashboard)
+#  DASHBOARD  (implements the app API dashboard)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/dashboard', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def dashboard():
     user_id = request.user['id']
     interviews = query_all(
@@ -640,7 +640,7 @@ def dashboard():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/parse-job-description', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def parse_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -679,7 +679,7 @@ def parse_job_description():
 
 
 @app.route('/api/classify-technical-role', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def classify_technical_role():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -700,7 +700,7 @@ def classify_technical_role():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def generate_questions():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -762,7 +762,7 @@ def generate_questions():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def transcribe_audio():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -796,7 +796,7 @@ def transcribe_audio():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-response', methods=['POST'])
-@verify_supabase_token
+@verify_auth_token
 def generate_response():
     try:
         data = request.get_json() or {}
@@ -983,7 +983,7 @@ def _merge_interview_audio(user_id, interview_id):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-speech', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def generate_speech():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1017,7 +1017,7 @@ def generate_speech():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/support-bot', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def support_bot():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1049,7 +1049,7 @@ def support_bot():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/analyze-performance-trends', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def analyze_performance_trends():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1069,7 +1069,7 @@ def analyze_performance_trends():
 
 
 @app.route('/api/overall-performance', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def overall_performance():
     user_id = request.user['id']
     rows = query_all("SELECT * FROM overall_evaluation WHERE user_id=%s ORDER BY created_at DESC LIMIT 10",
@@ -1098,7 +1098,7 @@ def _run_code(cmd, code, suffix, timeout=10):
 
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def execute_code():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1354,7 +1354,7 @@ def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, 
 
 
 @app.route('/api/me', methods=['PUT', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def update_me():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1381,7 +1381,7 @@ def update_me():
 
 
 @app.route('/api/resumes', methods=['GET', 'POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def resumes_api():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1401,14 +1401,14 @@ def resumes_api():
 
 
 @app.route('/api/payments', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_payments():
     rows = query_all('SELECT * FROM payments WHERE user_id=%s ORDER BY paid_at DESC', (request.user['id'],))
     return jsonify({'success': True, 'data': [dict(row) for row in rows]})
 
 
 @app.route('/api/create-payment', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def create_payment():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1454,7 +1454,7 @@ def create_payment():
 
 
 @app.route('/api/check-payment-status', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def check_payment_status():
     transaction_id = request.args.get('transaction_id')
     row = query_one(
@@ -1467,7 +1467,7 @@ def check_payment_status():
 
 
 @app.route('/api/interviews/<interview_id>', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def get_interview(interview_id):
     row = query_one('SELECT * FROM interviews WHERE id=%s AND user_id=%s', (interview_id, request.user['id']))
     if not row:
@@ -1476,7 +1476,7 @@ def get_interview(interview_id):
 
 
 @app.route('/api/interviews/<interview_id>', methods=['DELETE', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def delete_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1485,7 +1485,7 @@ def delete_interview(interview_id):
 
 
 @app.route('/api/support-bot-data', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def support_bot_data():
     user_id = request.user['id']
     user = query_one('SELECT id, email, full_name, plan, created_at FROM users WHERE id=%s', (user_id,))
@@ -1526,7 +1526,7 @@ def support_bot_data():
 
 @app.route('/functions/v1/upload-file', methods=['POST', 'OPTIONS'])
 @app.route('/api/functions/v1/upload-file', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_upload_file():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1541,14 +1541,14 @@ def legacy_upload_file():
 
 @app.route('/functions/v1/resumes', methods=['GET', 'POST', 'OPTIONS'])
 @app.route('/api/functions/v1/resumes', methods=['GET', 'POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_resumes():
     return resumes_api()
 
 
 @app.route('/functions/v1/job-descriptions', methods=['GET', 'POST', 'OPTIONS'])
 @app.route('/api/functions/v1/job-descriptions', methods=['GET', 'POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_job_descriptions():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1564,7 +1564,7 @@ def legacy_job_descriptions():
 
 @app.route('/functions/v1/interviews', methods=['GET', 'POST', 'OPTIONS'])
 @app.route('/api/functions/v1/interviews', methods=['GET', 'POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_interviews():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1591,7 +1591,7 @@ def legacy_interviews():
 
 @app.route('/functions/v1/interviews/<interview_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
 @app.route('/api/functions/v1/interviews/<interview_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_interview_detail(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1604,7 +1604,7 @@ def legacy_interview_detail(interview_id):
 
 @app.route('/functions/v1/questions', methods=['GET', 'POST', 'OPTIONS'])
 @app.route('/api/functions/v1/questions', methods=['GET', 'POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_questions():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1655,28 +1655,28 @@ def legacy_questions():
 
 @app.route('/functions/v1/dashboard', methods=['GET'])
 @app.route('/api/functions/v1/dashboard', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_dashboard():
     return jsonify({'success': True, 'data': _build_dashboard_pairings(request.user['id'])})
 
 
 @app.route('/functions/v1/payments', methods=['GET'])
 @app.route('/api/functions/v1/payments', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_payments():
     return get_payments()
 
 
 @app.route('/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
 @app.route('/api/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_create_payment():
     return create_payment()
 
 
 @app.route('/functions/v1/interview-feedback', methods=['GET'])
 @app.route('/api/functions/v1/interview-feedback', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_interview_feedback():
     interview_id = request.args.get('interview_id')
     if interview_id:
@@ -1699,7 +1699,7 @@ def legacy_interview_feedback():
 
 @app.route('/functions/v1/transcripts', methods=['GET'])
 @app.route('/api/functions/v1/transcripts', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_transcripts():
     interview_id = request.args.get('interview_id')
     row = query_one('SELECT * FROM transcripts WHERE interview_id=%s', (interview_id,))
@@ -1708,7 +1708,7 @@ def legacy_transcripts():
 
 @app.route('/functions/v1/chat-history', methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
 @app.route('/api/functions/v1/chat-history', methods=['GET', 'POST', 'DELETE', 'OPTIONS'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_chat_history():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -1741,7 +1741,7 @@ def legacy_chat_history():
 
 @app.route('/functions/v1/support-bot-data', methods=['GET'])
 @app.route('/api/functions/v1/support-bot-data', methods=['GET'])
-@verify_supabase_token
+@verify_auth_token
 def legacy_support_bot_data():
     return support_bot_data()
 

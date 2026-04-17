@@ -73,15 +73,6 @@ def verify_auth_token(f):
     return decorated
 
 
-def verify_supabase_token(f):
-    """
-    Backward-compatible alias kept only so older imports continue to work while
-    the rest of the codebase finishes moving away from Supabase naming.
-    """
-    return verify_auth_token(f)
-
-
-
 def optional_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):

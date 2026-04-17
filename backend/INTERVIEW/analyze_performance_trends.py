@@ -997,7 +997,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python analyze_performance_trends.py <auth_token> [model] [limit]")
         print("Example: python analyze_performance_trends.py eyJhbGc... llama3 50")
-        print("\nNote: auth_token should be a valid Supabase JWT token")
+        print("\nNote: auth_token should be a valid application JWT token")
         print("\nAlternatively, use the API endpoint: POST /api/analyze-performance-trends")
         sys.exit(1)
     

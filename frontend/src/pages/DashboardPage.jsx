@@ -7,11 +7,12 @@ import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
 import InterviewHistoryCard from '../components/InterviewHistoryCard';
 import SuccessModal from '../components/SuccessModal';
-import { supabase } from '../supabaseClient';
 import { apiPost } from '../api';
 import { trackEvents } from '../services/mixpanel';
 import PerformanceGraph from '../components/PerformanceGraph';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getSession } from '../lib/authClient';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 function DashboardPage() {
   const { theme } = useTheme();
@@ -57,12 +58,12 @@ function DashboardPage() {
       setLoading(true);
       setError(null);
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
 
-      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const backendOrigin = getBackendOrigin();
       const response = await fetch(`${backendOrigin}/functions/v1/dashboard`, {
         method: 'GET',
         headers: {
@@ -303,12 +304,14 @@ function DashboardPage() {
       
       console.log('Downloading resume from path:', filePath);
       
-      // Direct download from Supabase storage
-      const { data, error } = await supabase.storage
-        .from('resumes')
-        .download(filePath)
-      
-      if (error) throw error
+      const session = await getSession();
+      const response = await fetch(pairing.resumeUrl, {
+        headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
+      });
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+      const data = await response.blob();
       
       // Create download link
       const downloadUrl = URL.createObjectURL(data)
@@ -393,12 +396,12 @@ function DashboardPage() {
   // Helper function to save questions to database via edge function
   const saveQuestionsToDatabase = async (resumeId, jdId, questions) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
 
-      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const backendOrigin = getBackendOrigin();
       
       // First, get the current highest question set number for this specific resume_id + jd_id combination
       const getCurrentQuestionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeId}&jd_id=${jdId}`, {

@@ -17,8 +17,9 @@ import {
 } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import Navbar from '@/components/Navbar';
-import { supabase } from '@/supabaseClient';
 import { trackEvents } from '../services/mixpanel';
+import { getSession } from '@/lib/authClient';
+import { getBackendOrigin } from '@/utils/apiConfig';
 
 // PDF generation functions
 const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, getRatingLabel, getInterviewDuration, getQuestionsAnswered, formatKeyStrengths, formatImprovementAreas) => {
@@ -258,14 +259,14 @@ function InterviewFeedbackPage() {
 
     try {
       // Get current user session
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
 
-      const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
+      const backendOrigin = getBackendOrigin();
       
-      // Fetch feedback data using the interview_id via Supabase Edge Function
+      // Fetch feedback data using the interview_id
       const response = await fetch(`${backendOrigin}/functions/v1/interview-feedback?interview_id=${interviewId}`, {
         method: 'GET',
         headers: {
@@ -443,8 +444,8 @@ function InterviewFeedbackPage() {
       // Fetch transcript data if not already available
       let transcriptData = null;
       if (feedbackData?.interview_id) {
-        const backendOrigin = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '');
-        const { data: { session } } = await supabase.auth.getSession();
+        const backendOrigin = getBackendOrigin();
+        const session = await getSession();
         
         const transcriptResponse = await fetch(`${backendOrigin}/functions/v1/transcripts?interview_id=${feedbackData.interview_id}`, {
           method: 'GET',

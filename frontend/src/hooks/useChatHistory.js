@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { supabase } from '../supabaseClient';
+import { getSession } from '../lib/authClient';
+import { getBackendOrigin } from '../utils/apiConfig';
 
 export const useChatHistory = () => {
   const [loading, setLoading] = useState(false);
@@ -13,13 +14,13 @@ export const useChatHistory = () => {
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
 
       const response = await fetch(
-        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history?interview_id=${interviewId}`,
+        `${getBackendOrigin()}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'GET',
           headers: {
@@ -100,7 +101,7 @@ export const useChatHistory = () => {
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
@@ -111,7 +112,7 @@ export const useChatHistory = () => {
         .join('\n');
 
       const response = await fetch(
-        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history`,
+        `${getBackendOrigin()}/functions/v1/chat-history`,
         {
           method: 'POST',
           headers: {
@@ -149,7 +150,7 @@ export const useChatHistory = () => {
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
@@ -157,7 +158,7 @@ export const useChatHistory = () => {
       const newContent = `${speaker}:${message}`;
 
       const response = await fetch(
-        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history`,
+        `${getBackendOrigin()}/functions/v1/chat-history`,
         {
           method: 'POST',
           headers: {
@@ -199,14 +200,14 @@ export const useChatHistory = () => {
     setError(null);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
 
       console.log('🔑 Session found, making DELETE request...');
       const response = await fetch(
-        `${(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api').replace(/\/api$/, '')}/functions/v1/chat-history?interview_id=${interviewId}`,
+        `${getBackendOrigin()}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'DELETE',
           headers: {
