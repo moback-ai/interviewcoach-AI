@@ -4,9 +4,12 @@ import json
 import requests
 from datetime import datetime
 from dotenv import load_dotenv
-import ollama
 import numpy as np
 import re
+try:
+    import ollama
+except Exception as ollama_import_error:
+    ollama = None
 
 # Load environment variables
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
@@ -353,6 +356,27 @@ def analyze_performance_with_llm(numeric_summary, model="llama3"):
         return {
             'success': False,
             'error': 'No numeric summary provided'
+        }
+    if ollama is None:
+        return {
+            'success': True,
+            'summary': (
+                f"Overall performance is {numeric_summary.get('regression_trend', 'stable')} across "
+                f"{numeric_summary.get('total_interviews', 0)} interview(s). "
+                f"Best area: {numeric_summary.get('best_metric', 'n/a')}. "
+                f"Recommended focus: {numeric_summary.get('recommended_focus', 'n/a')}."
+            ),
+            'strengths_explanation': f"Your strongest area right now is {numeric_summary.get('best_metric', 'n/a')}.",
+            'weaknesses_explanation': f"Your main improvement area is {numeric_summary.get('weakest_metric', 'n/a')}.",
+            'trend_explanation': (
+                f"The trend is {numeric_summary.get('regression_trend', 'stable')} with a "
+                f"shape of {numeric_summary.get('trend_shape', 'steady')}."
+            ),
+            'action_plan': [
+                f"Keep reinforcing {numeric_summary.get('best_metric', 'your strongest metric')}.",
+                f"Spend extra practice time on {numeric_summary.get('recommended_focus', 'your weakest metric')}.",
+                "Run another interview and compare the metrics against this baseline.",
+            ],
         }
     
     # ✅ Create a cleaned version for LLM (exclude timeline_scores - not needed for analysis)

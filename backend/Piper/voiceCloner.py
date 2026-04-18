@@ -24,7 +24,10 @@ import os
 import tempfile
 import hashlib
 from datetime import datetime
-from piper import PiperVoice
+try:
+    from piper import PiperVoice
+except Exception as piper_import_error:
+    PiperVoice = None
 from dotenv import load_dotenv
 
 # Load environment variables from backend .env file
@@ -39,6 +42,8 @@ voice = None
 def initialize_voice():
     """Initialize the Piper voice model"""
     global voice
+    if PiperVoice is None:
+        raise RuntimeError(f"Piper is not installed or failed to import: {piper_import_error}")
     if voice is None:
         try:
             print(f"[INFO] Loading Piper voice model from: {MODEL_PATH}")
@@ -95,8 +100,5 @@ def generate_filename(text: str, user_id: str = None):
     else:
         return f"tts_{text_hash}_{timestamp}.wav"
 
-# Initialize voice model when module is imported
-try:
-    initialize_voice()
-except Exception as e:
-    print(f"[WARNING] Voice model initialization deferred: {e}")
+# Defer initialization until the first real TTS request so the app can boot
+# even when Piper is intentionally not installed on the server yet.

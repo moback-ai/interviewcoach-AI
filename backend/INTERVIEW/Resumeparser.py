@@ -2,8 +2,11 @@
 import argparse
 import os
 import json
-import ollama
 import re
+try:
+    import ollama
+except Exception as ollama_import_error:
+    ollama = None
 from datetime import datetime
 from collections import defaultdict
 import csv
@@ -1430,6 +1433,8 @@ Classification rules:
         return False
 
 def try_ollama_chat(prompt, model="llama3", max_retries=100000):
+    if ollama is None:
+        raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
     for attempt in range(max_retries):
         try:
             return ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])

@@ -1,4 +1,3 @@
-import ollama
 import requests
 import json
 import os
@@ -6,6 +5,10 @@ from collections import defaultdict
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
+try:
+    import ollama
+except Exception as ollama_import_error:
+    ollama = None
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -21,6 +24,10 @@ embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 faq_index = None
 faq_titles = []
 faq_contents = []
+
+
+def ollama_available():
+    return ollama is not None
 
 # -------------------------------
 # FAQ Parsing (unchanged)
@@ -140,6 +147,12 @@ def needs_db_context(user_input, model="llama3"):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_input}
     ]
+    if not ollama_available():
+        keywords = (
+            "my ", "me ", "account", "payment", "payments", "interview", "profile",
+            "resume", "email", "name", "spent", "history", "latest", "recent"
+        )
+        return any(keyword in user_input.lower() for keyword in keywords)
     
     try:
         response = ollama.chat(model=model, messages=messages)
@@ -338,6 +351,15 @@ def generate_support_reply(faq_sections, conversation_history, user_input, model
 
     messages = [{"role": "system", "content": system_prompt}] + conversation_history
     messages.append({"role": "user", "content": user_input})
+
+    if not ollama_available():
+        if user_context:
+            return user_context, [title for title, _ in relevant_sections]
+        if relevant_sections:
+            title, content = relevant_sections[0]
+            compact = " ".join(content.split())
+            return f"{title}: {compact[:400]}".strip(), [title for title, _ in relevant_sections]
+        return "Hello! How can I help you today?", []
 
     try:
         response = ollama.chat(model=model, messages=messages)
