@@ -106,119 +106,120 @@ jobs:
           sudo mkdir -p /var/www/interview
           sudo rsync -av --delete /tmp/frontend-dist/ /var/www/interview/
           if [ -n "$APP_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]; then
-            sudo tee /etc/nginx/sites-available/interview >/dev/null <<NGINX
-            server {
-                listen 80;
-                server_name $APP_DOMAIN;
-                return 301 https://\$host\$request_uri;
-            }
+            cat >/tmp/interview-nginx.conf <<NGINX
+server {
+    listen 80;
+    server_name $APP_DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
 
-            server {
-                listen 443 ssl http2;
-                server_name $APP_DOMAIN;
+server {
+    listen 443 ssl http2;
+    server_name $APP_DOMAIN;
 
-                ssl_certificate /etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem;
-                ssl_certificate_key /etc/letsencrypt/live/$APP_DOMAIN/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$APP_DOMAIN/privkey.pem;
 
-                root /var/www/interview;
-                index index.html;
+    root /var/www/interview;
+    index index.html;
 
-                location / {
-                    try_files \$uri \$uri/ /index.html;
-                }
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
 
-                location /api/ {
-                    proxy_pass http://$BACKEND_HOST:5000/api/;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 300s;
-                    client_max_body_size 200M;
-                }
+    location /api/ {
+        proxy_pass http://$BACKEND_HOST:5000/api/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        client_max_body_size 200M;
+    }
 
-                location /functions/v1/ {
-                    proxy_pass http://$BACKEND_HOST:5000/functions/v1/;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 300s;
-                    client_max_body_size 200M;
-                }
+    location /functions/v1/ {
+        proxy_pass http://$BACKEND_HOST:5000/functions/v1/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        client_max_body_size 200M;
+    }
 
-                location /socket.io/ {
-                    proxy_pass http://$BACKEND_HOST:5000/socket.io/;
-                    proxy_http_version 1.1;
-                    proxy_set_header Upgrade \$http_upgrade;
-                    proxy_set_header Connection "upgrade";
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 300s;
-                }
+    location /socket.io/ {
+        proxy_pass http://$BACKEND_HOST:5000/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+    }
 
-                location /storage/ {
-                    proxy_pass http://$BACKEND_HOST:5000/storage/;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                }
-            }
-            NGINX
+    location /storage/ {
+        proxy_pass http://$BACKEND_HOST:5000/storage/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINX
           else
-            sudo tee /etc/nginx/sites-available/interview >/dev/null <<NGINX
-            server {
-                listen 80;
-                server_name _;
+            cat >/tmp/interview-nginx.conf <<NGINX
+server {
+    listen 80;
+    server_name _;
 
-                root /var/www/interview;
-                index index.html;
+    root /var/www/interview;
+    index index.html;
 
-                location / {
-                    try_files \$uri \$uri/ /index.html;
-                }
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
 
-                location /api/ {
-                    proxy_pass http://$BACKEND_HOST:5000/api/;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 300s;
-                    client_max_body_size 200M;
-                }
+    location /api/ {
+        proxy_pass http://$BACKEND_HOST:5000/api/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        client_max_body_size 200M;
+    }
 
-                location /functions/v1/ {
-                    proxy_pass http://$BACKEND_HOST:5000/functions/v1/;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 300s;
-                    client_max_body_size 200M;
-                }
+    location /functions/v1/ {
+        proxy_pass http://$BACKEND_HOST:5000/functions/v1/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+        client_max_body_size 200M;
+    }
 
-                location /socket.io/ {
-                    proxy_pass http://$BACKEND_HOST:5000/socket.io/;
-                    proxy_http_version 1.1;
-                    proxy_set_header Upgrade \$http_upgrade;
-                    proxy_set_header Connection "upgrade";
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                    proxy_read_timeout 300s;
-                }
+    location /socket.io/ {
+        proxy_pass http://$BACKEND_HOST:5000/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 300s;
+    }
 
-                location /storage/ {
-                    proxy_pass http://$BACKEND_HOST:5000/storage/;
-                    proxy_set_header Host \$host;
-                    proxy_set_header X-Real-IP \$remote_addr;
-                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                    proxy_set_header X-Forwarded-Proto \$scheme;
-                }
-            }
-            NGINX
+    location /storage/ {
+        proxy_pass http://$BACKEND_HOST:5000/storage/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+NGINX
           fi
+          sudo mv /tmp/interview-nginx.conf /etc/nginx/sites-available/interview
           sudo ln -sf /etc/nginx/sites-available/interview /etc/nginx/sites-enabled/interview
           sudo rm -f /etc/nginx/sites-enabled/default
           sudo nginx -t
