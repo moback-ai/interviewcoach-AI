@@ -2,18 +2,21 @@
 import argparse
 import os
 import json
-import textract
 import ollama
 import re
 from datetime import datetime
 from collections import defaultdict
 import csv
 from io import StringIO
-from textract import process
 import PyPDF2
 import docx
 from colorama import Fore, Style, init
 init(autoreset=True)
+
+try:
+    import textract
+except ImportError:
+    textract = None
 
 ENABLE_LOGGING = False
 try:
@@ -109,6 +112,8 @@ def extract_text_from_docx(file_path):
 
 def extract_text_from_textract(file_path):
     """Fallback method using textract"""
+    if textract is None:
+        raise RuntimeError("[ERROR] Textract is not installed on this server.")
     try:
         text = textract.process(file_path).decode("utf-8", errors="ignore")
         return text
