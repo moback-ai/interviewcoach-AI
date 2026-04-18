@@ -18,6 +18,7 @@ const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
 const QuestionsPage       = lazy(() => import('./pages/QuestionPage'));
 const InterviewPage       = lazy(() => import('./pages/InterviewPage'));
 const InterviewFeedbackPage = lazy(() => import('./pages/InterviewFeedbackPage'));
+const PaymentSuccessPage  = lazy(() => import('./pages/PaymentSuccess'));
 const FAQPage             = lazy(() => import('./pages/FAQPage'));
 
 const LoadingSpinner = () => (
@@ -56,6 +57,7 @@ function App() {
           <Route path="/profile"       element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
           <Route path="/dashboard"     element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/questions"     element={<ProtectedRoute><QuestionsPage /></ProtectedRoute>} />
+          <Route path="/payment-status" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
           <Route path="/interview"     element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
           <Route path="/interview-feedback" element={<ProtectedRoute><InterviewFeedbackPage /></ProtectedRoute>} />
         </Routes>
