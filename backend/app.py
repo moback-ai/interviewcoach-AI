@@ -541,6 +541,121 @@ def classify_job_description_is_technical(job_title, job_description):
         return False
     return False
 
+
+def infer_candidate_name_from_text(raw_text):
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    for line in lines[:5]:
+        words = line.split()
+        if 1 <= len(words) <= 4 and sum(1 for word in words if word[:1].isupper()) >= max(1, len(words) - 1):
+            return line[:80]
+    return "Candidate"
+
+
+def extract_keywords_for_questions(resume_text, job_description):
+    combined = f"{resume_text}\n{job_description}".lower()
+    keyword_order = [
+        "python", "flask", "django", "fastapi", "javascript", "typescript", "react",
+        "node", "sql", "postgresql", "mysql", "mongodb", "aws", "docker", "kubernetes",
+        "ci/cd", "linux", "rest api", "microservices", "testing", "automation", "devops",
+        "selenium", "git", "redis", "system design", "machine learning"
+    ]
+    found = []
+    for keyword in keyword_order:
+        if keyword in combined and keyword not in found:
+            found.append(keyword)
+    return found[:8]
+
+
+def build_local_question_set(job_title, job_description, resume_text, question_counts):
+    candidate_name = infer_candidate_name_from_text(resume_text)
+    keywords = extract_keywords_for_questions(resume_text, job_description)
+    primary_skill = keywords[0] if keywords else "the core skills in your background"
+    secondary_skill = keywords[1] if len(keywords) > 1 else primary_skill
+
+    templates = {
+        "beginner": [
+            (
+                f"Can you introduce yourself and explain how your experience prepares you for the {job_title} role?",
+                f"A strong answer should summarize relevant experience, highlight impact, and connect the candidate's background to the {job_title} responsibilities."
+            ),
+            (
+                f"What hands-on experience do you have with {primary_skill}?",
+                f"The answer should describe real projects, responsibilities, tools used, and measurable outcomes involving {primary_skill}."
+            ),
+            (
+                f"Which parts of this job description feel most aligned with your recent work?",
+                "A good response should map past responsibilities to the posted role and mention concrete examples."
+            ),
+        ],
+        "medium": [
+            (
+                f"Tell me about a project where you used {primary_skill} to solve a meaningful problem.",
+                f"A strong answer should cover the problem, approach, tradeoffs, implementation details, and results using {primary_skill}."
+            ),
+            (
+                f"How would you improve reliability and maintainability in a system that uses {secondary_skill}?",
+                f"The answer should discuss architecture, testing, observability, and operational tradeoffs related to {secondary_skill}."
+            ),
+            (
+                f"Describe a situation where you had to balance speed of delivery with code quality or technical debt.",
+                "A good answer should explain prioritization, stakeholder communication, and the long-term mitigation plan."
+            ),
+        ],
+        "hard": [
+            (
+                f"Design an approach for scaling a {job_title} workload while keeping performance, security, and cost under control.",
+                "A strong answer should cover architecture decisions, scaling strategy, observability, failure handling, and tradeoffs."
+            ),
+            (
+                f"What is the most complex technical decision you have made involving {primary_skill}, and how did you evaluate alternatives?",
+                f"The answer should explain constraints, alternatives considered, tradeoffs, risks, and the final outcome around {primary_skill}."
+            ),
+            (
+                "If production started failing intermittently right after a release, how would you investigate and stabilize it?",
+                "A good response should include triage steps, rollback or mitigation, logs/metrics, communication, and prevention."
+            ),
+        ],
+        "coding": [
+            (
+                f"Write or outline a solution for a practical {primary_skill} problem relevant to this role, and explain the time and space complexity.",
+                f"A strong answer should include a correct approach, clean structure, edge cases, and complexity analysis using {primary_skill} concepts."
+            ),
+            (
+                f"Implement a small utility or API handler using {secondary_skill} and explain how you would test it.",
+                f"The answer should demonstrate coding structure, correctness, testability, and reasoning using {secondary_skill}."
+            ),
+        ],
+    }
+
+    questions = []
+    normalized_counts = {
+        "beginner": int((question_counts or {}).get("beginner", 0) or 0),
+        "medium": int((question_counts or {}).get("medium", 0) or 0),
+        "hard": int((question_counts or {}).get("hard", 0) or 0),
+        "coding": int((question_counts or {}).get("coding", 0) or 0),
+    }
+
+    for difficulty, count in normalized_counts.items():
+        if count <= 0:
+            continue
+        bank = templates[difficulty]
+        for index in range(count):
+            prompt, expected = bank[index % len(bank)]
+            questions.append({
+                "question_text": prompt,
+                "expected_answer": expected,
+                "difficulty_level": "medium" if difficulty == "coding" else difficulty,
+                "difficulty_category": difficulty,
+                "requires_code": difficulty == "coding",
+            })
+
+    return {
+        "success": True,
+        "candidate": candidate_name,
+        "questions": questions,
+        "questions_count": len(questions),
+    }
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUTH  (replaces the legacy hosted auth layer)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1037,20 +1152,26 @@ def generate_questions():
             temp_resume = tf.name
 
         try:
-            from INTERVIEW.Resumeparser import run_pipeline_from_api
-            result = run_pipeline_from_api(
-                resume_path=temp_resume,
-                job_title=job_title,
-                job_description=job_description,
-                question_counts=data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2}),
-                include_answers=True,
-                split=data.get('split', False),
-                resume_pct=data.get('resume_pct', 50),
-                jd_pct=data.get('jd_pct', 50),
-                blend=data.get('blend', False),
-                blend_pct_resume=data.get('blend_pct_resume', 50),
-                blend_pct_jd=data.get('blend_pct_jd', 50)
-            )
+            question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
+            try:
+                from INTERVIEW.Resumeparser import run_pipeline_from_api
+                result = run_pipeline_from_api(
+                    resume_path=temp_resume,
+                    job_title=job_title,
+                    job_description=job_description,
+                    question_counts=question_counts,
+                    include_answers=True,
+                    split=data.get('split', False),
+                    resume_pct=data.get('resume_pct', 50),
+                    jd_pct=data.get('jd_pct', 50),
+                    blend=data.get('blend', False),
+                    blend_pct_resume=data.get('blend_pct_resume', 50),
+                    blend_pct_jd=data.get('blend_pct_jd', 50)
+                )
+            except Exception as pipeline_error:
+                print(f"[WARN] Falling back to local question generator: {pipeline_error}")
+                resume_text = extract_text_from_uploaded_document(temp_resume, ext)
+                result = build_local_question_set(job_title, job_description, resume_text, question_counts)
             if not result.get('success'):
                 return jsonify({"success": False, "message": result.get('error', 'Pipeline failed')}), 500
             return jsonify({"success": True, "data": {
