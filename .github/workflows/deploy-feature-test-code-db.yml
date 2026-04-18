@@ -9,6 +9,8 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: production
 
     steps:
       - name: Checkout
@@ -27,17 +29,30 @@ jobs:
           npm install --legacy-peer-deps
           npm run build
 
+      - name: Require Govardhan approval for non-owner pushes
+        if: github.event_name == 'push' && github.actor != 'govardhanreddy66'
+        run: |
+          echo "This push was made by ${{ github.actor }}."
+          echo "Build completed, but deployment is blocked until Govardhan manually approves by running this workflow."
+
+      - name: Mark deploy as approved
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+        run: echo "Deployment approved for actor ${{ github.actor }}."
+
       - name: Setup SSH
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
 
       - name: Define SSH options
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
         run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
       - name: Sync backend source
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
         run: |
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
@@ -45,6 +60,7 @@ jobs:
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/apps/backend/
 
       - name: Configure backend and restart
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
@@ -91,6 +107,7 @@ jobs:
           EOFSSH
 
       - name: Upload frontend build
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
         run: |
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
@@ -98,6 +115,7 @@ jobs:
             ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
 
       - name: Publish frontend
+        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
