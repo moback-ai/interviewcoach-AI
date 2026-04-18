@@ -452,6 +452,75 @@ def process_audio_file(file):
 def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "version": "2.0.0"})
 
+
+def extract_text_from_uploaded_document(file_path, ext):
+    ext = ext.lower()
+    if ext == 'txt':
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as handle:
+            return handle.read()
+    if ext == 'pdf':
+        import PyPDF2
+        text = []
+        with open(file_path, 'rb') as handle:
+            reader = PyPDF2.PdfReader(handle)
+            for page in reader.pages:
+                text.append(page.extract_text() or "")
+        return "\n".join(text)
+    if ext in ['docx', 'doc']:
+        import docx
+        document = docx.Document(file_path)
+        return "\n".join(paragraph.text for paragraph in document.paragraphs)
+    raise RuntimeError(f"Unsupported file type: {ext}")
+
+
+def summarize_job_description_text(raw_text):
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    text = "\n".join(lines).strip()
+    if not text:
+        return {"job_title": "", "job_description": ""}
+
+    title = ""
+    for line in lines[:12]:
+        normalized = line.lower()
+        if 2 <= len(line) <= 120 and any(keyword in normalized for keyword in [
+            'engineer', 'developer', 'manager', 'analyst', 'consultant', 'specialist',
+            'architect', 'lead', 'qa', 'tester', 'intern', 'administrator', 'devops',
+            'sre', 'support', 'designer', 'scientist'
+        ]):
+            title = line
+            break
+
+    if not title:
+        title = lines[0][:120]
+
+    compact_description = " ".join(segment.strip() for segment in lines[:40])
+    compact_description = compact_description[:4000].strip()
+
+    return {
+        "job_title": title,
+        "job_description": compact_description,
+    }
+
+
+def classify_job_description_is_technical(job_title, job_description):
+    haystack = f"{job_title} {job_description}".lower()
+    technical_keywords = [
+        'python', 'java', 'javascript', 'typescript', 'sql', 'api', 'backend', 'frontend',
+        'full stack', 'fullstack', 'developer', 'engineer', 'devops', 'sre', 'automation',
+        'selenium', 'aws', 'cloud', 'kubernetes', 'docker', 'microservices', 'react',
+        'node', 'coding', 'programming', 'software', 'data engineer', 'machine learning',
+        'qa automation', 'test automation', 'ci/cd'
+    ]
+    non_technical_keywords = [
+        'sales', 'marketing', 'hr', 'human resources', 'recruiter', 'customer support',
+        'business development', 'operations manager', 'office assistant'
+    ]
+    if any(keyword in haystack for keyword in technical_keywords):
+        return True
+    if any(keyword in haystack for keyword in non_technical_keywords):
+        return False
+    return False
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUTH  (replaces the legacy hosted auth layer)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -881,16 +950,10 @@ def parse_job_description():
             file.save(tf.name)
             temp_path = tf.name
         try:
-            from INTERVIEW.Resumeparser import parse_job_description_file, classify_if_technical_role
-            result = parse_job_description_file(temp_path, model="llama3")
+            result = summarize_job_description_text(extract_text_from_uploaded_document(temp_path, ext))
             job_title = result.get('job_title', '')
             job_description = result.get('job_description', '')
-            is_technical = False
-            if job_title and job_description:
-                try:
-                    is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
-                except Exception:
-                    pass
+            is_technical = classify_job_description_is_technical(job_title, job_description)
             return jsonify({"success": True, "data": {
                 "job_title": job_title,
                 "job_description": job_description,
@@ -915,8 +978,7 @@ def classify_technical_role():
     if not job_title or not job_description:
         return jsonify({"success": False, "message": "job_title and job_description required"}), 400
     try:
-        from INTERVIEW.Resumeparser import classify_if_technical_role
-        is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
+        is_technical = classify_job_description_is_technical(job_title, job_description)
         return jsonify({"success": True, "is_technical": is_technical})
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
