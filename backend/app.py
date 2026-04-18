@@ -466,10 +466,30 @@ def extract_text_from_uploaded_document(file_path, ext):
             for page in reader.pages:
                 text.append(page.extract_text() or "")
         return "\n".join(text)
-    if ext in ['docx', 'doc']:
-        import docx
-        document = docx.Document(file_path)
-        return "\n".join(paragraph.text for paragraph in document.paragraphs)
+    if ext == 'docx':
+        try:
+            import docx
+            document = docx.Document(file_path)
+            return "\n".join(paragraph.text for paragraph in document.paragraphs)
+        except ModuleNotFoundError:
+            import zipfile
+            from xml.etree import ElementTree
+
+            with zipfile.ZipFile(file_path) as archive:
+                xml_bytes = archive.read("word/document.xml")
+            root = ElementTree.fromstring(xml_bytes)
+            namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            paragraphs = []
+            for paragraph in root.findall(".//w:p", namespace):
+                text_parts = [node.text for node in paragraph.findall(".//w:t", namespace) if node.text]
+                if text_parts:
+                    paragraphs.append("".join(text_parts))
+            return "\n".join(paragraphs)
+    if ext == 'doc':
+        if textract is not None:
+            extracted = textract.process(file_path)
+            return extracted.decode('utf-8', errors='ignore')
+        raise RuntimeError("Legacy .doc parsing is not available on this server. Please upload .docx, .pdf, or .txt.")
     raise RuntimeError(f"Unsupported file type: {ext}")
 
 
