@@ -82,7 +82,12 @@ jobs:
           pm2 delete backend >/dev/null 2>&1 || true
           pm2 start "venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 --worker-class eventlet app:app" --name backend
           pm2 save
-          curl -f http://127.0.0.1:5000/api/health
+          sleep 5
+          if ! curl -f http://127.0.0.1:5000/api/health; then
+            pm2 status
+            pm2 logs backend --lines 200 --nostream || true
+            exit 1
+          fi
           EOFSSH
 
       - name: Upload frontend build
