@@ -36,9 +36,8 @@ jobs:
               - 'frontend/**'
             backend:
               - 'backend/**'
-              - '!backend/schema.sql'
             database:
-              - 'backend/schema.sql'
+              - 'database/**'
 
       - name: Resolve deployment targets
         id: targets
@@ -187,7 +186,7 @@ jobs:
             --username="${{ secrets.DB_USER }}" \
             --dbname="${{ secrets.DB_NAME }}" \
             --set=ON_ERROR_STOP=1 \
-            --file=backend/schema.sql
+            --file=database/schema.sql
 
       - name: Upload frontend build
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
