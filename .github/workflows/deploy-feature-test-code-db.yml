@@ -22,6 +22,9 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: production
+    concurrency:
+      group: deploy-feature-test-code-db-production
+      cancel-in-progress: false
 
     steps:
       - name: Checkout
@@ -117,22 +120,32 @@ jobs:
       - name: Sync backend source
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.backend == 'true'
         run: |
+          BACKEND_RELEASE="/apps/backend/releases/${{ github.sha }}"
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
             backend/ \
-            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/apps/backend/
+            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
 
       - name: Configure backend and restart
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.backend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
+          RELEASE_ID="${{ github.sha }}"
+          APP_ROOT="/apps/backend"
+          RELEASES_DIR="$APP_ROOT/releases"
+          SHARED_DIR="$APP_ROOT/shared"
+          VENV_DIR="$APP_ROOT/venv"
+          NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
+          PREVIOUS_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
           PUBLIC_ORIGIN="http://${{ secrets.FRONTEND_HOST }}"
           if [ -n "$APP_DOMAIN" ]; then
             PUBLIC_ORIGIN="https://$APP_DOMAIN"
           fi
-          cat > /apps/backend/.env <<ENVEOF
+          mkdir -p "$RELEASES_DIR" "$SHARED_DIR"
+          cat > "$SHARED_DIR/.env" <<ENVEOF
           DB_HOST=${{ secrets.DB_HOST }}
           DB_PORT=${{ secrets.DB_PORT }}
           DB_NAME=${{ secrets.DB_NAME }}
@@ -153,18 +166,28 @@ jobs:
           MAX_CONTENT_MB=200
           BACKEND_API_BASE=http://127.0.0.1:5000
           ENVEOF
-          cd /apps/backend
-          if [ ! -d venv ]; then python3 -m venv venv; fi
-          . venv/bin/activate
+          ln -sfn "$SHARED_DIR/.env" "$NEW_RELEASE/.env"
+          if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
+          . "$VENV_DIR/bin/activate"
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r "$NEW_RELEASE/requirements.txt"
+          ln -sfn "$NEW_RELEASE" "$APP_ROOT/current"
           pm2 delete backend >/dev/null 2>&1 || true
-          pm2 start "venv/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+          pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
           pm2 save
           sleep 5
           if ! curl -f http://127.0.0.1:5000/api/health; then
             pm2 status
             pm2 logs backend --lines 200 --nostream || true
+            if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+              echo "Rolling back backend to $PREVIOUS_RELEASE"
+              ln -sfn "$PREVIOUS_RELEASE" "$APP_ROOT/current"
+              pm2 delete backend >/dev/null 2>&1 || true
+              pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+              pm2 save
+              sleep 5
+              curl -f http://127.0.0.1:5000/api/health
+            fi
             exit 1
           fi
           EOFSSH
@@ -180,13 +203,37 @@ jobs:
         env:
           PGPASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
+          BACKUP_FILE="/tmp/interviewcoach-db-${{ github.sha }}.dump"
+          pg_dump \
+            --host="${{ secrets.DB_HOST }}" \
+            --port="${{ secrets.DB_PORT }}" \
+            --username="${{ secrets.DB_USER }}" \
+            --dbname="${{ secrets.DB_NAME }}" \
+            --format=custom \
+            --file="$BACKUP_FILE"
+          restore_database() {
+            echo "Rolling back database from $BACKUP_FILE"
+            pg_restore \
+              --host="${{ secrets.DB_HOST }}" \
+              --port="${{ secrets.DB_PORT }}" \
+              --username="${{ secrets.DB_USER }}" \
+              --dbname="${{ secrets.DB_NAME }}" \
+              --clean \
+              --if-exists \
+              --no-owner \
+              --no-privileges \
+              "$BACKUP_FILE"
+          }
+          trap restore_database ERR
           psql \
             --host="${{ secrets.DB_HOST }}" \
             --port="${{ secrets.DB_PORT }}" \
             --username="${{ secrets.DB_USER }}" \
             --dbname="${{ secrets.DB_NAME }}" \
             --set=ON_ERROR_STOP=1 \
+            --single-transaction \
             --file=database/schema.sql
+          rm -f "$BACKUP_FILE"
 
       - name: Upload frontend build
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
@@ -201,12 +248,18 @@ jobs:
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
+          RELEASE_ID="${{ github.sha }}"
+          FRONTEND_ROOT="/var/www/interview"
+          RELEASES_DIR="$FRONTEND_ROOT/releases"
+          CURRENT_LINK="$FRONTEND_ROOT/current"
+          PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
+          NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
           BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
           BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
           BACKEND_PROXY_HOST="127.0.0.1:5001"
-          sudo mkdir -p /var/www/interview
-          sudo rsync -av --delete /tmp/frontend-dist/ /var/www/interview/
+          sudo mkdir -p "$RELEASES_DIR"
+          sudo rsync -av --delete /tmp/frontend-dist/ "$NEW_RELEASE/"
           cat > "$BACKEND_TUNNEL_KEY" <<'KEYEOF'
           ${{ secrets.EC2_SSH_KEY }}
           KEYEOF
@@ -242,7 +295,7 @@ jobs:
               echo "    ssl_certificate /etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem;"
               echo "    ssl_certificate_key /etc/letsencrypt/live/$APP_DOMAIN/privkey.pem;"
               echo
-              echo "    root /var/www/interview;"
+              echo "    root $CURRENT_LINK;"
               echo "    index index.html;"
               echo
               echo '    location = /.env { return 404; }'
@@ -308,7 +361,7 @@ jobs:
               echo "    listen 80;"
               echo "    server_name _;"
               echo
-              echo "    root /var/www/interview;"
+              echo "    root $CURRENT_LINK;"
               echo "    index index.html;"
               echo
               echo '    location = /.env { return 404; }'
@@ -372,6 +425,16 @@ jobs:
           sudo mv /tmp/interview-nginx.conf /etc/nginx/sites-available/interview
           sudo ln -sf /etc/nginx/sites-available/interview /etc/nginx/sites-enabled/interview
           sudo rm -f /etc/nginx/sites-enabled/default
+          sudo ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
           sudo nginx -t
           sudo systemctl reload nginx
+          if ! curl -fsS --max-time 10 http://127.0.0.1/ >/dev/null || ! curl -fsS --max-time 10 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
+            if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
+              echo "Rolling back frontend to $PREVIOUS_RELEASE"
+              sudo ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
+              sudo nginx -t
+              sudo systemctl reload nginx
+            fi
+            exit 1
+          fi
           EOFSSH
