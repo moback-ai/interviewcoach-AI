@@ -9,6 +9,7 @@ import hashlib
 import base64
 import io
 import secrets
+import uuid
 from urllib.parse import urlencode
 
 import soundfile as sf
@@ -1846,9 +1847,7 @@ def get_payments():
     return jsonify({'success': True, 'data': [dict(row) for row in rows]})
 
 
-@app.route('/api/create-payment', methods=['POST', 'OPTIONS'])
-@verify_auth_token
-def create_payment():
+def _create_payment_impl():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
     data = request.get_json() or {}
@@ -1890,6 +1889,12 @@ def create_payment():
         'payment_url': _payment_redirect_url(interview_id, payment_id, resume_id, jd_id, question_set, 'success'),
         'data': dict(payment) if payment else None,
     })
+
+
+@app.route('/api/create-payment', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def create_payment():
+    return _create_payment_impl()
 
 
 @app.route('/api/check-payment-status', methods=['GET'])
@@ -2110,7 +2115,7 @@ def legacy_payments():
 @app.route('/api/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def legacy_create_payment():
-    return create_payment()
+    return _create_payment_impl()
 
 
 @app.route('/functions/v1/interview-feedback', methods=['GET'])
