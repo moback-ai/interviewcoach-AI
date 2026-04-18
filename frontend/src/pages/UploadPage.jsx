@@ -159,7 +159,7 @@ function UploadPage() {
       formData.append('file', file);
 
       // Use the uploadFile helper function with correct endpoint
-      const result = await uploadFile('/api/parse-job-description', formData);
+      const result = await uploadFile('/parse-job-description', formData);
 
       if (!result.success) {
         throw new Error(result.message || 'Failed to parse job description');
