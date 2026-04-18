@@ -5,6 +5,17 @@ on:
     branches:
       - feature/test-code-DB
   workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: Which part should be deployed?
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - frontend
+          - backend
+          - database
 
 jobs:
   deploy:
@@ -16,12 +27,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Detect changed areas
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+              - '!backend/schema.sql'
+            database:
+              - 'backend/schema.sql'
+
+      - name: Resolve deployment targets
+        id: targets
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            target="${{ github.event.inputs.deploy_target }}"
+            case "$target" in
+              all)
+                frontend=true
+                backend=true
+                database=true
+                ;;
+              frontend)
+                frontend=true
+                backend=false
+                database=false
+                ;;
+              backend)
+                frontend=false
+                backend=true
+                database=false
+                ;;
+              database)
+                frontend=false
+                backend=false
+                database=true
+                ;;
+            esac
+          else
+            frontend="${{ steps.changes.outputs.frontend }}"
+            backend="${{ steps.changes.outputs.backend }}"
+            database="${{ steps.changes.outputs.database }}"
+          fi
+
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "database=$database" >> "$GITHUB_OUTPUT"
+          echo "Detected targets -> frontend=$frontend backend=$backend database=$database"
+
       - name: Setup Node
+        if: steps.targets.outputs.frontend == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: current
 
       - name: Build frontend
+        if: steps.targets.outputs.frontend == 'true'
         working-directory: frontend
         run: |
           echo "VITE_API_BASE_URL=/api" > .env
@@ -52,7 +116,7 @@ jobs:
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
       - name: Sync backend source
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.backend == 'true'
         run: |
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
@@ -60,7 +124,7 @@ jobs:
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/apps/backend/
 
       - name: Configure backend and restart
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.backend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
@@ -106,8 +170,27 @@ jobs:
           fi
           EOFSSH
 
+      - name: Install PostgreSQL client
+        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.database == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Apply database schema
+        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.database == 'true'
+        env:
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          psql \
+            --host="${{ secrets.DB_HOST }}" \
+            --port="${{ secrets.DB_PORT }}" \
+            --username="${{ secrets.DB_USER }}" \
+            --dbname="${{ secrets.DB_NAME }}" \
+            --set=ON_ERROR_STOP=1 \
+            --file=backend/schema.sql
+
       - name: Upload frontend build
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
         run: |
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
@@ -115,7 +198,7 @@ jobs:
             ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
 
       - name: Publish frontend
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
