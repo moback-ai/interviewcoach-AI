@@ -8,6 +8,7 @@ import { useChatHistory } from '../../hooks/useChatHistory';
 
 import { trackEvents } from '../../services/mixpanel';
 import CodeEditorPopup from './CodeEditorPopup';
+import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaDevices';
 
 function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange }) {
   const [isRecording, setIsRecording] = useState(false);
@@ -661,7 +662,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       }, 1500);
       
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const stream = await requestUserMedia({
           audio: {
             sampleRate: 16000,
             channelCount: 1,
@@ -692,6 +693,16 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         
       } catch (error) {
         console.error('❌ Failed to start recording:', error);
+        const errorMessage = {
+          id: Date.now(),
+          speaker: 'system',
+          message:
+            error.name === 'MediaDevicesUnsupported' || error.name === 'MediaDevicesUnavailable'
+              ? getMediaAccessErrorMessage('audio')
+              : `Microphone error: ${error.message || 'Unknown error'}`,
+          timestamp: new Date().toLocaleTimeString()
+        };
+        setConversation(prev => [...prev, errorMessage]);
         setIsRecording(false);
         setCanEndInterview(true); // ✅ NEW: Re-enable button if recording fails
         setIsButtonDisabled(false); // ✅ RESTORED: Re-enable button if recording fails

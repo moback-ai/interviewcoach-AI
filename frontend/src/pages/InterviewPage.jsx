@@ -11,6 +11,7 @@ import WarningModal from '@/components/interview/WarningModal';
 import WaveAnimation from '@/components/interview/WaveAnimation';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
+import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
 
 function InterviewPage() {
   const { isDark } = useTheme();
@@ -103,7 +104,7 @@ function InterviewPage() {
           streamRef.current.getTracks().forEach(track => track.stop());
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const stream = await requestUserMedia({
           video: { 
             width: { ideal: 1920 },
             height: { ideal: 1080 },
@@ -177,6 +178,9 @@ function InterviewPage() {
         } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
           errorMessage += 'No camera found. Please connect a camera and refresh the page.';
           setCameraError(errorMessage);
+          setIsCameraLoading(false);
+        } else if (error.name === 'MediaDevicesUnsupported' || error.name === 'MediaDevicesUnavailable') {
+          setCameraError(getMediaAccessErrorMessage('camera'));
           setIsCameraLoading(false);
         } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
           errorMessage += 'Camera is being used by another application. Please close other apps and refresh.';
