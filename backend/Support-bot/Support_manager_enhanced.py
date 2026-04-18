@@ -12,6 +12,8 @@ BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://127.0.0.1:5000")
 
 
 class SupportBotManager:
+    _faq_sections_cache = None
+
     def __init__(self, model="llama3", faq_path="support_bot.md", backend_api_base=None):
         self.model = model
         self.session_id = str(uuid.uuid4())
@@ -21,7 +23,9 @@ class SupportBotManager:
         self.auth_token = None
         self.backend_api_base = backend_api_base or BACKEND_API_BASE
 
-        self.faq_sections = load_faq_sections(faq_path)
+        if SupportBotManager._faq_sections_cache is None:
+            SupportBotManager._faq_sections_cache = load_faq_sections(faq_path)
+        self.faq_sections = SupportBotManager._faq_sections_cache
         build_faq_index(self.faq_sections)
 
         greeting = "Hello! I'm your support assistant. How can I help you today?"

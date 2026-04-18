@@ -1,17 +1,16 @@
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation } from 'react-router-dom';
 import { lazy, Suspense, useEffect } from 'react';
-import Landing from './pages/Landing';
-import Signup from './pages/SignUp';
-import Login from './pages/Login';
-import VerifyEmail from './pages/VerifyEmail';
 import ProtectedRoute from './components/ProtectedRoute';
-import SupportBot from './components/SupportBot';
 import IdleTimeoutModal from './components/IdleTimeoutModal';
 import { useAuth } from './contexts/AuthContext';
 import { useIdleTimeout } from './hooks/useIdleTimeout';
 import './index.css';
 
 // Lazy load heavy pages
+const Landing             = lazy(() => import('./pages/Landing'));
+const Signup              = lazy(() => import('./pages/SignUp'));
+const Login               = lazy(() => import('./pages/Login'));
+const VerifyEmail         = lazy(() => import('./pages/VerifyEmail'));
 const UploadPage          = lazy(() => import('./pages/UploadPage'));
 const ProfilePage         = lazy(() => import('./pages/ProfilePage'));
 const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
@@ -20,6 +19,7 @@ const InterviewPage       = lazy(() => import('./pages/InterviewPage'));
 const InterviewFeedbackPage = lazy(() => import('./pages/InterviewFeedbackPage'));
 const PaymentSuccessPage  = lazy(() => import('./pages/PaymentSuccess'));
 const FAQPage             = lazy(() => import('./pages/FAQPage'));
+const SupportBot          = lazy(() => import('./components/SupportBot'));
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center min-h-screen">
@@ -28,7 +28,7 @@ const LoadingSpinner = () => (
 );
 
 function App() {
-  const { logout } = useAuth();
+  const { logout, isAuthenticated } = useAuth();
   const location = useLocation();
   const isOnInterviewPage = location.pathname === '/interview';
 
@@ -40,6 +40,25 @@ function App() {
   const handleIdleLogout = () => {
     logout();
   };
+
+  useEffect(() => {
+    const prefetch = () => {
+      import('./pages/UploadPage');
+      import('./pages/DashboardPage');
+      import('./pages/QuestionPage');
+      import('./pages/InterviewPage');
+      import('./components/SupportBot');
+    };
+
+    if (isAuthenticated) {
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        const callbackId = window.requestIdleCallback(prefetch, { timeout: 1500 });
+        return () => window.cancelIdleCallback?.(callbackId);
+      }
+      const timeoutId = window.setTimeout(prefetch, 750);
+      return () => window.clearTimeout(timeoutId);
+    }
+  }, [isAuthenticated]);
 
   return (
     <>
@@ -63,7 +82,11 @@ function App() {
         </Routes>
       </Suspense>
 
-      <SupportBot />
+      {isAuthenticated && !isOnInterviewPage && (
+        <Suspense fallback={null}>
+          <SupportBot />
+        </Suspense>
+      )}
 
       {!isOnInterviewPage && (
         <IdleTimeoutModal
