@@ -96,7 +96,7 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
           pm2 delete backend >/dev/null 2>&1 || true
-          pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 --timeout 300 --worker-class eventlet app:app" --name backend
+          pm2 start "venv/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
           pm2 save
           sleep 5
           if ! curl -f http://127.0.0.1:5000/api/health; then

@@ -15,7 +15,11 @@ from urllib.parse import urlencode
 import soundfile as sf
 import cv2
 import numpy as np
-import mediapipe as mp
+try:
+    import mediapipe as mp
+except Exception as mediapipe_import_error:
+    mp = None
+    print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -82,7 +86,7 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 
 def get_public_origin():
@@ -214,6 +218,10 @@ ensure_auth_schema()
 
 class EyeContactDetector_Callib:
     def __init__(self):
+        if mp is None:
+            raise RuntimeError("mediapipe is not installed")
+        if not hasattr(mp, "solutions") or not hasattr(mp.solutions, "face_mesh"):
+            raise RuntimeError("mediapipe face mesh support is unavailable in this environment")
         self.FACE_3D_IDX = [1, 33, 263, 61, 291, 199]
         self.left_eye_idx = [33, 133, 159, 145]
         self.left_iris_idx = 468

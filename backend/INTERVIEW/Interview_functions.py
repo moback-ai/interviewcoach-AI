@@ -1,6 +1,9 @@
 import json
-import ollama
 import re
+try:
+    import ollama
+except Exception as ollama_import_error:
+    ollama = None
 
 
 RED = "\033[31m"
@@ -9,6 +12,12 @@ BLUE = "\033[34m"
 GREEN = "\033[32m"
 CYAN = "\033[36m"
 RESET = "\033[0m"
+
+
+def ollama_chat(*, model, messages):
+    if ollama is None:
+        raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
+    return ollama.chat(model=model, messages=messages)
 
 
 def log(func_name):
@@ -73,7 +82,7 @@ def generate_contextual_intro_reply(job_title, job_description, conversation_his
     messages.append({"role": "user", "content": user_input})
 
     try:
-        response = ollama.chat(model="llama3", messages=messages)
+        response = ollama_chat(model="llama3", messages=messages)
         content = response["message"]["content"].strip()
         job_flag = False
         if "[[job_explained]]" in content:
@@ -107,7 +116,7 @@ def assess_intro_progress(conversation_history):
     """
 
     try:
-        response = ollama.chat(
+        response = ollama_chat(
         model="llama3",
         messages=[{"role": "system", "content": prompt}]
         )
@@ -151,7 +160,7 @@ def assess_icebreaker_response(user_response, question):
 
 
     try:
-        response = ollama.chat(
+        response = ollama_chat(
         model="llama3",
         messages=[{"role": "system", "content": prompt}]
         )
@@ -171,7 +180,7 @@ def generate_icebreaker_question(job_title):
             Only respond with the question.
             """
     try:
-        response = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        response = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         return response['message']['content'].strip()
 
     except Exception as e:
@@ -204,7 +213,7 @@ def assess_followup_response(question, user_response):
             {"role": "user", "content": question},
             {"role": "assistant", "content": user_response}
         ]
-        response = ollama.chat(model="llama3", messages=messages)
+        response = ollama_chat(model="llama3", messages=messages)
         result = response["message"]["content"].strip().lower()
         return result if result in ["strong", "weak"] else "strong"
     except Exception as e:
@@ -237,7 +246,7 @@ def generate_dynamic_question(job_title, job_description, conversation_history):
     ]
 
     try:
-        response = ollama.chat(model="llama3", messages=messages)
+        response = ollama_chat(model="llama3", messages=messages)
         return response['message']['content'].strip()
 
     except Exception as e:
@@ -267,7 +276,7 @@ def evaluate_resume_response(question, response):
     Only one word response.
     """
     try:
-        res = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        res = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         return res["message"]["content"].strip().lower()
 
     except Exception as e:
@@ -286,7 +295,7 @@ def generate_followup_question(original_question, weak_response):
     Only return the follow-up question.
     """
     try:
-        res = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        res = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         content = res["message"]["content"].strip()
         # Remove quotes from beginning and end if present
         if content.startswith('"') and content.endswith('"'):
@@ -319,7 +328,7 @@ def evaluate_custom_response(question, response):
     Only return one word.
     """
     try:
-        result = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         return result["message"]["content"].strip().lower()
 
     except Exception as e:
@@ -342,7 +351,7 @@ def generate_custom_followup(question, last_response):
     Just return the follow-up question only.
     """
     try:
-        result = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         content = result["message"]["content"].strip()
         # Remove quotes from beginning and end if present
         if content.startswith('"') and content.endswith('"'):
@@ -369,7 +378,7 @@ def generate_model_answer(question):
         Only return the answer — no explanation or extra text.
         """
     try:
-        result = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         content = result["message"]["content"].strip()
         # Remove quotes from beginning and end if present
         if content.startswith('"') and content.endswith('"'):
@@ -403,7 +412,7 @@ def assess_candidate_has_question(user_input):
     Accept phrases like “no”, “not really”, “I'm good”, etc. as "no". Anything question-like = "yes".
     """
     try:
-        result = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         return result["message"]["content"].strip().lower()
 
     except Exception as e:
@@ -471,7 +480,7 @@ def generate_candidate_qna_response(user_question, conversation_history, evaluat
 
 
     try:
-        result = ollama.chat(model="llama3", messages=[{"role": "system", "content": prompt}])
+        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
         return result["message"]["content"].strip()
 
     except Exception as e:
@@ -522,7 +531,7 @@ def analyze_individual_responses(evaluation_log, model="llama3"):
             """
 
         try:
-            result = ollama.chat(model=model, messages=[{"role": "system", "content": prompt}])
+            result = ollama_chat(model=model, messages=[{"role": "system", "content": prompt}])
             response_text = result["message"]["content"].strip()
             
             # Try to extract JSON from the response
@@ -677,7 +686,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
     max_retries = 100
     for attempt in range(max_retries):
         try:
-            result = ollama.chat(model=model, messages=[{"role": "system", "content": prompt}])
+            result = ollama_chat(model=model, messages=[{"role": "system", "content": prompt}])
             response_text = result["message"]["content"].strip()
 
             # Try to extract JSON
@@ -732,7 +741,6 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
         "overall_emotion_summary": parsed_response.get("overall_emotion_summary", "Emotion summary not generated")  # ✅ qualitative LLM summary
     }
 }
-
 
 
 
