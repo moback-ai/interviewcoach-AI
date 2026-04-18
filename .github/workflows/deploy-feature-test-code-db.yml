@@ -102,11 +102,31 @@ jobs:
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
-          BACKEND_HOST="172.31.46.208"
+          BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
+          BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
+          BACKEND_PROXY_HOST="127.0.0.1:5001"
           sudo mkdir -p /var/www/interview
           sudo rsync -av --delete /tmp/frontend-dist/ /var/www/interview/
+          cat > "$BACKEND_TUNNEL_KEY" <<'KEYEOF'
+          ${{ secrets.EC2_SSH_KEY }}
+          KEYEOF
+          chmod 600 "$BACKEND_TUNNEL_KEY"
+          pkill -f "127.0.0.1:5001:127.0.0.1:5000" || true
+          nohup ssh -N -L 127.0.0.1:5001:127.0.0.1:5000 \
+            -i "$BACKEND_TUNNEL_KEY" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            ${{ secrets.EC2_USER }}@"$BACKEND_HOST" >/tmp/backend-tunnel.log 2>&1 &
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 5 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
           export APP_DOMAIN
-          export BACKEND_HOST
+          export BACKEND_PROXY_HOST
           if [ -n "$APP_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]; then
             {
               echo "server {"
@@ -130,7 +150,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /api/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/api/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/api/;"
               echo '        proxy_set_header Host $host;'
               echo '        proxy_set_header X-Real-IP $remote_addr;'
               echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
@@ -140,7 +160,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /functions/v1/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/functions/v1/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/functions/v1/;"
               echo '        proxy_set_header Host $host;'
               echo '        proxy_set_header X-Real-IP $remote_addr;'
               echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
@@ -150,7 +170,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /socket.io/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/socket.io/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/socket.io/;"
               echo "        proxy_http_version 1.1;"
               echo '        proxy_set_header Upgrade $http_upgrade;'
               echo '        proxy_set_header Connection "upgrade";'
@@ -160,7 +180,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /storage/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/storage/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/storage/;"
               echo '        proxy_set_header Host $host;'
               echo '        proxy_set_header X-Real-IP $remote_addr;'
               echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
@@ -182,7 +202,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /api/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/api/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/api/;"
               echo '        proxy_set_header Host $host;'
               echo '        proxy_set_header X-Real-IP $remote_addr;'
               echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
@@ -192,7 +212,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /functions/v1/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/functions/v1/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/functions/v1/;"
               echo '        proxy_set_header Host $host;'
               echo '        proxy_set_header X-Real-IP $remote_addr;'
               echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
@@ -202,7 +222,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /socket.io/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/socket.io/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/socket.io/;"
               echo "        proxy_http_version 1.1;"
               echo '        proxy_set_header Upgrade $http_upgrade;'
               echo '        proxy_set_header Connection "upgrade";'
@@ -212,7 +232,7 @@ jobs:
               echo "    }"
               echo
               echo "    location /storage/ {"
-              echo "        proxy_pass http://$BACKEND_HOST:5000/storage/;"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/storage/;"
               echo '        proxy_set_header Host $host;'
               echo '        proxy_set_header X-Real-IP $remote_addr;'
               echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
