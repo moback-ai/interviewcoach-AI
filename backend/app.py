@@ -10,6 +10,7 @@ import base64
 import io
 import secrets
 import uuid
+import threading
 from urllib.parse import urlencode
 
 import soundfile as sf
@@ -333,12 +334,24 @@ class EyeContactDetector_Callib:
         return {"looking": bool(looking)}
 
 
-try:
-    detector = EyeContactDetector_Callib()
-    print("[INFO] Head tracking initialized")
-except Exception as e:
-    print(f"[ERROR] Head tracking failed: {e}")
-    detector = None
+detector = None
+detector_lock = threading.Lock()
+
+
+def get_head_tracking_detector():
+    global detector
+    if detector is not None:
+        return detector
+    with detector_lock:
+        if detector is not None:
+            return detector
+        try:
+            detector = EyeContactDetector_Callib()
+            print("[INFO] Head tracking initialized")
+        except Exception as e:
+            print(f"[ERROR] Head tracking failed: {e}")
+            detector = None
+    return detector
 
 
 def decode_image(img_data):
@@ -452,6 +465,23 @@ def process_audio_file(file):
                     os.remove(p)
                 except Exception:
                     pass
+
+
+def schedule_background_ai_warmup():
+    if os.getenv("ENABLE_AI_WARMUP", "true").lower() in {"0", "false", "no"}:
+        return
+
+    def _warmup():
+        try:
+            initialize_whisper()
+        except Exception as exc:
+            print(f"[WARN] Whisper warmup skipped: {exc}")
+        try:
+            get_head_tracking_detector()
+        except Exception as exc:
+            print(f"[WARN] Head tracking warmup skipped: {exc}")
+
+    threading.Thread(target=_warmup, name="ai-warmup", daemon=True).start()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEALTH
@@ -1595,10 +1625,11 @@ def handle_frame(data):
         if frame is None:
             emit("response", {"error": "Invalid image"})
             return
-        if detector is None:
+        detector_instance = get_head_tracking_detector()
+        if detector_instance is None:
             emit("response", {"error": "Detector unavailable"})
             return
-        result = detector.process(frame, is_calibrating=calibrate)
+        result = detector_instance.process(frame, is_calibrating=calibrate)
         emit("response", result)
     except Exception as e:
         emit("response", {"error": str(e)})
@@ -1606,7 +1637,11 @@ def handle_frame(data):
 @socketio.on('reset_calibration')
 def handle_reset_calibration():
     try:
-        detector.reset_calibration()
+        detector_instance = get_head_tracking_detector()
+        if detector_instance is None:
+            emit("response", {"error": "Detector unavailable"})
+            return
+        detector_instance.reset_calibration()
         emit("response", {"calibration_reset": True})
     except Exception as e:
         emit("response", {"error": str(e)})
@@ -2201,8 +2236,8 @@ def legacy_support_bot_data():
 #  STARTUP
 # ─────────────────────────────────────────────────────────────────────────────
 
-print("[INFO] Initializing Whisper model...")
-initialize_whisper()
+print("[INFO] Scheduling AI warmup...")
+schedule_background_ai_warmup()
 print("[INFO] Backend ready")
 
 if __name__ == '__main__':

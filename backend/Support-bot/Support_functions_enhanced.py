@@ -2,9 +2,15 @@ import requests
 import json
 import os
 from collections import defaultdict
-from sentence_transformers import SentenceTransformer
-import faiss
 import numpy as np
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception as sentence_transformer_import_error:
+    SentenceTransformer = None
+try:
+    import faiss
+except Exception as faiss_import_error:
+    faiss = None
 try:
     import ollama
 except Exception as ollama_import_error:
@@ -20,14 +26,30 @@ BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://127.0.0.1:5000")
 # -------------------------------
 # Embedding Model + FAISS Globals
 # -------------------------------
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+embedding_model = None
 faq_index = None
 faq_titles = []
 faq_contents = []
+faq_cache_key = None
 
 
 def ollama_available():
     return ollama is not None
+
+
+def retrieval_available():
+    return SentenceTransformer is not None and faiss is not None
+
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        if SentenceTransformer is None:
+            raise RuntimeError(
+                f"sentence-transformers is unavailable: {sentence_transformer_import_error}"
+            )
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return embedding_model
 
 # -------------------------------
 # FAQ Parsing (unchanged)
@@ -52,12 +74,23 @@ def load_faq_sections(faq_path="support_bot.md"):
 # -------------------------------
 def build_faq_index(faq_sections):
     """Build FAISS index from FAQ sections."""
-    global faq_index, faq_titles, faq_contents
+    global faq_index, faq_titles, faq_contents, faq_cache_key
+    if not retrieval_available():
+        faq_index = None
+        faq_titles = list(faq_sections.keys())
+        faq_contents = list(faq_sections.values())
+        faq_cache_key = tuple(faq_titles)
+        return
+
+    cache_key = tuple(faq_sections.keys())
+    if faq_index is not None and faq_cache_key == cache_key:
+        return
 
     faq_titles = list(faq_sections.keys())
     faq_contents = list(faq_sections.values())
+    faq_cache_key = cache_key
 
-    corpus_embeddings = embedding_model.encode(
+    corpus_embeddings = get_embedding_model().encode(
         [title + " " + content for title, content in faq_sections.items()],
         convert_to_numpy=True,
         normalize_embeddings=True
@@ -73,9 +106,18 @@ def build_faq_index(faq_sections):
 def find_relevant_sections(query, top_k=2):
     """Retrieve most relevant FAQ sections using embeddings + FAISS."""
     if faq_index is None:
-        raise ValueError("FAQ index not built. Call build_faq_index first.")
+        if not faq_titles or not faq_contents:
+            raise ValueError("FAQ index not built. Call build_faq_index first.")
+        query_lower = query.lower()
+        scored = []
+        for title, content in zip(faq_titles, faq_contents):
+            haystack = f"{title}\n{content}".lower()
+            score = sum(1 for token in query_lower.split() if token and token in haystack)
+            scored.append((score, title, content))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [(title, content) for _, title, content in scored[:top_k] if title]
 
-    query_embedding = embedding_model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
+    query_embedding = get_embedding_model().encode([query], convert_to_numpy=True, normalize_embeddings=True)
     distances, indices = faq_index.search(query_embedding, top_k)
 
     results = []
