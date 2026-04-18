@@ -163,6 +163,20 @@ jobs:
               echo "    root /var/www/interview;"
               echo "    index index.html;"
               echo
+              echo '    location = /.env { return 404; }'
+              echo '    location ^~ /.git/ { return 404; }'
+              echo '    location ^~ /.svn/ { return 404; }'
+              echo '    location ^~ /.hg/ { return 404; }'
+              echo '    location ^~ /vendor/ { return 404; }'
+              echo '    location ^~ /cgi-bin/ { return 404; }'
+              echo '    location ^~ /wp-admin/ { return 404; }'
+              echo '    location ^~ /wp-content/ { return 404; }'
+              echo '    location ^~ /wp-includes/ { return 404; }'
+              echo '    location ^~ /phpunit/ { return 404; }'
+              echo '    location ^~ /phpMyAdmin/ { return 404; }'
+              echo '    location ^~ /.well-known/pki-validation/ { return 404; }'
+              echo '    location ~* \\.(php|asp|aspx|jsp|cgi|pl|sh)$ { return 404; }'
+              echo
               echo "    location / {"
               echo '        try_files $uri $uri/ /index.html;'
               echo "    }"
@@ -214,6 +228,20 @@ jobs:
               echo
               echo "    root /var/www/interview;"
               echo "    index index.html;"
+              echo
+              echo '    location = /.env { return 404; }'
+              echo '    location ^~ /.git/ { return 404; }'
+              echo '    location ^~ /.svn/ { return 404; }'
+              echo '    location ^~ /.hg/ { return 404; }'
+              echo '    location ^~ /vendor/ { return 404; }'
+              echo '    location ^~ /cgi-bin/ { return 404; }'
+              echo '    location ^~ /wp-admin/ { return 404; }'
+              echo '    location ^~ /wp-content/ { return 404; }'
+              echo '    location ^~ /wp-includes/ { return 404; }'
+              echo '    location ^~ /phpunit/ { return 404; }'
+              echo '    location ^~ /phpMyAdmin/ { return 404; }'
+              echo '    location ^~ /.well-known/pki-validation/ { return 404; }'
+              echo '    location ~* \\.(php|asp|aspx|jsp|cgi|pl|sh)$ { return 404; }'
               echo
               echo "    location / {"
               echo '        try_files $uri $uri/ /index.html;'
