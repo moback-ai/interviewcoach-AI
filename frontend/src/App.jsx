@@ -1,9 +1,5 @@
-import { Routes, Route, useLocation } from 'react-router-dom';
-import { lazy, Suspense, useEffect } from 'react';
-import ProtectedRoute from './components/ProtectedRoute';
-import IdleTimeoutModal from './components/IdleTimeoutModal';
-import { useAuth } from './contexts/AuthContext';
-import { useIdleTimeout } from './hooks/useIdleTimeout';
+import { Routes, Route } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
 import './index.css';
 
 // Lazy load heavy pages
@@ -14,6 +10,7 @@ const ForgotPassword      = lazy(() => import('./pages/ForgotPassword'));
 const ForgotUsername      = lazy(() => import('./pages/ForgotUsername'));
 const ResetPassword       = lazy(() => import('./pages/ResetPassword'));
 const VerifyEmail         = lazy(() => import('./pages/VerifyEmail'));
+const AuthenticatedShell  = lazy(() => import('./components/AuthenticatedShell'));
 const UploadPage          = lazy(() => import('./pages/UploadPage'));
 const ProfilePage         = lazy(() => import('./pages/ProfilePage'));
 const DashboardPage       = lazy(() => import('./pages/DashboardPage'));
@@ -23,7 +20,6 @@ const InterviewFeedbackPage = lazy(() => import('./pages/InterviewFeedbackPage')
 const PaymentSuccessPage  = lazy(() => import('./pages/PaymentSuccess'));
 const FAQPage             = lazy(() => import('./pages/FAQPage'));
 const AdminLogsPage       = lazy(() => import('./pages/AdminLogsPage'));
-const SupportBot          = lazy(() => import('./components/SupportBot'));
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center min-h-screen">
@@ -32,38 +28,6 @@ const LoadingSpinner = () => (
 );
 
 function App() {
-  const { logout, isAuthenticated } = useAuth();
-  const location = useLocation();
-  const isOnInterviewPage = location.pathname === '/interview';
-
-  const { showWarning, timeRemaining, resetTimer } = useIdleTimeout(
-    isOnInterviewPage ? null : 1440,
-    30
-  );
-
-  const handleIdleLogout = () => {
-    logout();
-  };
-
-  useEffect(() => {
-    const prefetch = () => {
-      import('./pages/UploadPage');
-      import('./pages/DashboardPage');
-      import('./pages/QuestionPage');
-      import('./pages/InterviewPage');
-      import('./components/SupportBot');
-    };
-
-    if (isAuthenticated) {
-      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-        const callbackId = window.requestIdleCallback(prefetch, { timeout: 1500 });
-        return () => window.cancelIdleCallback?.(callbackId);
-      }
-      const timeoutId = window.setTimeout(prefetch, 750);
-      return () => window.clearTimeout(timeoutId);
-    }
-  }, [isAuthenticated]);
-
   return (
     <>
       <Suspense fallback={<LoadingSpinner />}>
@@ -79,32 +43,19 @@ function App() {
           <Route path="/faq"           element={<FAQPage />} />
 
           {/* Protected routes */}
-          <Route path="/upload"        element={<ProtectedRoute><UploadPage /></ProtectedRoute>} />
-          <Route path="/profile"       element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-          <Route path="/dashboard"     element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-          <Route path="/questions"     element={<ProtectedRoute><QuestionsPage /></ProtectedRoute>} />
-          <Route path="/payment-status" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
-          <Route path="/interview"     element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
-          <Route path="/interview-feedback" element={<ProtectedRoute><InterviewFeedbackPage /></ProtectedRoute>} />
-          <Route path="/admin/logs"    element={<ProtectedRoute><AdminLogsPage /></ProtectedRoute>} />
-          <Route path="/admin/logs."   element={<ProtectedRoute><AdminLogsPage /></ProtectedRoute>} />
+          <Route element={<AuthenticatedShell />}>
+            <Route path="/upload"        element={<UploadPage />} />
+            <Route path="/profile"       element={<ProfilePage />} />
+            <Route path="/dashboard"     element={<DashboardPage />} />
+            <Route path="/questions"     element={<QuestionsPage />} />
+            <Route path="/payment-status" element={<PaymentSuccessPage />} />
+            <Route path="/interview"     element={<InterviewPage />} />
+            <Route path="/interview-feedback" element={<InterviewFeedbackPage />} />
+            <Route path="/admin/logs"    element={<AdminLogsPage />} />
+            <Route path="/admin/logs."   element={<AdminLogsPage />} />
+          </Route>
         </Routes>
       </Suspense>
-
-      {isAuthenticated && !isOnInterviewPage && (
-        <Suspense fallback={null}>
-          <SupportBot />
-        </Suspense>
-      )}
-
-      {!isOnInterviewPage && (
-        <IdleTimeoutModal
-          isOpen={showWarning}
-          timeRemaining={timeRemaining}
-          onStayLoggedIn={resetTimer}
-          onLogout={handleIdleLogout}
-        />
-      )}
     </>
   );
 }
