@@ -10,6 +10,9 @@ import './index.css';
 const Landing             = lazy(() => import('./pages/Landing'));
 const Signup              = lazy(() => import('./pages/SignUp'));
 const Login               = lazy(() => import('./pages/Login'));
+const ForgotPassword      = lazy(() => import('./pages/ForgotPassword'));
+const ForgotUsername      = lazy(() => import('./pages/ForgotUsername'));
+const ResetPassword       = lazy(() => import('./pages/ResetPassword'));
 const VerifyEmail         = lazy(() => import('./pages/VerifyEmail'));
 const UploadPage          = lazy(() => import('./pages/UploadPage'));
 const ProfilePage         = lazy(() => import('./pages/ProfilePage'));
@@ -69,6 +72,9 @@ function App() {
           <Route path="/"              element={<Landing />} />
           <Route path="/signup"        element={<Signup />} />
           <Route path="/login"         element={<Login />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/forgot-username" element={<ForgotUsername />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/verify-email"  element={<VerifyEmail />} />
           <Route path="/faq"           element={<FAQPage />} />
 
