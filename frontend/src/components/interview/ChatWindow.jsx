@@ -108,7 +108,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         return;
       }
       
-      const response = await apiPost('/api/generate-response', {
+      const response = await apiPost('/generate-response', {
         message: userInput,
         interview_id: interviewId // ✅ Send interview_id to backend
       });
@@ -341,7 +341,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         }
         
         // ✅ Use the same apiPost function that works for normal responses
-        const response = await apiPost('/api/generate-response', {
+        const response = await apiPost('/generate-response', {
           message: 'END_INTERVIEW',
           interview_id: interviewId
         });
@@ -1011,7 +1011,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       }
       
       // ✅ Use the same apiPost function that works for normal responses
-      const response = await apiPost('/api/generate-response', {
+      const response = await apiPost('/generate-response', {
         message: 'END_INTERVIEW',
         interview_id: interviewId
       });
