@@ -278,14 +278,19 @@ jobs:
           ${{ secrets.EC2_SSH_KEY }}
           KEYEOF
           chmod 600 "$BACKEND_TUNNEL_KEY"
-          pkill -f "127.0.0.1:5001:127.0.0.1:5000" || true
-          nohup ssh -N -L 127.0.0.1:5001:127.0.0.1:5000 \
+          EXISTING_TUNNEL_PID="$(ss -ltnp 2>/dev/null | awk '/127.0.0.1:5001/ && /ssh/ { if (match($0, /pid=([0-9]+)/, pid)) print pid[1] }' | head -n 1)"
+          if [ -n "$EXISTING_TUNNEL_PID" ]; then
+            kill "$EXISTING_TUNNEL_PID" || true
+            sleep 1
+          fi
+          ssh -f -N -L 127.0.0.1:5001:127.0.0.1:5000 \
             -i "$BACKEND_TUNNEL_KEY" \
+            -o ExitOnForwardFailure=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=3 \
-            ${{ secrets.EC2_USER }}@"$BACKEND_HOST" >/tmp/backend-tunnel.log 2>&1 &
+            ${{ secrets.EC2_USER }}@"$BACKEND_HOST"
           for i in $(seq 1 10); do
             if curl -fsS --max-time 5 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
               break
