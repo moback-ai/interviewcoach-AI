@@ -360,7 +360,19 @@ jobs:
               echo '    location ^~ /.well-known/pki-validation/ { return 404; }'
               echo '    location ~* \\.(php|asp|aspx|jsp|cgi|pl|sh)$ { return 404; }'
               echo
+              echo "    location = /index.html {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
+              echo '        try_files $uri =404;'
+              echo "    }"
+              echo
+              echo "    location ~* \\.(js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$ {"
+              echo '        try_files $uri =404;'
+              echo '        expires 1y;'
+              echo '        add_header Cache-Control "public, immutable" always;'
+              echo "    }"
+              echo
               echo "    location / {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
               echo '        try_files $uri $uri/ /index.html;'
               echo "    }"
               echo
@@ -426,7 +438,19 @@ jobs:
               echo '    location ^~ /.well-known/pki-validation/ { return 404; }'
               echo '    location ~* \\.(php|asp|aspx|jsp|cgi|pl|sh)$ { return 404; }'
               echo
+              echo "    location = /index.html {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
+              echo '        try_files $uri =404;'
+              echo "    }"
+              echo
+              echo "    location ~* \\.(js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$ {"
+              echo '        try_files $uri =404;'
+              echo '        expires 1y;'
+              echo '        add_header Cache-Control "public, immutable" always;'
+              echo "    }"
+              echo
               echo "    location / {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
               echo '        try_files $uri $uri/ /index.html;'
               echo "    }"
               echo
