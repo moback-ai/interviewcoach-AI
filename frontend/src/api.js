@@ -1,4 +1,4 @@
-import { getAccessToken } from './lib/authClient';
+import { getAccessToken, setAccessToken } from './lib/authClient';
 import { getApiBaseUrl } from './utils/apiConfig';
 
 const API_BASE = getApiBaseUrl();
@@ -31,6 +31,29 @@ export async function apiCall(endpoint, options = {}) {
       config.body = JSON.stringify(options.body);
     }
     const response = await fetch(buildUrl(endpoint), config);
+
+    // Auto-refresh token on 401
+    if (response.status === 401 && !options._retried) {
+      try {
+        const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
+          method: 'POST',
+          headers: getHeaders(),
+        });
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          if (refreshData.token) {
+            setAccessToken(refreshData.token);
+            return apiCall(endpoint, { ...options, _retried: true });
+          }
+        }
+      } catch {}
+      // Refresh failed — let original 401 bubble up
+    }
+
+    if (response.status === 429) {
+      throw new Error('Too many requests. Please wait a moment and try again.');
+    }
+
     if (!response.ok) {
       let msg = `HTTP ${response.status}`;
       try { const e = await response.json(); msg = e.error || e.message || msg; } catch {}
@@ -52,3 +75,19 @@ export const apiDelete = (ep, opts = {})       => apiCall(ep, { method: 'DELETE'
 export async function uploadFile(endpoint, formData, opts = {}) {
   return apiCall(endpoint, { method: 'POST', body: formData, ...opts });
 }
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+export const forgotPassword = (email) =>
+  apiPost('/api/forgot-password', { email });
+
+export const resetPassword = (token, password) =>
+  apiPost('/api/reset-password', { token, password });
+
+export const deleteAccount = (password) =>
+  apiCall('/api/me', { method: 'DELETE', body: { password } });
+
+export const getInterviewHistory = (page = 1, limit = 10) =>
+  apiGet(`/api/interview-history?page=${page}&limit=${limit}`);
+
+export const getDashboard = (page = 1, limit = 20) =>
+  apiGet(`/api/dashboard?page=${page}&limit=${limit}`);
