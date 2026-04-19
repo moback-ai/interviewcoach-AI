@@ -2890,6 +2890,48 @@ def forgot_password():
     return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
 
 
+@app.route('/api/forgot-username', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=3, window_seconds=300)
+def forgot_username():
+    """Send or return a username reminder for an email address."""
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    generic_message = 'If an account exists, the username reminder has been sent.'
+    if not email:
+        return jsonify({'message': generic_message}), 200
+    user = query_one(
+        'SELECT id, email, username, full_name FROM users WHERE lower(email)=%s', (email,)
+    )
+    if not user:
+        return jsonify({'message': generic_message}), 200
+    try:
+        text_body = (
+            f"Hi {user.get('full_name') or 'there'},\n\n"
+            f"Your InterviewCoach username is: {user['username']}\n\n"
+            f"You can now sign in using either your email or username."
+        )
+        html_body = (
+            f"<p>Hi {user.get('full_name') or 'there'},</p>"
+            f"<p>Your InterviewCoach username is: <strong>{user['username']}</strong></p>"
+            f"<p>You can now sign in using either your email or username.</p>"
+        )
+        if smtp_is_configured():
+            send_email('Your InterviewCoach username', user['email'], text_body, html_body)
+            return jsonify({'message': generic_message, 'delivery': 'email'}), 200
+
+        print(f"[WARN] SMTP not configured. Username reminder for {user['email']}: {user['username']}")
+        return jsonify({
+            'message': generic_message,
+            'delivery': 'manual',
+            'username': user['username'],
+        }), 200
+    except Exception as e:
+        print(f"[ERROR] forgot_username: {e}")
+        return jsonify({'message': generic_message}), 200
+
+
 @app.route('/api/reset-password', methods=['POST', 'OPTIONS'])
 @rate_limit(max_calls=5, window_seconds=300)
 def reset_password():

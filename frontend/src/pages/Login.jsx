@@ -144,6 +144,14 @@ function Login() {
                   {passwordVisible ? <FiEyeOff /> : <FiEye />}
                 </button>
               </div>
+              <div className="mt-2 flex items-center justify-between text-sm">
+                <Link to="/forgot-password" className="text-[var(--color-primary)] hover:underline">
+                  Forgot password?
+                </Link>
+                <Link to="/forgot-username" className="text-[var(--color-primary)] hover:underline">
+                  Forgot username?
+                </Link>
+              </div>
             </div>
 
             <button

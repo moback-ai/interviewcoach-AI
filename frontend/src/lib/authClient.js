@@ -178,6 +178,16 @@ export const forgotPassword = async (email) => {
   return data;
 };
 
+export const forgotUsername = async (email) => {
+  const response = await fetch(`${API_BASE}/forgot-username`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.toLowerCase().trim() }),
+  });
+  const data = await response.json().catch(() => ({}));
+  return data;
+};
+
 export const resetPassword = async (token, password) => {
   const response = await fetch(`${API_BASE}/reset-password`, {
     method: 'POST',
