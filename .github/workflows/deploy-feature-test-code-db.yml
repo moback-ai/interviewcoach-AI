@@ -1,5 +1,8 @@
 name: Deploy Feature Branch
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches:
@@ -192,17 +195,27 @@ jobs:
           fi
           EOFSSH
 
-      - name: Install PostgreSQL client
+      - name: Sync database source
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.database == 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
+          DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
+          rsync -avz --delete \
+            -e "ssh $SSH_OPTS" \
+            database/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
 
       - name: Apply database schema
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.database == 'true'
-        env:
-          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
         run: |
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          set -e
+          DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
+          export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
           BACKUP_FILE="/tmp/interviewcoach-db-${{ github.sha }}.dump"
           pg_dump \
             --host="${{ secrets.DB_HOST }}" \
@@ -232,8 +245,9 @@ jobs:
             --dbname="${{ secrets.DB_NAME }}" \
             --set=ON_ERROR_STOP=1 \
             --single-transaction \
-            --file=database/schema.sql
+            --file="$DATABASE_RELEASE/schema.sql"
           rm -f "$BACKUP_FILE"
+          EOFSSH
 
       - name: Upload frontend build
         if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
