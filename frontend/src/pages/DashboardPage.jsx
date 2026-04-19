@@ -78,7 +78,6 @@ function DashboardPage() {
       }
 
       const result = await response.json();
-      console.log('Dashboard data:', result);
       setResumeJobPairings(result.data || []);
 
     } catch (error) {
@@ -90,15 +89,12 @@ function DashboardPage() {
   };
 
   const handleSelectPairing = (pairingId) => {
-    console.log('Toggling pairing:', pairingId);
     setSelectedPairings(prev => {
       const newSet = new Set(prev);
       if (newSet.has(pairingId)) {
         newSet.delete(pairingId);
-        console.log('Removed pairing:', pairingId, 'New set:', Array.from(newSet));
       } else {
         newSet.add(pairingId);
-        console.log('Added pairing:', pairingId, 'New set:', Array.from(newSet));
       }
       return newSet;
     });
@@ -127,14 +123,12 @@ function DashboardPage() {
   };
 
   const handleViewQuestions = (questionSetId, pairing) => {
-    console.log('View questions for question set:', questionSetId);
     // Navigate to questions page with resume_id and jd_id
     const url = `/questions?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}&question_set=${questionSetId.split('-').pop()}`;
     window.location.href = url;
   };
 
   const handleViewSummary = (questionSetId, pairing) => {
-    console.log('View summary for question set:', questionSetId);
     // TODO: Navigate to interview summary page
     alert('Interview summary feature coming soon!');
   };
@@ -273,7 +267,6 @@ function DashboardPage() {
   };
 
   const handleScheduleInterview = (pairingId) => {
-    console.log('Schedule interview for pairing:', pairingId);
     // TODO: Navigate to interview scheduling page
     alert('Interview scheduling feature coming soon!');
   };
@@ -294,8 +287,6 @@ function DashboardPage() {
         throw new Error('Resume URL missing');
       }
 
-      console.log('Downloading resume from URL:', pairing.resumeUrl);
-      
       const session = await getSession();
       const response = await fetch(pairing.resumeUrl, {
         headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
@@ -337,7 +328,6 @@ function DashboardPage() {
   // Retake requests are now handled directly in InterviewHistoryCard
   // This function is kept for future use if needed
   const handleRetakeRequest = (retakeInterview) => {
-    console.log('Retake interview created:', retakeInterview);
     // Refresh the dashboard to show the new interview
     fetchDashboardData();
   };
@@ -416,21 +406,11 @@ function DashboardPage() {
       const existingQuestionSets = questionsForThisCombination.map(q => q.question_set).filter(set => set !== null && set !== undefined);
       
       if (existingQuestionSets.length === 0) {
-        console.log('[DEBUG] No existing question sets found for this resume_id + jd_id combination, starting with set 1');
         var nextQuestionSet = 1;
       } else {
         const maxSet = Math.max(...existingQuestionSets);
         nextQuestionSet = maxSet + 1;
-        console.log('[DEBUG] Found existing sets for this combination, max is', maxSet, 'next will be', nextQuestionSet);
       }
-      
-      console.log('[DEBUG] Current question sets for resume_id', resumeId, 'and jd_id', jdId, ':', existingQuestionSets);
-      console.log('[DEBUG] Next question set will be:', nextQuestionSet);
-      console.log('[DEBUG] Total questions found for this combination:', questionsForThisCombination.length);
-      console.log('[DEBUG] Questions by set for this combination:', existingQuestionSets.reduce((acc, set) => {
-        acc[set] = (acc[set] || 0) + 1;
-        return acc;
-      }, {}));
       
       // Now save the new questions with the incremented question set number
       const response = await fetch(`${backendOrigin}/functions/v1/questions`, {
