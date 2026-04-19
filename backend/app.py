@@ -22,7 +22,7 @@ except Exception as mediapipe_import_error:
     mp = None
     print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
 
-from flask import Flask, request, jsonify, send_from_directory, abort
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
@@ -212,6 +212,294 @@ def get_user_for_auth(identifier: str):
 
 
 ensure_auth_schema()
+
+PUBLIC_DOC_ENDPOINTS = {
+    "/api/health",
+    "/api/signup",
+    "/api/login",
+    "/api/check-email",
+    "/api/check-username",
+    "/api/resend-verification",
+    "/api/verify-email",
+    "/api/docs",
+    "/api/openapi.json",
+    "/storage/{relative_path}",
+}
+
+API_DOC_OVERRIDES = {
+    "/api/health": {
+        "get": {
+            "summary": "Health check",
+            "description": "Returns backend health for uptime checks and deployment validation.",
+        }
+    },
+    "/api/signup": {
+        "post": {
+            "summary": "Create account",
+            "description": "Registers a new user with username, email, full name, and password.",
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["username", "email", "full_name", "password"],
+                            "properties": {
+                                "username": {"type": "string", "example": "govardhan"},
+                                "email": {"type": "string", "format": "email"},
+                                "full_name": {"type": "string", "example": "Govardhan Reddy"},
+                                "password": {"type": "string", "format": "password"},
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    },
+    "/api/login": {
+        "post": {
+            "summary": "Login",
+            "description": "Signs in with email or username and returns the auth token and user profile.",
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["identifier", "password"],
+                            "properties": {
+                                "identifier": {"type": "string", "example": "govardhan"},
+                                "password": {"type": "string", "format": "password"},
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    },
+    "/api/me": {
+        "get": {
+            "summary": "Current user profile",
+            "description": "Returns the currently authenticated user.",
+        },
+        "put": {
+            "summary": "Update current user",
+            "description": "Updates the current user's profile fields.",
+        },
+    },
+    "/api/dashboard": {
+        "get": {
+            "summary": "Dashboard data",
+            "description": "Returns resume and job-description pairings, interviews, and summary information for the signed-in user.",
+        }
+    },
+    "/api/upload-resume": {
+        "post": {
+            "summary": "Upload resume",
+            "description": "Uploads a resume file and stores it for later question generation and interviews.",
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "multipart/form-data": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["file"],
+                            "properties": {
+                                "file": {"type": "string", "format": "binary"},
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    },
+    "/api/parse-job-description": {
+        "post": {
+            "summary": "Parse job description",
+            "description": "Extracts structured job-description content from uploaded files.",
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "multipart/form-data": {
+                        "schema": {
+                            "type": "object",
+                            "required": ["file"],
+                            "properties": {
+                                "file": {"type": "string", "format": "binary"},
+                            },
+                        }
+                    }
+                },
+            },
+        }
+    },
+    "/api/generate-questions": {
+        "post": {
+            "summary": "Generate interview questions",
+            "description": "Generates interview questions for a resume and job-description combination.",
+        }
+    },
+    "/api/transcribe-audio": {
+        "post": {
+            "summary": "Transcribe audio",
+            "description": "Transcribes interview audio uploads.",
+        }
+    },
+    "/api/generate-response": {
+        "post": {
+            "summary": "Generate AI response",
+            "description": "Generates an AI interview/chat response based on the current conversation context.",
+        }
+    },
+    "/api/create-payment": {
+        "post": {
+            "summary": "Create payment",
+            "description": "Creates a payment session or payment link for an interview flow.",
+        }
+    },
+    "/functions/v1/dashboard": {
+        "get": {
+            "summary": "Dashboard data (frontend alias)",
+            "description": "Alias route used by the frontend for dashboard data.",
+        }
+    },
+    "/functions/v1/create-payment": {
+        "post": {
+            "summary": "Create payment (frontend alias)",
+            "description": "Alias route used by the frontend payment flow.",
+        }
+    },
+    "/storage/{relative_path}": {
+        "get": {
+            "summary": "Download stored file",
+            "description": "Serves files from the configured storage path.",
+            "parameters": [
+                {
+                    "name": "relative_path",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }
+            ],
+        }
+    },
+}
+
+
+def _rule_to_openapi_path(rule: str) -> str:
+    return rule.replace("<", "{").replace(">", "}")
+
+
+def _humanize_endpoint_name(endpoint_name: str) -> str:
+    return endpoint_name.replace("_", " ").replace("-", " ").strip().title()
+
+
+def _default_operation_for_rule(rule, method: str):
+    openapi_path = _rule_to_openapi_path(rule.rule)
+    operation = {
+        "tags": [openapi_path.split("/")[1] if openapi_path.count("/") > 1 else "api"],
+        "summary": f"{method.title()} {_humanize_endpoint_name(rule.endpoint)}",
+        "responses": {
+            "200": {"description": "Successful response"},
+            "400": {"description": "Bad request"},
+            "401": {"description": "Unauthorized"},
+            "500": {"description": "Server error"},
+        },
+    }
+    if method in {"post", "put", "patch"}:
+        operation["requestBody"] = {
+            "required": False,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    }
+                }
+            },
+        }
+    if openapi_path not in PUBLIC_DOC_ENDPOINTS:
+        operation["security"] = [{"bearerAuth": []}]
+    return operation
+
+
+def build_openapi_spec():
+    paths = {}
+    for rule in sorted(app.url_map.iter_rules(), key=lambda item: item.rule):
+        if rule.endpoint == "static" or rule.rule.startswith("/socket.io"):
+            continue
+        openapi_path = _rule_to_openapi_path(rule.rule)
+        path_item = paths.setdefault(openapi_path, {})
+        method_overrides = API_DOC_OVERRIDES.get(openapi_path, {})
+        for method in sorted(rule.methods):
+            normalized_method = method.lower()
+            if normalized_method in {"head", "options"}:
+                continue
+            operation = _default_operation_for_rule(rule, normalized_method)
+            override = method_overrides.get(normalized_method)
+            if override:
+                operation.update(override)
+            path_item[normalized_method] = operation
+
+    current_origin = request.host_url.rstrip("/")
+    return {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "InterviewCoach API",
+            "version": "2.0.0",
+            "description": "OpenAPI documentation for the InterviewCoach backend and frontend alias routes.",
+        },
+        "servers": [{"url": current_origin}],
+        "components": {
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT",
+                }
+            }
+        },
+        "paths": paths,
+    }
+
+
+@app.route('/api/openapi.json', methods=['GET'])
+def openapi_json():
+    return jsonify(build_openapi_spec())
+
+
+@app.route('/api/docs', methods=['GET'])
+def swagger_ui():
+    html = """
+    <!doctype html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>InterviewCoach API Docs</title>
+        <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+        <style>
+          body { margin: 0; background: #10141c; }
+          #swagger-ui { max-width: 1200px; margin: 0 auto; }
+        </style>
+      </head>
+      <body>
+        <div id="swagger-ui"></div>
+        <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+        <script>
+          window.ui = SwaggerUIBundle({
+            url: "/api/openapi.json",
+            dom_id: "#swagger-ui",
+            deepLinking: true,
+            persistAuthorization: true,
+            displayRequestDuration: true,
+            tryItOutEnabled: true
+          });
+        </script>
+      </body>
+    </html>
+    """
+    return render_template_string(html)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
