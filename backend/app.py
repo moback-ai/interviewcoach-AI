@@ -22,7 +22,7 @@ except Exception as mediapipe_import_error:
     mp = None
     print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory, abort
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
@@ -1675,6 +1675,18 @@ def _normalize_list(value):
         except Exception:
             return [value]
     return [value]
+
+
+@app.route('/storage/<path:relative_path>', methods=['GET'])
+def serve_storage_file(relative_path):
+    storage_root = os.getenv("STORAGE_PATH", "/apps/storage")
+    safe_root = os.path.abspath(storage_root)
+    file_path = os.path.abspath(os.path.join(safe_root, relative_path))
+    if not file_path.startswith(f"{safe_root}{os.sep}"):
+        abort(404)
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+        abort(404)
+    return send_from_directory(safe_root, relative_path, as_attachment=False)
 
 
 def _pairing_key(resume_id, jd_id):
