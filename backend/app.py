@@ -1148,6 +1148,17 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
         "questions_count": len(questions),
     }
 
+
+def ollama_ready(timeout_seconds=2):
+    try:
+        response = http_requests.get(
+            os.getenv("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags"),
+            timeout=timeout_seconds,
+        )
+        return response.ok
+    except Exception:
+        return False
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUTH  (replaces the legacy hosted auth layer)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1661,6 +1672,8 @@ def generate_questions():
         try:
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             try:
+                if not ollama_ready():
+                    raise RuntimeError("Ollama is unavailable")
                 from INTERVIEW.Resumeparser import run_pipeline_from_api
                 result = run_pipeline_from_api(
                     resume_path=temp_resume,
@@ -1673,7 +1686,8 @@ def generate_questions():
                     jd_pct=data.get('jd_pct', 50),
                     blend=data.get('blend', False),
                     blend_pct_resume=data.get('blend_pct_resume', 50),
-                    blend_pct_jd=data.get('blend_pct_jd', 50)
+                    blend_pct_jd=data.get('blend_pct_jd', 50),
+                    max_retries=1,
                 )
             except Exception as pipeline_error:
                 print(f"[WARN] Falling back to local question generator: {pipeline_error}")
