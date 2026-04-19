@@ -22,15 +22,6 @@ export default defineConfig(({ mode }) => {
       esbuild: {
         drop: ['console', 'debugger'],
       },
-      rollupOptions: {
-        output: {
-          manualChunks: {
-            'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-            'ui-vendor': ['framer-motion', 'recharts', 'lucide-react'],
-            'utils-vendor': ['jspdf', 'jspdf-autotable', 'prismjs'],
-          },
-        },
-      },
       chunkSizeWarningLimit: 1000,
       sourcemap: false,
     },
