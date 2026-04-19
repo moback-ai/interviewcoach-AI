@@ -359,7 +359,7 @@ function DashboardPage() {
   // Helper function to call backend API for question generation
   const generateQuestionsFromBackend = async (pairing, questionSettings = {}) => {
     try {
-      const response = await apiPost('/api/generate-questions', {
+      const response = await apiPost('/generate-questions', {
         resume_url: pairing.resumeUrl,
         job_title: pairing.jobTitle,
         job_description: pairing.jobDescription,
