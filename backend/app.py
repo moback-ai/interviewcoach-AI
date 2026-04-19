@@ -1641,6 +1641,7 @@ def classify_technical_role():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
+@app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def generate_questions():
     if request.method == 'OPTIONS':
