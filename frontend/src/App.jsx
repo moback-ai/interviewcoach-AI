@@ -19,6 +19,7 @@ const InterviewPage       = lazy(() => import('./pages/InterviewPage'));
 const InterviewFeedbackPage = lazy(() => import('./pages/InterviewFeedbackPage'));
 const PaymentSuccessPage  = lazy(() => import('./pages/PaymentSuccess'));
 const FAQPage             = lazy(() => import('./pages/FAQPage'));
+const AdminLogsPage       = lazy(() => import('./pages/AdminLogsPage'));
 const SupportBot          = lazy(() => import('./components/SupportBot'));
 
 const LoadingSpinner = () => (
@@ -79,6 +80,7 @@ function App() {
           <Route path="/payment-status" element={<ProtectedRoute><PaymentSuccessPage /></ProtectedRoute>} />
           <Route path="/interview"     element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
           <Route path="/interview-feedback" element={<ProtectedRoute><InterviewFeedbackPage /></ProtectedRoute>} />
+          <Route path="/admin/logs"    element={<ProtectedRoute><AdminLogsPage /></ProtectedRoute>} />
         </Routes>
       </Suspense>
 

@@ -11,6 +11,8 @@ import io
 import secrets
 import uuid
 import threading
+import re
+import ipaddress
 from urllib.parse import urlencode
 
 import soundfile as sf
@@ -500,6 +502,167 @@ def swagger_ui():
     </html>
     """
     return render_template_string(html)
+
+
+DEFAULT_ADMIN_LOG_EMAILS = {
+    "govardhanr@moback.com",
+}
+DEFAULT_ADMIN_LOG_USERNAMES = {
+    "govardhan",
+}
+
+
+def _split_env_values(value: str):
+    return {item.strip().lower() for item in (value or "").split(",") if item.strip()}
+
+
+def _extract_request_ip():
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        first_ip = forwarded_for.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    return (request.headers.get("X-Real-IP") or request.remote_addr or "").strip()
+
+
+def _ip_allowlist_entries():
+    raw = os.getenv("ADMIN_LOG_IP_ALLOWLIST", "").strip()
+    if not raw:
+        return []
+    entries = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            entries.append(ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            pass
+    return entries
+
+
+def _is_allowed_ip(ip_text: str):
+    allowlist = _ip_allowlist_entries()
+    if not allowlist:
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(ip_text)
+    except ValueError:
+        return False
+    return any(ip_obj in network for network in allowlist)
+
+
+def _get_admin_user_record(user_id):
+    return query_one(
+        "SELECT id, username, email, full_name, plan FROM users WHERE id=%s",
+        (user_id,),
+    )
+
+
+def _can_view_admin_logs(user):
+    if not user:
+        return False
+    user_email = (user.get("email") or "").strip().lower()
+    user_plan = (user.get("plan") or "").strip().lower()
+    user_record = _get_admin_user_record(user.get("id"))
+    username = ((user_record or {}).get("username") or "").strip().lower()
+
+    allowed_emails = _split_env_values(os.getenv("ADMIN_LOG_VIEWER_EMAILS", "")) or DEFAULT_ADMIN_LOG_EMAILS
+    allowed_usernames = _split_env_values(os.getenv("ADMIN_LOG_VIEWER_USERNAMES", "")) or DEFAULT_ADMIN_LOG_USERNAMES
+
+    return (
+        user_plan == "admin"
+        or user_email in allowed_emails
+        or username in allowed_usernames
+    )
+
+
+def _redact_log_text(text: str):
+    redacted = text
+    redacted = re.sub(r"Bearer\s+[A-Za-z0-9\-_\.]+", "Bearer [REDACTED]", redacted)
+    redacted = re.sub(r'("?(?:password|token|secret|authorization|api[_-]?key)"?\s*[:=]\s*)"[^"]+"', r'\1"[REDACTED]"', redacted, flags=re.IGNORECASE)
+    redacted = re.sub(r"([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})", r"\1***@\2", redacted)
+    return redacted
+
+
+def _tail_text_file(path: str, line_count: int = 200):
+    if not os.path.exists(path):
+        return {"available": False, "path": path, "lines": []}
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        lines = handle.readlines()[-line_count:]
+    return {
+        "available": True,
+        "path": path,
+        "lines": [_redact_log_text(line.rstrip("\n")) for line in lines],
+    }
+
+
+def _database_log_snapshot():
+    summary = {
+        "connections": query_all(
+            """
+            SELECT state, count(*) AS total
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+            GROUP BY state
+            ORDER BY state NULLS LAST
+            """
+        ),
+        "table_counts": {
+            "users": (query_one("SELECT count(*) AS total FROM users") or {}).get("total", 0),
+            "interviews": (query_one("SELECT count(*) AS total FROM interviews") or {}).get("total", 0),
+            "payments": (query_one("SELECT count(*) AS total FROM payments") or {}).get("total", 0),
+            "questions": (query_one("SELECT count(*) AS total FROM questions") or {}).get("total", 0),
+        },
+    }
+    lines = [
+        f"users={summary['table_counts']['users']}",
+        f"interviews={summary['table_counts']['interviews']}",
+        f"payments={summary['table_counts']['payments']}",
+        f"questions={summary['table_counts']['questions']}",
+    ]
+    for row in summary["connections"]:
+        lines.append(f"connections[{row.get('state') or 'unknown'}]={row.get('total')}")
+    return {
+        "available": True,
+        "path": "database diagnostics",
+        "lines": lines,
+        "summary": summary,
+    }
+
+
+@app.route('/api/admin/logs', methods=['GET'])
+@verify_auth_token
+def admin_logs():
+    client_ip = _extract_request_ip()
+    if not _is_allowed_ip(client_ip):
+        return jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403
+    if not _can_view_admin_logs(request.user):
+        return jsonify({"error": "Admin access required"}), 403
+
+    source = (request.args.get("source") or "backend-error").strip().lower()
+    line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
+
+    sources = {
+        "backend-error": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
+        "backend-out": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
+        "database": _database_log_snapshot,
+    }
+
+    resolver = sources.get(source)
+    if not resolver:
+        return jsonify({
+            "error": "Unknown log source",
+            "available_sources": sorted(sources.keys()),
+        }), 400
+
+    payload = resolver()
+    payload.update({
+        "source": source,
+        "requested_by": request.user.get("email"),
+        "client_ip": client_ip,
+    })
+    return jsonify({"success": True, "data": payload})
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
