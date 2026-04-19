@@ -163,3 +163,41 @@ export const formatAuthError = (error) => {
 };
 
 export const isValidUsername = (username) => /^[a-zA-Z0-9._-]{3,}$/.test(username);
+
+export const setAccessToken = (token) => {
+  if (token) localStorage.setItem('ic_token', token);
+};
+
+export const forgotPassword = async (email) => {
+  const response = await fetch(`${API_BASE}/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.toLowerCase().trim() }),
+  });
+  const data = await response.json().catch(() => ({}));
+  return data;
+};
+
+export const resetPassword = async (token, password) => {
+  const response = await fetch(`${API_BASE}/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Password reset failed');
+  if (data.token) persistAuth(data.token, null);
+  return data;
+};
+
+export const deleteAccount = async (password) => {
+  const response = await fetch(`${API_BASE}/me`, {
+    method: 'DELETE',
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Account deletion failed');
+  clearStoredAuth();
+  return data;
+};

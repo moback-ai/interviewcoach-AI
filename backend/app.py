@@ -51,6 +51,8 @@ from common.auth import verify_auth_token, create_token, hash_password, check_pa
 from common.db import query_one, query_all, execute
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
+from common.rate_limit import rate_limit, user_rate_limit
+from common.session_store import load_session, save_session, delete_session, purge_old_sessions
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -74,7 +76,6 @@ except Exception as voice_import_error:
     print(f"[WARN] Voice cloning unavailable: {voice_import_error}")
 
 device = get_device()
-interview_instances = {}
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -89,7 +90,8 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+_ALLOWED_ORIGINS = [DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"]
+socketio = SocketIO(app, cors_allowed_origins=_ALLOWED_ORIGINS, async_mode="threading")
 
 
 def get_public_origin():
@@ -1151,6 +1153,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/signup', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=5, window_seconds=60)
 def signup():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1193,6 +1196,7 @@ def signup():
 
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=10, window_seconds=60)
 def login():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1535,23 +1539,36 @@ def get_chat_history(interview_id):
 @verify_auth_token
 def dashboard():
     user_id = request.user['id']
+    page  = max(1, int(request.args.get('page', 1)))
+    limit = min(50, max(1, int(request.args.get('limit', 20))))
+    offset = (page - 1) * limit
+
+    total_row = query_one("SELECT COUNT(*) AS cnt FROM interviews WHERE user_id=%s", (user_id,))
+    total_interviews = int(total_row['cnt']) if total_row else 0
+
     interviews = query_all(
         "SELECT i.*, jd.title as job_title FROM interviews i "
         "LEFT JOIN job_descriptions jd ON jd.id=i.jd_id "
-        "WHERE i.user_id=%s ORDER BY i.scheduled_at DESC",
-        (user_id,)
+        "WHERE i.user_id=%s ORDER BY i.scheduled_at DESC LIMIT %s OFFSET %s",
+        (user_id, limit, offset)
     )
-    feedbacks = query_all(
-        "SELECT f.* FROM interview_feedback f "
-        "JOIN interviews i ON i.id=f.interview_id WHERE i.user_id=%s",
-        (user_id,)
-    )
+    interview_ids = [str(r['id']) for r in interviews]
+    feedbacks = []
+    if interview_ids:
+        placeholders = ','.join(['%s'] * len(interview_ids))
+        feedbacks = query_all(
+            f"SELECT f.* FROM interview_feedback f WHERE f.interview_id IN ({placeholders})",
+            tuple(interview_ids)
+        )
     return jsonify({
         "success": True,
         "data": {
             "interviews": [dict(r) for r in interviews],
             "feedbacks": [dict(r) for r in feedbacks],
-            "total_interviews": len(interviews)
+            "total_interviews": total_interviews,
+            "page": page,
+            "limit": limit,
+            "total_pages": max(1, -(-total_interviews // limit))
         }
     })
 
@@ -1682,6 +1699,7 @@ def generate_questions():
 
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=30, window_seconds=60)
 def transcribe_audio():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1716,6 +1734,7 @@ def transcribe_audio():
 
 @app.route('/api/generate-response', methods=['POST'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def generate_response():
     try:
         data = request.get_json() or {}
@@ -1728,24 +1747,20 @@ def generate_response():
 
         auth_token = request.headers.get('Authorization', '').split(' ')[-1]
 
-        # Fetch interview data from our own API
-        resp = http_requests.get(
-            "http://127.0.0.1:5000/api/interview-data",
-            headers={"Authorization": f"Bearer {auth_token}"},
-            params={"interview_id": interview_id},
-            timeout=10
+        # Fetch interview data directly (no loopback HTTP call)
+        interview_row = query_one(
+            "SELECT i.*, jd.title, jd.description FROM interviews i "
+            "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s",
+            (interview_id,)
         )
-        if resp.status_code != 200:
-            return jsonify({"success": False, "message": "Failed to fetch interview data"}), 500
-
-        result = resp.json()
-        if not result.get('success'):
-            return jsonify({"success": False, "message": "Interview data error"}), 500
-
-        interview_data = result['data']
-        job_title = interview_data['job_description']['title']
-        job_description = interview_data['job_description']['description']
-        questions = interview_data['questions']
+        if not interview_row:
+            return jsonify({"success": False, "message": "Interview not found"}), 404
+        questions_rows = query_all(
+            "SELECT * FROM questions WHERE interview_id=%s ORDER BY created_at", (interview_id,)
+        )
+        job_title = interview_row['title'] or ''
+        job_description = interview_row['description'] or ''
+        questions = [dict(q) for q in questions_rows]
 
         seen = set()
         core_questions = []
@@ -1764,17 +1779,38 @@ def generate_response():
             "custom_questions": []
         }
 
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
-            json.dump(dynamic_config, tf)
-            config_path = tf.name
-
         user_id = request.user['id']
         instance_key = f"{interview_id}:{user_id}"
-        if instance_key not in interview_instances:
-            interview_instances[instance_key] = InterviewManager(config_path=config_path)
 
-        manager = interview_instances[instance_key]
+        # Load or create manager using DB-backed session store
+        config_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
+                json.dump(dynamic_config, tf)
+                config_path = tf.name
+
+            saved_state = load_session(instance_key)
+            manager = InterviewManager(config_path=config_path)
+            if saved_state:
+                manager.__dict__.update({
+                    k: v for k, v in saved_state.items()
+                    if not callable(v) and k not in ('model',)
+                })
+        finally:
+            if config_path and os.path.exists(config_path):
+                os.unlink(config_path)
+
         response = manager.receive_input(user_input)
+
+        # Persist updated session state
+        try:
+            serializable = {
+                k: v for k, v in manager.__dict__.items()
+                if isinstance(v, (str, int, float, bool, list, dict, type(None)))
+            }
+            save_session(instance_key, serializable)
+        except Exception as se:
+            print(f"[WARN] Session save failed: {se}")
 
         # Save to chat history
         execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
@@ -1797,46 +1833,62 @@ def generate_response():
                     audio_data = af.read()
                 storage_result = save_bytes(audio_data, folder, filename)
                 audio_url = storage_result['public_url']
-                os.unlink(temp_audio)
-
-                # Save AI response to chat history
-                execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-                        (interview_id, 'assistant', response_text))
+                if os.path.exists(temp_audio):
+                    os.unlink(temp_audio)
             except Exception as ae:
                 print(f"[WARN] Audio generation failed: {ae}")
+            finally:
+                # Always save AI response to chat history regardless of audio success
+                if response.get("message"):
+                    execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
+                            (interview_id, 'assistant', response["message"]))
 
-        # Handle interview completion
+        # Handle timeout (flag from InterviewManager)
+        if response.get("timeout_detected", False):
+            response["interview_done"] = True
+
+        # Handle interview completion - direct DB writes, no loopback HTTP
         feedback_saved = False
         if response.get("interview_done", False):
             try:
                 merged_path = _merge_interview_audio(user_id, interview_id)
                 merged_url = public_url(merged_path) if merged_path else None
 
-                transcript_resp = http_requests.post(
-                    "http://127.0.0.1:5000/api/transcripts",
-                    headers={"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"},
-                    json={
-                        "interview_id": interview_id,
-                        "full_transcript": json.dumps(manager.conversation_history),
-                        "evaluation_data": manager.final_evaluation_log
-                    }
+                # Save transcript directly
+                execute(
+                    "INSERT INTO transcripts (interview_id, full_transcript, evaluation_data) "
+                    "VALUES (%s, %s, %s) ON CONFLICT (interview_id) DO UPDATE "
+                    "SET full_transcript=EXCLUDED.full_transcript, evaluation_data=EXCLUDED.evaluation_data",
+                    (interview_id,
+                     json.dumps(manager.conversation_history),
+                     json.dumps(getattr(manager, 'final_evaluation_log', None)))
                 )
-                if transcript_resp.status_code in [200, 201]:
-                    feedback_resp = http_requests.post(
-                        "http://127.0.0.1:5000/api/interview-feedback",
-                        headers={"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"},
-                        json={
-                            "interview_id": interview_id,
-                            "summary": manager.final_summary,
-                            "key_strengths": manager.key_strengths,
-                            "improvement_areas": manager.improvement_areas,
-                            "metrics": manager.metrics,
-                            "audio_url": merged_url
-                        }
-                    )
-                    if feedback_resp.status_code in [200, 201]:
-                        execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
-                        feedback_saved = True
+
+                # Save feedback directly
+                execute(
+                    "INSERT INTO interview_feedback (interview_id, summary, key_strengths, improvement_areas, metrics, audio_url) "
+                    "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (interview_id) DO UPDATE "
+                    "SET summary=EXCLUDED.summary, key_strengths=EXCLUDED.key_strengths, "
+                    "improvement_areas=EXCLUDED.improvement_areas, metrics=EXCLUDED.metrics, audio_url=EXCLUDED.audio_url",
+                    (interview_id,
+                     getattr(manager, 'final_summary', None),
+                     json.dumps(getattr(manager, 'key_strengths', [])),
+                     json.dumps(getattr(manager, 'improvement_areas', [])),
+                     json.dumps(getattr(manager, 'metrics', {})),
+                     merged_url)
+                )
+
+                execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
+
+                # Clean up per-turn audio files after successful merge
+                if merged_path:
+                    per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
+                                if f['name'].startswith(('interviewer_', 'user_'))]
+                    delete_files([f['relative_path'] for f in per_turn])
+
+                # Remove session from store
+                delete_session(instance_key)
+                feedback_saved = True
             except Exception as se:
                 print(f"[ERROR] Save on completion failed: {se}")
 
@@ -1999,18 +2051,59 @@ def overall_performance():
 #  CODE EXECUTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_code(cmd, code, suffix, timeout=10):
+def _sandbox_preexec():
+    """Apply resource limits before exec — Linux only."""
+    try:
+        import resource
+        # Max CPU seconds
+        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+        # Max output size 16 MB
+        resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
+        # Max RAM 256 MB
+        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+        # Max open file descriptors
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        # No new processes
+        resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
+    except Exception:
+        pass  # Non-Linux platforms skip silently
+
+
+_CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
+
+# Simple pattern blocklist for obviously dangerous code
+import re as _re
+_DANGER_PATTERNS = _re.compile(
+    r'(import\s+os|import\s+subprocess|import\s+sys|'
+    r'__import__|open\s*\(|exec\s*\(|eval\s*\(|'
+    r'shutil|socket|requests|urllib|http\.client|'
+    r'importlib|ctypes|threading|multiprocessing)',
+    _re.IGNORECASE
+)
+
+
+def _run_code(cmd, code, suffix, timeout=8):
+    if len(code) > _CODE_SIZE_LIMIT:
+        return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
+    if _DANGER_PATTERNS.search(code) and suffix == '.py':
+        return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
     with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
         f.write(code)
         path = f.name
     try:
-        result = subprocess.run(cmd + [path], capture_output=True, text=True, timeout=timeout)
-        return jsonify({"success": True, "data": {
-            "output": result.stdout,
-            "error": result.stderr if result.returncode != 0 else None
-        }})
+        result = subprocess.run(
+            cmd + [path],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            preexec_fn=_sandbox_preexec,
+            env={"PATH": "/usr/bin:/usr/local/bin"}  # Stripped env
+        )
+        output = result.stdout[:50_000]  # Cap output at 50 KB
+        error = result.stderr[:10_000] if result.returncode != 0 else None
+        return jsonify({"success": True, "data": {"output": output, "error": error}})
     except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "message": "Code execution timed out"}), 408
+        return jsonify({"success": False, "message": "Code execution timed out (8s limit)"}), 408
     finally:
         if os.path.exists(path):
             os.unlink(path)
@@ -2698,6 +2791,218 @@ def legacy_support_bot_data():
 # ─────────────────────────────────────────────────────────────────────────────
 #  STARTUP
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TOKEN REFRESH
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/refresh-token', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def refresh_token():
+    """Issue a fresh JWT for an already-authenticated user."""
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    user = query_one(
+        'SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s',
+        (request.user['id'],)
+    )
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    token = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
+    return jsonify({'token': token, 'user': serialize_user(user)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PASSWORD RESET
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/forgot-password', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=3, window_seconds=300)
+def forgot_password():
+    """Request a password-reset link. Always returns 200 to prevent email enumeration."""
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json() or {}
+    email = data.get('email', '').strip().lower()
+    if not email:
+        return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
+    user = query_one(
+        'SELECT id, email, username, full_name FROM users WHERE lower(email)=%s', (email,)
+    )
+    if not user:
+        return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
+    try:
+        execute("""
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                expires_at TIMESTAMPTZ NOT NULL,
+                consumed_at TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        # Invalidate old tokens
+        execute(
+            'UPDATE password_reset_tokens SET consumed_at=now() WHERE user_id=%s AND consumed_at IS NULL',
+            (user['id'],)
+        )
+        token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        execute(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (%s,%s, now() + interval '1 hour')",
+            (user['id'], token_hash)
+        )
+        reset_link = build_public_url('reset-password', token=token)
+        text_body = (
+            f"Hi {user.get('full_name') or user.get('username') or 'there'},\n\n"
+            f"Reset your InterviewCoach password by opening this link:\n{reset_link}\n\n"
+            f"This link expires in 1 hour. If you did not request this, ignore this email."
+        )
+        html_body = (
+            f"<p>Hi {user.get('full_name') or user.get('username') or 'there'},</p>"
+            f"<p>Reset your InterviewCoach password by clicking below:</p>"
+            f"<p><a href=\"{reset_link}\">{reset_link}</a></p>"
+            f"<p>This link expires in 1 hour.</p>"
+        )
+        if smtp_is_configured():
+            send_email('Reset your InterviewCoach password', user['email'], text_body, html_body)
+        else:
+            print(f"[WARN] SMTP not configured. Reset link for {user['email']}: {reset_link}")
+    except Exception as e:
+        print(f"[ERROR] forgot_password: {e}")
+    return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
+
+
+@app.route('/api/reset-password', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=5, window_seconds=300)
+def reset_password():
+    """Consume a reset token and set a new password."""
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json() or {}
+    token = data.get('token', '').strip()
+    new_password = data.get('password', '')
+    if not token or not new_password:
+        return jsonify({'error': 'Token and new password are required'}), 400
+    if len(new_password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    record = query_one(
+        """
+        SELECT prt.user_id, u.email, u.full_name, u.username, u.plan
+        FROM password_reset_tokens prt
+        JOIN users u ON u.id = prt.user_id
+        WHERE prt.token_hash=%s AND prt.consumed_at IS NULL AND prt.expires_at > now()
+        """,
+        (token_hash,)
+    )
+    if not record:
+        return jsonify({'error': 'Reset link is invalid or has expired'}), 400
+    execute(
+        'UPDATE password_reset_tokens SET consumed_at=now() WHERE token_hash=%s', (token_hash,)
+    )
+    execute(
+        'UPDATE users SET password_hash=%s WHERE id=%s',
+        (hash_password(new_password), record['user_id'])
+    )
+    new_token = create_token(str(record['user_id']), record['email'], record['full_name'], record['plan'])
+    return jsonify({'message': 'Password updated successfully.', 'token': new_token})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ACCOUNT DELETION (GDPR)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/me', methods=['DELETE', 'OPTIONS'])
+@verify_auth_token
+def delete_account():
+    """Permanently delete the authenticated user and all their data."""
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json() or {}
+    password = data.get('password', '')
+    user_id = request.user['id']
+    user = query_one('SELECT password_hash FROM users WHERE id=%s', (user_id,))
+    if not user or not check_password(password, user['password_hash']):
+        return jsonify({'error': 'Password confirmation failed'}), 403
+    try:
+        # Delete stored audio/resume files
+        audio_files = list_folder(f'audio/{user_id}')
+        if audio_files:
+            delete_files([f['relative_path'] for f in audio_files])
+        resume_rows = query_all('SELECT stored_path FROM resumes WHERE user_id=%s', (user_id,))
+        if resume_rows:
+            delete_files([r['stored_path'] for r in resume_rows if r.get('stored_path')])
+        # Cascade deletes handle all related DB rows
+        execute('DELETE FROM users WHERE id=%s', (user_id,))
+        return jsonify({'success': True, 'message': 'Account deleted.'})
+    except Exception as e:
+        print(f'[ERROR] delete_account: {e}')
+        return jsonify({'error': 'Account deletion failed'}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  INTERVIEW HISTORY  (paginated)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/interview-history', methods=['GET'])
+@verify_auth_token
+def interview_history():
+    """Paginated list of the user's past interviews with feedback summaries."""
+    user_id = request.user['id']
+    page  = max(1, int(request.args.get('page', 1)))
+    limit = min(50, max(1, int(request.args.get('limit', 10))))
+    offset = (page - 1) * limit
+
+    total_row = query_one(
+        "SELECT COUNT(*) AS cnt FROM interviews WHERE user_id=%s AND status='ENDED'", (user_id,)
+    )
+    total = int(total_row['cnt']) if total_row else 0
+
+    rows = query_all(
+        """
+        SELECT i.id, i.status, i.scheduled_at, i.attempt_number,
+               jd.title as job_title,
+               f.summary, f.metrics, f.audio_url
+        FROM interviews i
+        LEFT JOIN job_descriptions jd ON jd.id = i.jd_id
+        LEFT JOIN interview_feedback f ON f.interview_id = i.id
+        WHERE i.user_id=%s AND i.status='ENDED'
+        ORDER BY i.scheduled_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        (user_id, limit, offset)
+    )
+    return jsonify({
+        'success': True,
+        'data': [dict(r) for r in rows],
+        'page': page,
+        'limit': limit,
+        'total': total,
+        'total_pages': max(1, -(-total // limit))
+    })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SESSION CLEANUP  (admin utility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/admin/purge-sessions', methods=['POST'])
+@verify_auth_token
+def admin_purge_sessions():
+    """Purge stale interview sessions older than N hours (admin only)."""
+    if not _can_view_admin_logs(query_one('SELECT * FROM users WHERE id=%s', (request.user['id'],))):
+        return jsonify({'error': 'Forbidden'}), 403
+    hours = int((request.get_json() or {}).get('hours', 24))
+    purge_old_sessions(hours)
+    return jsonify({'success': True, 'message': f'Sessions older than {hours}h purged.'})
+
+import atexit
+from common.db import close_pool
+
+atexit.register(close_pool)
 
 print("[INFO] Scheduling AI warmup...")
 schedule_background_ai_warmup()

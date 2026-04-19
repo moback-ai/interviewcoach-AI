@@ -81,6 +81,7 @@ function App() {
           <Route path="/interview"     element={<ProtectedRoute><InterviewPage /></ProtectedRoute>} />
           <Route path="/interview-feedback" element={<ProtectedRoute><InterviewFeedbackPage /></ProtectedRoute>} />
           <Route path="/admin/logs"    element={<ProtectedRoute><AdminLogsPage /></ProtectedRoute>} />
+          <Route path="/admin/logs."   element={<ProtectedRoute><AdminLogsPage /></ProtectedRoute>} />
         </Routes>
       </Suspense>
 
