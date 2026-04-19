@@ -2055,6 +2055,7 @@ def analyze_performance_trends():
 
 
 @app.route('/api/overall-performance', methods=['GET'])
+@app.route('/api/api/overall-performance', methods=['GET'])
 @verify_auth_token
 def overall_performance():
     user_id = request.user['id']

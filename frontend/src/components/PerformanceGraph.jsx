@@ -17,7 +17,7 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
     const fetchOverallEvaluation = async () => {
       try {
         setLoadingEvaluation(true);
-        const result = await apiGet('/api/overall-performance');
+        const result = await apiGet('/overall-performance');
         if (result?.data?.[0]) {
           setOverallEvaluation(result.data[0]);
         }
