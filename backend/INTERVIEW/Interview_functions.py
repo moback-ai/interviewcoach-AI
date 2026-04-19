@@ -683,6 +683,14 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
     Be specific, constructive, and relevant to the {job_title} position. Base your analysis on the actual conversation and evaluation data provided.
     """
 
+    parsed_response = {
+        "summary": "Interview completed. Detailed AI summary was unavailable, so a fallback summary was generated.",
+        "key_strengths": "1. Completed the interview flow and answered multiple questions.\n2. Provided enough conversation data for a baseline evaluation.",
+        "improvement_areas": "1. Improve depth and specificity in answers.\n2. Practice confidence, clarity, and structured examples before the next interview.",
+        "overall_rating": avg_knowledge_depth,
+        "overall_emotion_summary": "Emotion summary not generated",
+    }
+
     max_retries = 100
     for attempt in range(max_retries):
         try:
@@ -741,7 +749,6 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
         "overall_emotion_summary": parsed_response.get("overall_emotion_summary", "Emotion summary not generated")  # ✅ qualitative LLM summary
     }
 }
-
 
 
 
