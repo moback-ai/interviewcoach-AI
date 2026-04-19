@@ -290,19 +290,11 @@ function DashboardPage() {
       // Set loading state for this specific pairing
       setDownloadingResume(prev => new Set(prev).add(pairing.id));
       setDownloadSuccess(null);
-      
-      // Extract file path from the full URL
-      // pairing.resumeUrl is like: http://127.0.0.1:54321/storage/v1/object/public/resumes/user_files/filename.pdf
-      // We need: user_files/filename.pdf
-      const url = new URL(pairing.resumeUrl);
-      const pathParts = url.pathname.split('/');
-      const bucketIndex = pathParts.findIndex(part => part === 'resumes');
-      if (bucketIndex === -1) {
-        throw new Error('Invalid resume URL format');
+      if (!pairing.resumeUrl) {
+        throw new Error('Resume URL missing');
       }
-      const filePath = pathParts.slice(bucketIndex + 1).join('/');
-      
-      console.log('Downloading resume from path:', filePath);
+
+      console.log('Downloading resume from URL:', pairing.resumeUrl);
       
       const session = await getSession();
       const response = await fetch(pairing.resumeUrl, {
