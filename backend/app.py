@@ -33,9 +33,55 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 from pydub import AudioSegment
 import requests as http_requests
+try:
+    import boto3
+except Exception:
+    boto3 = None
 
 # ── Environment ───────────────────────────────────────────────────────────────
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+
+
+def load_secrets_manager_env():
+    secret_id = os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", "").strip()
+    if not secret_id:
+        return
+
+    if boto3 is None:
+        print("[WARN] boto3 is unavailable; skipping AWS Secrets Manager load.")
+        return
+
+    region = (
+        os.getenv("AWS_REGION", "").strip()
+        or os.getenv("AWS_DEFAULT_REGION", "").strip()
+        or "ap-south-1"
+    )
+
+    try:
+        client = boto3.client("secretsmanager", region_name=region)
+        response = client.get_secret_value(SecretId=secret_id)
+        secret_string = response.get("SecretString", "").strip()
+        if not secret_string:
+            print(f"[WARN] Secret {secret_id} has no SecretString payload.")
+            return
+
+        payload = json.loads(secret_string)
+        if not isinstance(payload, dict):
+            print(f"[WARN] Secret {secret_id} is not a JSON object.")
+            return
+
+        loaded_keys = []
+        for key, value in payload.items():
+            if value is None:
+                continue
+            os.environ[key] = str(value)
+            loaded_keys.append(key)
+        print(f"[INFO] Loaded {len(loaded_keys)} values from AWS Secrets Manager secret {secret_id}.")
+    except Exception as exc:
+        print(f"[WARN] Failed to load AWS Secrets Manager secret {secret_id}: {exc}")
+
+
+load_secrets_manager_env()
 
 INTERVIEW_PATH = os.path.join(os.path.dirname(__file__), "INTERVIEW")
 if INTERVIEW_PATH not in sys.path:

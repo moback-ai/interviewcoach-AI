@@ -3,6 +3,8 @@ name: Manual Deploy
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   ADMIN_DEPLOY_USERS: govardhanreddy66
+  AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
+  AWS_REGION: ap-south-1
 
 on:
   workflow_dispatch:
@@ -402,19 +404,9 @@ jobs:
           fi
           mkdir -p "$RELEASES_DIR" "$SHARED_DIR"
           cat > "$SHARED_DIR/.env" <<ENVEOF
-          DB_HOST=${{ secrets.DB_HOST }}
-          DB_PORT=${{ secrets.DB_PORT }}
-          DB_NAME=${{ secrets.DB_NAME }}
-          DB_USER=${{ secrets.DB_USER }}
-          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          AWS_REGION=${{ env.AWS_REGION }}
+          AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }}
           DOMAIN=$PUBLIC_ORIGIN
-          SMTP_HOST=${{ secrets.SMTP_HOST }}
-          SMTP_PORT=${{ secrets.SMTP_PORT }}
-          SMTP_USER=${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
-          SMTP_USE_SSL=${{ secrets.SMTP_USE_SSL }}
-          MAIL_FROM=${{ secrets.MAIL_FROM }}
           STORAGE_PATH=/apps/storage
           PUBLIC_STORAGE_URL=$PUBLIC_ORIGIN/storage
           WHISPER_MODEL=base
