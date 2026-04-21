@@ -2,6 +2,7 @@ name: Manual Deploy
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ADMIN_DEPLOY_USERS: govardhanreddy66
 
 on:
   workflow_dispatch:
@@ -49,6 +50,21 @@ jobs:
       version_audit: ${{ github.event.inputs.version_audit }}
 
     steps:
+      - name: 1. Pre Requirements - Authorize Admin Deployment User
+        run: |
+          admin_csv=",${ADMIN_DEPLOY_USERS},"
+          actor=",${{ github.actor }},"
+          if [[ "$admin_csv" != *"$actor"* ]]; then
+            echo "Only admin users can run deployment approvals and deployment workflow steps."
+            echo "Current actor: ${{ github.actor }}"
+            echo "Allowed admin users: ${ADMIN_DEPLOY_USERS}"
+            exit 1
+          fi
+          {
+            echo "### Admin Authorization"
+            echo "- Approved actor: \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: 1. Pre Requirements - Checkout Selected Branch
         uses: actions/checkout@v4
         with:
