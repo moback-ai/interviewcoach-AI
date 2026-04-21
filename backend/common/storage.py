@@ -4,11 +4,16 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
-STORAGE_PATH = os.getenv("STORAGE_PATH", "/apps/storage")
-PUBLIC_STORAGE_URL = os.getenv("PUBLIC_STORAGE_URL", "http://localhost/storage")
+
+def _storage_path():
+    return os.getenv("STORAGE_PATH", "/apps/storage")
+
+
+def _public_storage_url():
+    return os.getenv("PUBLIC_STORAGE_URL", "http://localhost/storage")
 
 def _ensure(folder: str) -> str:
-    path = os.path.join(STORAGE_PATH, folder)
+    path = os.path.join(_storage_path(), folder)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -22,7 +27,7 @@ def save_bytes(data: bytes, folder: str, filename: str) -> dict:
     return {
         "stored_path": file_path,
         "relative_path": relative,
-        "public_url": f"{PUBLIC_STORAGE_URL}/{relative}",
+        "public_url": f"{_public_storage_url()}/{relative}",
         "file_size": len(data)
     }
 
@@ -35,18 +40,18 @@ def save_from_path(src: str, folder: str, filename: str) -> dict:
     return {
         "stored_path": dest,
         "relative_path": relative,
-        "public_url": f"{PUBLIC_STORAGE_URL}/{relative}",
+        "public_url": f"{_public_storage_url()}/{relative}",
         "file_size": os.path.getsize(dest)
     }
 
 def read_bytes(relative_path: str) -> bytes:
     """Read file from storage."""
-    with open(os.path.join(STORAGE_PATH, relative_path), 'rb') as f:
+    with open(os.path.join(_storage_path(), relative_path), 'rb') as f:
         return f.read()
 
 def list_folder(folder: str) -> list:
     """List files in a storage folder."""
-    dir_path = os.path.join(STORAGE_PATH, folder)
+    dir_path = os.path.join(_storage_path(), folder)
     if not os.path.exists(dir_path):
         return []
     files = []
@@ -58,7 +63,7 @@ def list_folder(folder: str) -> list:
                 "name": fname,
                 "stored_path": fpath,
                 "relative_path": relative,
-                "public_url": f"{PUBLIC_STORAGE_URL}/{relative}",
+                "public_url": f"{_public_storage_url()}/{relative}",
                 "file_size": os.path.getsize(fpath)
             })
     return files
@@ -66,9 +71,9 @@ def list_folder(folder: str) -> list:
 def delete_files(relative_paths: list):
     """Delete a list of files by relative path."""
     for rel in relative_paths:
-        full = os.path.join(STORAGE_PATH, rel)
+        full = os.path.join(_storage_path(), rel)
         if os.path.exists(full):
             os.remove(full)
 
 def public_url(relative_path: str) -> str:
-    return f"{PUBLIC_STORAGE_URL}/{relative_path}"
+    return f"{_public_storage_url()}/{relative_path}"
