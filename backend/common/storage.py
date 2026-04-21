@@ -1,16 +1,17 @@
 import os
 import shutil
-from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+from common.runtime_config import load_runtime_config, require_env
+
+load_runtime_config()
 
 
 def _storage_path():
-    return os.getenv("STORAGE_PATH", "/apps/storage")
+    return require_env("STORAGE_PATH")
 
 
 def _public_storage_url():
-    return os.getenv("PUBLIC_STORAGE_URL", "http://localhost/storage")
+    return require_env("PUBLIC_STORAGE_URL")
 
 def _ensure(folder: str) -> str:
     path = os.path.join(_storage_path(), folder)

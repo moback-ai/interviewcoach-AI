@@ -4,21 +4,28 @@ import ssl
 from email.message import EmailMessage
 from typing import Optional
 
+from common.runtime_config import load_runtime_config, optional_env, require_env
+
+load_runtime_config()
+
 
 def smtp_is_configured() -> bool:
-    return all(
-        os.getenv(key, "").strip()
-        for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM")
-    )
+    try:
+        return all(
+            require_env(key)
+            for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM")
+        )
+    except Exception:
+        return False
 
 
 def send_email(subject: str, recipient: str, text_body: str, html_body: Optional[str] = None) -> None:
-    host = os.getenv("SMTP_HOST", "").strip()
-    port = int(os.getenv("SMTP_PORT", "587"))
-    user = os.getenv("SMTP_USER", "").strip()
-    password = os.getenv("SMTP_PASSWORD", "").strip()
-    sender = os.getenv("MAIL_FROM", "").strip()
-    use_ssl = os.getenv("SMTP_USE_SSL", "false").strip().lower() == "true"
+    host = require_env("SMTP_HOST")
+    port = int(require_env("SMTP_PORT"))
+    user = require_env("SMTP_USER")
+    password = require_env("SMTP_PASSWORD")
+    sender = require_env("MAIL_FROM")
+    use_ssl = optional_env("SMTP_USE_SSL", "false").lower() == "true"
 
     if not host or not user or not password or not sender:
         raise RuntimeError("SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and MAIL_FROM.")

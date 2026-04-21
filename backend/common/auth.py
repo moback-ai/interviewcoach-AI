@@ -3,14 +3,15 @@ import jwt
 import bcrypt
 from functools import wraps
 from flask import request, jsonify
-from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+from common.runtime_config import load_runtime_config, require_env
+
+load_runtime_config()
 
 
 def _get_jwt_secret():
-    return os.getenv("JWT_SECRET", "").strip()
+    return require_env("JWT_SECRET")
 
 
 def _ensure_jwt_secret():
