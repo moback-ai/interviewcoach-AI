@@ -393,35 +393,18 @@ jobs:
           RELEASE_ID="${{ github.sha }}"
           APP_ROOT="/apps/backend"
           RELEASES_DIR="$APP_ROOT/releases"
-          SHARED_DIR="$APP_ROOT/shared"
           VENV_DIR="$APP_ROOT/venv"
           NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
           PREVIOUS_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
-          APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
-          PUBLIC_ORIGIN="http://${{ secrets.FRONTEND_HOST }}"
-          if [ -n "$APP_DOMAIN" ]; then
-            PUBLIC_ORIGIN="https://$APP_DOMAIN"
-          fi
-          mkdir -p "$RELEASES_DIR" "$SHARED_DIR"
-          cat > "$SHARED_DIR/.env" <<ENVEOF
-          AWS_REGION=${{ env.AWS_REGION }}
-          AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }}
-          DOMAIN=$PUBLIC_ORIGIN
-          STORAGE_PATH=/apps/storage
-          PUBLIC_STORAGE_URL=$PUBLIC_ORIGIN/storage
-          WHISPER_MODEL=base
-          UPLOAD_FOLDER=/apps/storage
-          MAX_CONTENT_MB=200
-          BACKEND_API_BASE=http://127.0.0.1:5000
-          ENVEOF
-          ln -sfn "$SHARED_DIR/.env" "$NEW_RELEASE/.env"
+          mkdir -p "$RELEASES_DIR"
           if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
           . "$VENV_DIR/bin/activate"
           pip install --upgrade pip
           pip install -r "$NEW_RELEASE/requirements.txt"
           ln -sfn "$NEW_RELEASE" "$APP_ROOT/current"
           pm2 delete backend >/dev/null 2>&1 || true
-          pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+          AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+            pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
           pm2 save
           sleep 5
           if ! curl -f http://127.0.0.1:5000/api/health; then
@@ -431,7 +414,8 @@ jobs:
               echo "Rolling back backend to $PREVIOUS_RELEASE"
               ln -sfn "$PREVIOUS_RELEASE" "$APP_ROOT/current"
               pm2 delete backend >/dev/null 2>&1 || true
-              pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+              AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+                pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
               pm2 save
               sleep 5
               curl -f http://127.0.0.1:5000/api/health

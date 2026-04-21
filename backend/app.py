@@ -28,60 +28,15 @@ from flask import Flask, request, jsonify, send_from_directory, abort, render_te
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
-from dotenv import load_dotenv
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from pydub import AudioSegment
 import requests as http_requests
-try:
-    import boto3
-except Exception:
-    boto3 = None
 
 # ── Environment ───────────────────────────────────────────────────────────────
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+from common.runtime_config import load_runtime_config, optional_env, require_env
 
-
-def load_secrets_manager_env():
-    secret_id = os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", "").strip()
-    if not secret_id:
-        return
-
-    if boto3 is None:
-        print("[WARN] boto3 is unavailable; skipping AWS Secrets Manager load.")
-        return
-
-    region = (
-        os.getenv("AWS_REGION", "").strip()
-        or os.getenv("AWS_DEFAULT_REGION", "").strip()
-        or "ap-south-1"
-    )
-
-    try:
-        client = boto3.client("secretsmanager", region_name=region)
-        response = client.get_secret_value(SecretId=secret_id)
-        secret_string = response.get("SecretString", "").strip()
-        if not secret_string:
-            print(f"[WARN] Secret {secret_id} has no SecretString payload.")
-            return
-
-        payload = json.loads(secret_string)
-        if not isinstance(payload, dict):
-            print(f"[WARN] Secret {secret_id} is not a JSON object.")
-            return
-
-        loaded_keys = []
-        for key, value in payload.items():
-            if value is None:
-                continue
-            os.environ[key] = str(value)
-            loaded_keys.append(key)
-        print(f"[INFO] Loaded {len(loaded_keys)} values from AWS Secrets Manager secret {secret_id}.")
-    except Exception as exc:
-        print(f"[WARN] Failed to load AWS Secrets Manager secret {secret_id}: {exc}")
-
-
-load_secrets_manager_env()
+load_runtime_config()
 
 INTERVIEW_PATH = os.path.join(os.path.dirname(__file__), "INTERVIEW")
 if INTERVIEW_PATH not in sys.path:
@@ -125,10 +80,10 @@ device = get_device()
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = int(os.getenv("MAX_CONTENT_MB", 200)) * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = int(optional_env("MAX_CONTENT_MB", "200")) * 1024 * 1024
 
-DOMAIN = os.getenv("DOMAIN", "http://localhost")
-EMAIL_VERIFICATION_TTL_HOURS = int(os.getenv("EMAIL_VERIFICATION_TTL_HOURS", "24"))
+DOMAIN = require_env("DOMAIN")
+EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", "24"))
 
 CORS(app,
      supports_credentials=True,
@@ -141,7 +96,7 @@ socketio = SocketIO(app, cors_allowed_origins=_ALLOWED_ORIGINS, async_mode="thre
 
 
 def get_public_origin():
-    return os.getenv("DOMAIN", DOMAIN).rstrip("/")
+    return require_env("DOMAIN").rstrip("/")
 
 
 def build_public_url(path: str, **params):
@@ -602,7 +557,7 @@ def _extract_request_ip():
 
 
 def _ip_allowlist_entries():
-    raw = os.getenv("ADMIN_LOG_IP_ALLOWLIST", "").strip()
+    raw = optional_env("ADMIN_LOG_IP_ALLOWLIST")
     if not raw:
         return []
     entries = []
@@ -643,8 +598,8 @@ def _can_view_admin_logs(user):
     user_record = _get_admin_user_record(user.get("id"))
     username = ((user_record or {}).get("username") or "").strip().lower()
 
-    allowed_emails = _split_env_values(os.getenv("ADMIN_LOG_VIEWER_EMAILS", "")) or DEFAULT_ADMIN_LOG_EMAILS
-    allowed_usernames = _split_env_values(os.getenv("ADMIN_LOG_VIEWER_USERNAMES", "")) or DEFAULT_ADMIN_LOG_USERNAMES
+    allowed_emails = _split_env_values(optional_env("ADMIN_LOG_VIEWER_EMAILS")) or DEFAULT_ADMIN_LOG_EMAILS
+    allowed_usernames = _split_env_values(optional_env("ADMIN_LOG_VIEWER_USERNAMES")) or DEFAULT_ADMIN_LOG_USERNAMES
 
     return (
         user_plan == "admin"
@@ -906,7 +861,7 @@ def initialize_whisper():
     global whisper_model
     if whisper_model is not None:
         return
-    model_size = os.getenv("WHISPER_MODEL", "base")
+    model_size = optional_env("WHISPER_MODEL", "base")
     whisper_device = "cpu" if device == "mps" else device
     print(f"[INFO] Loading Whisper {model_size} on {whisper_device}...")
     try:
@@ -995,7 +950,7 @@ def process_audio_file(file):
 
 
 def schedule_background_ai_warmup():
-    if os.getenv("ENABLE_AI_WARMUP", "true").lower() in {"0", "false", "no"}:
+    if optional_env("ENABLE_AI_WARMUP", "true").lower() in {"0", "false", "no"}:
         return
 
     def _warmup():
@@ -1226,7 +1181,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
 def ollama_ready(timeout_seconds=2):
     try:
         response = http_requests.get(
-            os.getenv("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags"),
+            optional_env("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags"),
             timeout=timeout_seconds,
         )
         return response.ok
@@ -1730,9 +1685,10 @@ def generate_questions():
             return jsonify({"success": False, "message": "resume_url, job_description, job_title required"}), 400
 
         # Download resume from local storage or URL
-        if resume_url.startswith(os.getenv("PUBLIC_STORAGE_URL", "")):
+        public_storage_url = require_env("PUBLIC_STORAGE_URL")
+        if resume_url.startswith(public_storage_url):
             # Local storage file
-            relative = resume_url.replace(os.getenv("PUBLIC_STORAGE_URL", ""), "").lstrip("/")
+            relative = resume_url.replace(public_storage_url, "").lstrip("/")
             resume_data = read_bytes(relative)
             ext = relative.rsplit('.', 1)[-1]
         else:
@@ -2320,7 +2276,7 @@ def _normalize_list(value):
 
 @app.route('/storage/<path:relative_path>', methods=['GET'])
 def serve_storage_file(relative_path):
-    storage_root = os.getenv("STORAGE_PATH", "/apps/storage")
+    storage_root = require_env("STORAGE_PATH")
     safe_root = os.path.abspath(storage_root)
     file_path = os.path.abspath(os.path.join(safe_root, relative_path))
     if not file_path.startswith(f"{safe_root}{os.sep}"):
@@ -2464,7 +2420,7 @@ def _build_dashboard_pairings(user_id):
 
 
 def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, question_set=None, status='success'):
-    base = DOMAIN.rstrip('/')
+    base = require_env("DOMAIN").rstrip('/')
     params = [
         f"interview_id={interview_id}",
         f"payment_id={payment_id}",

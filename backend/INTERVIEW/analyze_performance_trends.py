@@ -3,7 +3,6 @@ import sys
 import json
 import requests
 from datetime import datetime
-from dotenv import load_dotenv
 import numpy as np
 import re
 try:
@@ -11,11 +10,12 @@ try:
 except Exception as ollama_import_error:
     ollama = None
 
-# Load environment variables
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+from common.runtime_config import load_runtime_config, optional_env
+
+load_runtime_config()
 
 # Local backend API configuration
-BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://127.0.0.1:5000")
+BACKEND_API_BASE = optional_env("BACKEND_API_BASE", "http://127.0.0.1:5000")
 
 
 def fetch_interview_metrics(auth_token: str, limit: int = 100):

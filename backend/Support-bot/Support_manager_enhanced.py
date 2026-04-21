@@ -2,13 +2,12 @@ import os
 import time
 import uuid
 
-from dotenv import load_dotenv
-
 from Support_functions_enhanced import load_faq_sections, build_faq_index, generate_support_reply
+from common.runtime_config import load_runtime_config, optional_env
 
-load_dotenv()
+load_runtime_config()
 
-BACKEND_API_BASE = os.getenv("BACKEND_API_BASE", "http://127.0.0.1:5000")
+BACKEND_API_BASE = optional_env("BACKEND_API_BASE", "http://127.0.0.1:5000")
 
 
 class SupportBotManager:

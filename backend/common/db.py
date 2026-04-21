@@ -2,9 +2,10 @@ import os
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
-from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+from common.runtime_config import load_runtime_config, optional_env, require_env
+
+load_runtime_config()
 
 _pool = None
 
@@ -13,13 +14,13 @@ def _get_pool():
     global _pool
     if _pool is None:
         _pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=int(os.getenv("DB_POOL_MIN", 2)),
-            maxconn=int(os.getenv("DB_POOL_MAX", 20)),
-            host=os.getenv("DB_HOST", "localhost"),
-            port=int(os.getenv("DB_PORT", 5432)),
-            dbname=os.getenv("DB_NAME", "interview_db"),
-            user=os.getenv("DB_USER", "interview_user"),
-            password=os.getenv("DB_PASSWORD"),
+            minconn=int(optional_env("DB_POOL_MIN", "2")),
+            maxconn=int(optional_env("DB_POOL_MAX", "20")),
+            host=require_env("DB_HOST"),
+            port=int(require_env("DB_PORT")),
+            dbname=require_env("DB_NAME"),
+            user=require_env("DB_USER"),
+            password=require_env("DB_PASSWORD"),
             cursor_factory=psycopg2.extras.RealDictCursor,
         )
     return _pool

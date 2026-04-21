@@ -28,13 +28,15 @@ try:
     from piper import PiperVoice
 except Exception as piper_import_error:
     PiperVoice = None
-from dotenv import load_dotenv
 
-# Load environment variables from backend .env file
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+from common.runtime_config import load_runtime_config, optional_env
 
-# Use environment variable if set, otherwise fall back to relative path
-MODEL_PATH = os.getenv("PIPER_MODEL_PATH", os.path.join(os.path.dirname(__file__), "en_US-kusal-medium.onnx"))
+load_runtime_config()
+
+MODEL_PATH = optional_env(
+    "PIPER_MODEL_PATH",
+    os.path.join(os.path.dirname(__file__), "en_US-kusal-medium.onnx"),
+)
 
 # Initialize voice model globally
 voice = None
