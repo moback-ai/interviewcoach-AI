@@ -11,8 +11,6 @@ import io
 import secrets
 import uuid
 import threading
-import re
-import ipaddress
 from urllib.parse import urlencode
 
 import soundfile as sf
@@ -24,7 +22,7 @@ except Exception as mediapipe_import_error:
     mp = None
     print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
 
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
@@ -51,8 +49,6 @@ from common.auth import verify_auth_token, create_token, hash_password, check_pa
 from common.db import query_one, query_all, execute
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
-from common.rate_limit import rate_limit, user_rate_limit
-from common.session_store import load_session, save_session, delete_session, purge_old_sessions
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -76,6 +72,7 @@ except Exception as voice_import_error:
     print(f"[WARN] Voice cloning unavailable: {voice_import_error}")
 
 device = get_device()
+interview_instances = {}
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -90,8 +87,7 @@ CORS(app,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
-_ALLOWED_ORIGINS = [DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"]
-socketio = SocketIO(app, cors_allowed_origins=_ALLOWED_ORIGINS, async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 
 def get_public_origin():
@@ -141,6 +137,36 @@ def ensure_auth_schema():
         )
     """)
     execute("CREATE INDEX IF NOT EXISTS idx_email_verification_lookup ON email_verification_tokens (user_id, expires_at DESC)")
+
+
+_ALLOWED_DIFFICULTY_EXPERIENCE = frozenset({"beginner", "intermediate", "expert"})
+
+
+def normalize_difficulty_experience(value) -> str:
+    """Map API / pipeline values to DB-safe experience tier (matches Supabase questions API)."""
+    if value is None:
+        return "beginner"
+    v = str(value).strip().lower()
+    if v in _ALLOWED_DIFFICULTY_EXPERIENCE:
+        return v
+    # CSV / legacy strength labels from pipeline
+    if v in ("weak", "junior", "novice"):
+        return "beginner"
+    if v in ("medium", "mid", "strong_mid"):
+        return "intermediate"
+    if v in ("strong", "expert", "senior", "advanced"):
+        return "expert"
+    return "beginner"
+
+
+def ensure_questions_schema():
+    """Keep questions table aligned with legacy Supabase shape (sample-answer tiers)."""
+    execute(
+        """
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS difficulty_experience TEXT NOT NULL DEFAULT 'beginner'
+        """
+    )
 
 
 def serialize_user(user):
@@ -216,455 +242,7 @@ def get_user_for_auth(identifier: str):
 
 
 ensure_auth_schema()
-
-PUBLIC_DOC_ENDPOINTS = {
-    "/api/health",
-    "/api/signup",
-    "/api/login",
-    "/api/check-email",
-    "/api/check-username",
-    "/api/resend-verification",
-    "/api/verify-email",
-    "/api/docs",
-    "/api/openapi.json",
-    "/storage/{relative_path}",
-}
-
-API_DOC_OVERRIDES = {
-    "/api/health": {
-        "get": {
-            "summary": "Health check",
-            "description": "Returns backend health for uptime checks and deployment validation.",
-        }
-    },
-    "/api/signup": {
-        "post": {
-            "summary": "Create account",
-            "description": "Registers a new user with username, email, full name, and password.",
-            "requestBody": {
-                "required": True,
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "required": ["username", "email", "full_name", "password"],
-                            "properties": {
-                                "username": {"type": "string", "example": "govardhan"},
-                                "email": {"type": "string", "format": "email"},
-                                "full_name": {"type": "string", "example": "Govardhan Reddy"},
-                                "password": {"type": "string", "format": "password"},
-                            },
-                        }
-                    }
-                },
-            },
-        }
-    },
-    "/api/login": {
-        "post": {
-            "summary": "Login",
-            "description": "Signs in with email or username and returns the auth token and user profile.",
-            "requestBody": {
-                "required": True,
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "required": ["identifier", "password"],
-                            "properties": {
-                                "identifier": {"type": "string", "example": "govardhan"},
-                                "password": {"type": "string", "format": "password"},
-                            },
-                        }
-                    }
-                },
-            },
-        }
-    },
-    "/api/me": {
-        "get": {
-            "summary": "Current user profile",
-            "description": "Returns the currently authenticated user.",
-        },
-        "put": {
-            "summary": "Update current user",
-            "description": "Updates the current user's profile fields.",
-        },
-    },
-    "/api/dashboard": {
-        "get": {
-            "summary": "Dashboard data",
-            "description": "Returns resume and job-description pairings, interviews, and summary information for the signed-in user.",
-        }
-    },
-    "/api/upload-resume": {
-        "post": {
-            "summary": "Upload resume",
-            "description": "Uploads a resume file and stores it for later question generation and interviews.",
-            "requestBody": {
-                "required": True,
-                "content": {
-                    "multipart/form-data": {
-                        "schema": {
-                            "type": "object",
-                            "required": ["file"],
-                            "properties": {
-                                "file": {"type": "string", "format": "binary"},
-                            },
-                        }
-                    }
-                },
-            },
-        }
-    },
-    "/api/parse-job-description": {
-        "post": {
-            "summary": "Parse job description",
-            "description": "Extracts structured job-description content from uploaded files.",
-            "requestBody": {
-                "required": True,
-                "content": {
-                    "multipart/form-data": {
-                        "schema": {
-                            "type": "object",
-                            "required": ["file"],
-                            "properties": {
-                                "file": {"type": "string", "format": "binary"},
-                            },
-                        }
-                    }
-                },
-            },
-        }
-    },
-    "/api/generate-questions": {
-        "post": {
-            "summary": "Generate interview questions",
-            "description": "Generates interview questions for a resume and job-description combination.",
-        }
-    },
-    "/api/transcribe-audio": {
-        "post": {
-            "summary": "Transcribe audio",
-            "description": "Transcribes interview audio uploads.",
-        }
-    },
-    "/api/generate-response": {
-        "post": {
-            "summary": "Generate AI response",
-            "description": "Generates an AI interview/chat response based on the current conversation context.",
-        }
-    },
-    "/api/create-payment": {
-        "post": {
-            "summary": "Create payment",
-            "description": "Creates a payment session or payment link for an interview flow.",
-        }
-    },
-    "/functions/v1/dashboard": {
-        "get": {
-            "summary": "Dashboard data (frontend alias)",
-            "description": "Alias route used by the frontend for dashboard data.",
-        }
-    },
-    "/functions/v1/create-payment": {
-        "post": {
-            "summary": "Create payment (frontend alias)",
-            "description": "Alias route used by the frontend payment flow.",
-        }
-    },
-    "/storage/{relative_path}": {
-        "get": {
-            "summary": "Download stored file",
-            "description": "Serves files from the configured storage path.",
-            "parameters": [
-                {
-                    "name": "relative_path",
-                    "in": "path",
-                    "required": True,
-                    "schema": {"type": "string"},
-                }
-            ],
-        }
-    },
-}
-
-
-def _rule_to_openapi_path(rule: str) -> str:
-    return rule.replace("<", "{").replace(">", "}")
-
-
-def _humanize_endpoint_name(endpoint_name: str) -> str:
-    return endpoint_name.replace("_", " ").replace("-", " ").strip().title()
-
-
-def _default_operation_for_rule(rule, method: str):
-    openapi_path = _rule_to_openapi_path(rule.rule)
-    operation = {
-        "tags": [openapi_path.split("/")[1] if openapi_path.count("/") > 1 else "api"],
-        "summary": f"{method.title()} {_humanize_endpoint_name(rule.endpoint)}",
-        "responses": {
-            "200": {"description": "Successful response"},
-            "400": {"description": "Bad request"},
-            "401": {"description": "Unauthorized"},
-            "500": {"description": "Server error"},
-        },
-    }
-    if method in {"post", "put", "patch"}:
-        operation["requestBody"] = {
-            "required": False,
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": True,
-                    }
-                }
-            },
-        }
-    if openapi_path not in PUBLIC_DOC_ENDPOINTS:
-        operation["security"] = [{"bearerAuth": []}]
-    return operation
-
-
-def build_openapi_spec():
-    paths = {}
-    for rule in sorted(app.url_map.iter_rules(), key=lambda item: item.rule):
-        if rule.endpoint == "static" or rule.rule.startswith("/socket.io"):
-            continue
-        openapi_path = _rule_to_openapi_path(rule.rule)
-        path_item = paths.setdefault(openapi_path, {})
-        method_overrides = API_DOC_OVERRIDES.get(openapi_path, {})
-        for method in sorted(rule.methods):
-            normalized_method = method.lower()
-            if normalized_method in {"head", "options"}:
-                continue
-            operation = _default_operation_for_rule(rule, normalized_method)
-            override = method_overrides.get(normalized_method)
-            if override:
-                operation.update(override)
-            path_item[normalized_method] = operation
-
-    current_origin = request.host_url.rstrip("/")
-    return {
-        "openapi": "3.0.3",
-        "info": {
-            "title": "InterviewCoach API",
-            "version": "2.0.0",
-            "description": "OpenAPI documentation for the InterviewCoach backend and frontend alias routes.",
-        },
-        "servers": [{"url": current_origin}],
-        "components": {
-            "securitySchemes": {
-                "bearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "bearerFormat": "JWT",
-                }
-            }
-        },
-        "paths": paths,
-    }
-
-
-@app.route('/api/openapi.json', methods=['GET'])
-def openapi_json():
-    return jsonify(build_openapi_spec())
-
-
-@app.route('/api/docs', methods=['GET'])
-def swagger_ui():
-    html = """
-    <!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>InterviewCoach API Docs</title>
-        <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
-        <style>
-          body { margin: 0; background: #10141c; }
-          #swagger-ui { max-width: 1200px; margin: 0 auto; }
-        </style>
-      </head>
-      <body>
-        <div id="swagger-ui"></div>
-        <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-        <script>
-          window.ui = SwaggerUIBundle({
-            url: "/api/openapi.json",
-            dom_id: "#swagger-ui",
-            deepLinking: true,
-            persistAuthorization: true,
-            displayRequestDuration: true,
-            tryItOutEnabled: true
-          });
-        </script>
-      </body>
-    </html>
-    """
-    return render_template_string(html)
-
-
-DEFAULT_ADMIN_LOG_EMAILS = {
-    "govardhanr@moback.com",
-}
-DEFAULT_ADMIN_LOG_USERNAMES = {
-    "govardhan",
-}
-
-
-def _split_env_values(value: str):
-    return {item.strip().lower() for item in (value or "").split(",") if item.strip()}
-
-
-def _extract_request_ip():
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        first_ip = forwarded_for.split(",")[0].strip()
-        if first_ip:
-            return first_ip
-    return (request.headers.get("X-Real-IP") or request.remote_addr or "").strip()
-
-
-def _ip_allowlist_entries():
-    raw = os.getenv("ADMIN_LOG_IP_ALLOWLIST", "").strip()
-    if not raw:
-        return []
-    entries = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            entries.append(ipaddress.ip_network(item, strict=False))
-        except ValueError:
-            pass
-    return entries
-
-
-def _is_allowed_ip(ip_text: str):
-    allowlist = _ip_allowlist_entries()
-    if not allowlist:
-        return True
-    try:
-        ip_obj = ipaddress.ip_address(ip_text)
-    except ValueError:
-        return False
-    return any(ip_obj in network for network in allowlist)
-
-
-def _get_admin_user_record(user_id):
-    return query_one(
-        "SELECT id, username, email, full_name, plan FROM users WHERE id=%s",
-        (user_id,),
-    )
-
-
-def _can_view_admin_logs(user):
-    if not user:
-        return False
-    user_email = (user.get("email") or "").strip().lower()
-    user_plan = (user.get("plan") or "").strip().lower()
-    user_record = _get_admin_user_record(user.get("id"))
-    username = ((user_record or {}).get("username") or "").strip().lower()
-
-    allowed_emails = _split_env_values(os.getenv("ADMIN_LOG_VIEWER_EMAILS", "")) or DEFAULT_ADMIN_LOG_EMAILS
-    allowed_usernames = _split_env_values(os.getenv("ADMIN_LOG_VIEWER_USERNAMES", "")) or DEFAULT_ADMIN_LOG_USERNAMES
-
-    return (
-        user_plan == "admin"
-        or user_email in allowed_emails
-        or username in allowed_usernames
-    )
-
-
-def _redact_log_text(text: str):
-    redacted = text
-    redacted = re.sub(r"Bearer\s+[A-Za-z0-9\-_\.]+", "Bearer [REDACTED]", redacted)
-    redacted = re.sub(r'("?(?:password|token|secret|authorization|api[_-]?key)"?\s*[:=]\s*)"[^"]+"', r'\1"[REDACTED]"', redacted, flags=re.IGNORECASE)
-    redacted = re.sub(r"([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})", r"\1***@\2", redacted)
-    return redacted
-
-
-def _tail_text_file(path: str, line_count: int = 200):
-    if not os.path.exists(path):
-        return {"available": False, "path": path, "lines": []}
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        lines = handle.readlines()[-line_count:]
-    return {
-        "available": True,
-        "path": path,
-        "lines": [_redact_log_text(line.rstrip("\n")) for line in lines],
-    }
-
-
-def _database_log_snapshot():
-    summary = {
-        "connections": query_all(
-            """
-            SELECT state, count(*) AS total
-            FROM pg_stat_activity
-            WHERE datname = current_database()
-            GROUP BY state
-            ORDER BY state NULLS LAST
-            """
-        ),
-        "table_counts": {
-            "users": (query_one("SELECT count(*) AS total FROM users") or {}).get("total", 0),
-            "interviews": (query_one("SELECT count(*) AS total FROM interviews") or {}).get("total", 0),
-            "payments": (query_one("SELECT count(*) AS total FROM payments") or {}).get("total", 0),
-            "questions": (query_one("SELECT count(*) AS total FROM questions") or {}).get("total", 0),
-        },
-    }
-    lines = [
-        f"users={summary['table_counts']['users']}",
-        f"interviews={summary['table_counts']['interviews']}",
-        f"payments={summary['table_counts']['payments']}",
-        f"questions={summary['table_counts']['questions']}",
-    ]
-    for row in summary["connections"]:
-        lines.append(f"connections[{row.get('state') or 'unknown'}]={row.get('total')}")
-    return {
-        "available": True,
-        "path": "database diagnostics",
-        "lines": lines,
-        "summary": summary,
-    }
-
-
-@app.route('/api/admin/logs', methods=['GET'])
-@verify_auth_token
-def admin_logs():
-    client_ip = _extract_request_ip()
-    if not _is_allowed_ip(client_ip):
-        return jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403
-    if not _can_view_admin_logs(request.user):
-        return jsonify({"error": "Admin access required"}), 403
-
-    source = (request.args.get("source") or "backend-error").strip().lower()
-    line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
-
-    sources = {
-        "backend-error": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
-        "backend-out": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
-        "database": _database_log_snapshot,
-    }
-
-    resolver = sources.get(source)
-    if not resolver:
-        return jsonify({
-            "error": "Unknown log source",
-            "available_sources": sorted(sources.keys()),
-        }), 400
-
-    payload = resolver()
-    payload.update({
-        "source": source,
-        "requested_by": request.user.get("email"),
-        "client_ip": client_ip,
-    })
-    return jsonify({"success": True, "data": payload})
+ensure_questions_schema()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
@@ -1138,6 +716,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
                 "expected_answer": expected,
                 "difficulty_level": "medium" if difficulty == "coding" else difficulty,
                 "difficulty_category": difficulty,
+                "difficulty_experience": "beginner",
                 "requires_code": difficulty == "coding",
             })
 
@@ -1148,23 +727,11 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
         "questions_count": len(questions),
     }
 
-
-def ollama_ready(timeout_seconds=2):
-    try:
-        response = http_requests.get(
-            os.getenv("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags"),
-            timeout=timeout_seconds,
-        )
-        return response.ok
-    except Exception:
-        return False
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUTH  (replaces the legacy hosted auth layer)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/signup', methods=['POST', 'OPTIONS'])
-@rate_limit(max_calls=5, window_seconds=60)
 def signup():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1207,7 +774,6 @@ def signup():
 
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
-@rate_limit(max_calls=10, window_seconds=60)
 def login():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1457,12 +1023,14 @@ def save_questions():
     questions = data.get('questions', [])
     saved = []
     for q in questions:
+        exp = normalize_difficulty_experience(q.get("difficulty_experience"))
         row = execute(
             "INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, "
-            "difficulty_level, question_set, requires_code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "difficulty_level, difficulty_experience, question_set, requires_code) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (interview_id, data.get('resume_id'), data.get('jd_id'),
              q.get('question_text'), q.get('expected_answer'),
-             q.get('difficulty_level', 'medium'), q.get('question_set', 1),
+             q.get('difficulty_level', 'medium'), exp, q.get('question_set', 1),
              q.get('requires_code', False))
         )
         saved.append(str(row['id']))
@@ -1550,36 +1118,23 @@ def get_chat_history(interview_id):
 @verify_auth_token
 def dashboard():
     user_id = request.user['id']
-    page  = max(1, int(request.args.get('page', 1)))
-    limit = min(50, max(1, int(request.args.get('limit', 20))))
-    offset = (page - 1) * limit
-
-    total_row = query_one("SELECT COUNT(*) AS cnt FROM interviews WHERE user_id=%s", (user_id,))
-    total_interviews = int(total_row['cnt']) if total_row else 0
-
     interviews = query_all(
         "SELECT i.*, jd.title as job_title FROM interviews i "
         "LEFT JOIN job_descriptions jd ON jd.id=i.jd_id "
-        "WHERE i.user_id=%s ORDER BY i.scheduled_at DESC LIMIT %s OFFSET %s",
-        (user_id, limit, offset)
+        "WHERE i.user_id=%s ORDER BY i.scheduled_at DESC",
+        (user_id,)
     )
-    interview_ids = [str(r['id']) for r in interviews]
-    feedbacks = []
-    if interview_ids:
-        placeholders = ','.join(['%s'] * len(interview_ids))
-        feedbacks = query_all(
-            f"SELECT f.* FROM interview_feedback f WHERE f.interview_id IN ({placeholders})",
-            tuple(interview_ids)
-        )
+    feedbacks = query_all(
+        "SELECT f.* FROM interview_feedback f "
+        "JOIN interviews i ON i.id=f.interview_id WHERE i.user_id=%s",
+        (user_id,)
+    )
     return jsonify({
         "success": True,
         "data": {
             "interviews": [dict(r) for r in interviews],
             "feedbacks": [dict(r) for r in feedbacks],
-            "total_interviews": total_interviews,
-            "page": page,
-            "limit": limit,
-            "total_pages": max(1, -(-total_interviews // limit))
+            "total_interviews": len(interviews)
         }
     })
 
@@ -1641,7 +1196,6 @@ def classify_technical_role():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
-@app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def generate_questions():
     if request.method == 'OPTIONS':
@@ -1673,8 +1227,6 @@ def generate_questions():
         try:
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             try:
-                if not ollama_ready():
-                    raise RuntimeError("Ollama is unavailable")
                 from INTERVIEW.Resumeparser import run_pipeline_from_api
                 result = run_pipeline_from_api(
                     resume_path=temp_resume,
@@ -1687,8 +1239,7 @@ def generate_questions():
                     jd_pct=data.get('jd_pct', 50),
                     blend=data.get('blend', False),
                     blend_pct_resume=data.get('blend_pct_resume', 50),
-                    blend_pct_jd=data.get('blend_pct_jd', 50),
-                    max_retries=1,
+                    blend_pct_jd=data.get('blend_pct_jd', 50)
                 )
             except Exception as pipeline_error:
                 print(f"[WARN] Falling back to local question generator: {pipeline_error}")
@@ -1714,7 +1265,6 @@ def generate_questions():
 
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @verify_auth_token
-@user_rate_limit(max_calls=30, window_seconds=60)
 def transcribe_audio():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1749,7 +1299,6 @@ def transcribe_audio():
 
 @app.route('/api/generate-response', methods=['POST'])
 @verify_auth_token
-@user_rate_limit(max_calls=60, window_seconds=60)
 def generate_response():
     try:
         data = request.get_json() or {}
@@ -1762,20 +1311,24 @@ def generate_response():
 
         auth_token = request.headers.get('Authorization', '').split(' ')[-1]
 
-        # Fetch interview data directly (no loopback HTTP call)
-        interview_row = query_one(
-            "SELECT i.*, jd.title, jd.description FROM interviews i "
-            "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s",
-            (interview_id,)
+        # Fetch interview data from our own API
+        resp = http_requests.get(
+            "http://127.0.0.1:5000/api/interview-data",
+            headers={"Authorization": f"Bearer {auth_token}"},
+            params={"interview_id": interview_id},
+            timeout=10
         )
-        if not interview_row:
-            return jsonify({"success": False, "message": "Interview not found"}), 404
-        questions_rows = query_all(
-            "SELECT * FROM questions WHERE interview_id=%s ORDER BY created_at", (interview_id,)
-        )
-        job_title = interview_row['title'] or ''
-        job_description = interview_row['description'] or ''
-        questions = [dict(q) for q in questions_rows]
+        if resp.status_code != 200:
+            return jsonify({"success": False, "message": "Failed to fetch interview data"}), 500
+
+        result = resp.json()
+        if not result.get('success'):
+            return jsonify({"success": False, "message": "Interview data error"}), 500
+
+        interview_data = result['data']
+        job_title = interview_data['job_description']['title']
+        job_description = interview_data['job_description']['description']
+        questions = interview_data['questions']
 
         seen = set()
         core_questions = []
@@ -1794,38 +1347,17 @@ def generate_response():
             "custom_questions": []
         }
 
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
+            json.dump(dynamic_config, tf)
+            config_path = tf.name
+
         user_id = request.user['id']
         instance_key = f"{interview_id}:{user_id}"
+        if instance_key not in interview_instances:
+            interview_instances[instance_key] = InterviewManager(config_path=config_path)
 
-        # Load or create manager using DB-backed session store
-        config_path = None
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
-                json.dump(dynamic_config, tf)
-                config_path = tf.name
-
-            saved_state = load_session(instance_key)
-            manager = InterviewManager(config_path=config_path)
-            if saved_state:
-                manager.__dict__.update({
-                    k: v for k, v in saved_state.items()
-                    if not callable(v) and k not in ('model',)
-                })
-        finally:
-            if config_path and os.path.exists(config_path):
-                os.unlink(config_path)
-
+        manager = interview_instances[instance_key]
         response = manager.receive_input(user_input)
-
-        # Persist updated session state
-        try:
-            serializable = {
-                k: v for k, v in manager.__dict__.items()
-                if isinstance(v, (str, int, float, bool, list, dict, type(None)))
-            }
-            save_session(instance_key, serializable)
-        except Exception as se:
-            print(f"[WARN] Session save failed: {se}")
 
         # Save to chat history
         execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
@@ -1848,62 +1380,46 @@ def generate_response():
                     audio_data = af.read()
                 storage_result = save_bytes(audio_data, folder, filename)
                 audio_url = storage_result['public_url']
-                if os.path.exists(temp_audio):
-                    os.unlink(temp_audio)
+                os.unlink(temp_audio)
+
+                # Save AI response to chat history
+                execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
+                        (interview_id, 'assistant', response_text))
             except Exception as ae:
                 print(f"[WARN] Audio generation failed: {ae}")
-            finally:
-                # Always save AI response to chat history regardless of audio success
-                if response.get("message"):
-                    execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-                            (interview_id, 'assistant', response["message"]))
 
-        # Handle timeout (flag from InterviewManager)
-        if response.get("timeout_detected", False):
-            response["interview_done"] = True
-
-        # Handle interview completion - direct DB writes, no loopback HTTP
+        # Handle interview completion
         feedback_saved = False
         if response.get("interview_done", False):
             try:
                 merged_path = _merge_interview_audio(user_id, interview_id)
                 merged_url = public_url(merged_path) if merged_path else None
 
-                # Save transcript directly
-                execute(
-                    "INSERT INTO transcripts (interview_id, full_transcript, evaluation_data) "
-                    "VALUES (%s, %s, %s) ON CONFLICT (interview_id) DO UPDATE "
-                    "SET full_transcript=EXCLUDED.full_transcript, evaluation_data=EXCLUDED.evaluation_data",
-                    (interview_id,
-                     json.dumps(manager.conversation_history),
-                     json.dumps(getattr(manager, 'final_evaluation_log', None)))
+                transcript_resp = http_requests.post(
+                    "http://127.0.0.1:5000/api/transcripts",
+                    headers={"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"},
+                    json={
+                        "interview_id": interview_id,
+                        "full_transcript": json.dumps(manager.conversation_history),
+                        "evaluation_data": manager.final_evaluation_log
+                    }
                 )
-
-                # Save feedback directly
-                execute(
-                    "INSERT INTO interview_feedback (interview_id, summary, key_strengths, improvement_areas, metrics, audio_url) "
-                    "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (interview_id) DO UPDATE "
-                    "SET summary=EXCLUDED.summary, key_strengths=EXCLUDED.key_strengths, "
-                    "improvement_areas=EXCLUDED.improvement_areas, metrics=EXCLUDED.metrics, audio_url=EXCLUDED.audio_url",
-                    (interview_id,
-                     getattr(manager, 'final_summary', None),
-                     json.dumps(getattr(manager, 'key_strengths', [])),
-                     json.dumps(getattr(manager, 'improvement_areas', [])),
-                     json.dumps(getattr(manager, 'metrics', {})),
-                     merged_url)
-                )
-
-                execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
-
-                # Clean up per-turn audio files after successful merge
-                if merged_path:
-                    per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
-                                if f['name'].startswith(('interviewer_', 'user_'))]
-                    delete_files([f['relative_path'] for f in per_turn])
-
-                # Remove session from store
-                delete_session(instance_key)
-                feedback_saved = True
+                if transcript_resp.status_code in [200, 201]:
+                    feedback_resp = http_requests.post(
+                        "http://127.0.0.1:5000/api/interview-feedback",
+                        headers={"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"},
+                        json={
+                            "interview_id": interview_id,
+                            "summary": manager.final_summary,
+                            "key_strengths": manager.key_strengths,
+                            "improvement_areas": manager.improvement_areas,
+                            "metrics": manager.metrics,
+                            "audio_url": merged_url
+                        }
+                    )
+                    if feedback_resp.status_code in [200, 201]:
+                        execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
+                        feedback_saved = True
             except Exception as se:
                 print(f"[ERROR] Save on completion failed: {se}")
 
@@ -2055,7 +1571,6 @@ def analyze_performance_trends():
 
 
 @app.route('/api/overall-performance', methods=['GET'])
-@app.route('/api/api/overall-performance', methods=['GET'])
 @verify_auth_token
 def overall_performance():
     user_id = request.user['id']
@@ -2067,59 +1582,18 @@ def overall_performance():
 #  CODE EXECUTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sandbox_preexec():
-    """Apply resource limits before exec — Linux only."""
-    try:
-        import resource
-        # Max CPU seconds
-        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        # Max output size 16 MB
-        resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
-        # Max RAM 256 MB
-        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-        # Max open file descriptors
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        # No new processes
-        resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
-    except Exception:
-        pass  # Non-Linux platforms skip silently
-
-
-_CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
-
-# Simple pattern blocklist for obviously dangerous code
-import re as _re
-_DANGER_PATTERNS = _re.compile(
-    r'(import\s+os|import\s+subprocess|import\s+sys|'
-    r'__import__|open\s*\(|exec\s*\(|eval\s*\(|'
-    r'shutil|socket|requests|urllib|http\.client|'
-    r'importlib|ctypes|threading|multiprocessing)',
-    _re.IGNORECASE
-)
-
-
-def _run_code(cmd, code, suffix, timeout=8):
-    if len(code) > _CODE_SIZE_LIMIT:
-        return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
-    if _DANGER_PATTERNS.search(code) and suffix == '.py':
-        return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
+def _run_code(cmd, code, suffix, timeout=10):
     with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
         f.write(code)
         path = f.name
     try:
-        result = subprocess.run(
-            cmd + [path],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            preexec_fn=_sandbox_preexec,
-            env={"PATH": "/usr/bin:/usr/local/bin"}  # Stripped env
-        )
-        output = result.stdout[:50_000]  # Cap output at 50 KB
-        error = result.stderr[:10_000] if result.returncode != 0 else None
-        return jsonify({"success": True, "data": {"output": output, "error": error}})
+        result = subprocess.run(cmd + [path], capture_output=True, text=True, timeout=timeout)
+        return jsonify({"success": True, "data": {
+            "output": result.stdout,
+            "error": result.stderr if result.returncode != 0 else None
+        }})
     except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "message": "Code execution timed out (8s limit)"}), 408
+        return jsonify({"success": False, "message": "Code execution timed out"}), 408
     finally:
         if os.path.exists(path):
             os.unlink(path)
@@ -2237,18 +1711,6 @@ def _normalize_list(value):
     return [value]
 
 
-@app.route('/storage/<path:relative_path>', methods=['GET'])
-def serve_storage_file(relative_path):
-    storage_root = os.getenv("STORAGE_PATH", "/apps/storage")
-    safe_root = os.path.abspath(storage_root)
-    file_path = os.path.abspath(os.path.join(safe_root, relative_path))
-    if not file_path.startswith(f"{safe_root}{os.sep}"):
-        abort(404)
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
-        abort(404)
-    return send_from_directory(safe_root, relative_path, as_attachment=False)
-
-
 def _pairing_key(resume_id, jd_id):
     return f"{resume_id}:{jd_id}"
 
@@ -2258,7 +1720,7 @@ def _serialize_question(row):
     difficulty = data.get('difficulty_level') or data.get('difficulty_category') or 'medium'
     data['difficulty_level'] = difficulty
     data['difficulty_category'] = difficulty
-    data['difficulty_experience'] = data.get('difficulty_experience') or 'beginner'
+    data['difficulty_experience'] = normalize_difficulty_experience(data.get('difficulty_experience'))
     data['question'] = data.get('question_text')
     data['answer'] = data.get('expected_answer')
     return data
@@ -2691,10 +2153,11 @@ def legacy_questions():
     question_set = data.get('question_set', 1)
     saved = []
     for question in data.get('questions', []):
+        exp = normalize_difficulty_experience(question.get("difficulty_experience"))
         row = execute(
             """
-            INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, question_set, requires_code)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, difficulty_experience, question_set, requires_code)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -2704,6 +2167,7 @@ def legacy_questions():
                 question.get('question_text') or question.get('question'),
                 question.get('expected_answer') or question.get('answer'),
                 question.get('difficulty_category') or question.get('difficulty_level') or 'medium',
+                exp,
                 question.get('question_set') or question_set,
                 question.get('requires_code', False),
             ),
@@ -2807,260 +2271,6 @@ def legacy_support_bot_data():
 # ─────────────────────────────────────────────────────────────────────────────
 #  STARTUP
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  TOKEN REFRESH
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route('/api/refresh-token', methods=['POST', 'OPTIONS'])
-@verify_auth_token
-def refresh_token():
-    """Issue a fresh JWT for an already-authenticated user."""
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    user = query_one(
-        'SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s',
-        (request.user['id'],)
-    )
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    token = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
-    return jsonify({'token': token, 'user': serialize_user(user)})
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  PASSWORD RESET
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route('/api/forgot-password', methods=['POST', 'OPTIONS'])
-@rate_limit(max_calls=3, window_seconds=300)
-def forgot_password():
-    """Request a password-reset link. Always returns 200 to prevent email enumeration."""
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    data = request.get_json() or {}
-    email = data.get('email', '').strip().lower()
-    if not email:
-        return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
-    user = query_one(
-        'SELECT id, email, username, full_name FROM users WHERE lower(email)=%s', (email,)
-    )
-    if not user:
-        return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
-    try:
-        execute("""
-            CREATE TABLE IF NOT EXISTS password_reset_tokens (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                token_hash TEXT NOT NULL UNIQUE,
-                expires_at TIMESTAMPTZ NOT NULL,
-                consumed_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ DEFAULT now()
-            )
-        """)
-        # Invalidate old tokens
-        execute(
-            'UPDATE password_reset_tokens SET consumed_at=now() WHERE user_id=%s AND consumed_at IS NULL',
-            (user['id'],)
-        )
-        token = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(token.encode()).hexdigest()
-        execute(
-            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (%s,%s, now() + interval '1 hour')",
-            (user['id'], token_hash)
-        )
-        reset_link = build_public_url('reset-password', token=token)
-        text_body = (
-            f"Hi {user.get('full_name') or user.get('username') or 'there'},\n\n"
-            f"Reset your InterviewCoach password by opening this link:\n{reset_link}\n\n"
-            f"This link expires in 1 hour. If you did not request this, ignore this email."
-        )
-        html_body = (
-            f"<p>Hi {user.get('full_name') or user.get('username') or 'there'},</p>"
-            f"<p>Reset your InterviewCoach password by clicking below:</p>"
-            f"<p><a href=\"{reset_link}\">{reset_link}</a></p>"
-            f"<p>This link expires in 1 hour.</p>"
-        )
-        if smtp_is_configured():
-            send_email('Reset your InterviewCoach password', user['email'], text_body, html_body)
-        else:
-            print(f"[WARN] SMTP not configured. Reset link for {user['email']}: {reset_link}")
-    except Exception as e:
-        print(f"[ERROR] forgot_password: {e}")
-    return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
-
-
-@app.route('/api/forgot-username', methods=['POST', 'OPTIONS'])
-@rate_limit(max_calls=3, window_seconds=300)
-def forgot_username():
-    """Send or return a username reminder for an email address."""
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    data = request.get_json() or {}
-    email = data.get('email', '').strip().lower()
-    generic_message = 'If an account exists, the username reminder has been sent.'
-    if not email:
-        return jsonify({'message': generic_message}), 200
-    user = query_one(
-        'SELECT id, email, username, full_name FROM users WHERE lower(email)=%s', (email,)
-    )
-    if not user:
-        return jsonify({'message': generic_message}), 200
-    try:
-        text_body = (
-            f"Hi {user.get('full_name') or 'there'},\n\n"
-            f"Your InterviewCoach username is: {user['username']}\n\n"
-            f"You can now sign in using either your email or username."
-        )
-        html_body = (
-            f"<p>Hi {user.get('full_name') or 'there'},</p>"
-            f"<p>Your InterviewCoach username is: <strong>{user['username']}</strong></p>"
-            f"<p>You can now sign in using either your email or username.</p>"
-        )
-        if smtp_is_configured():
-            send_email('Your InterviewCoach username', user['email'], text_body, html_body)
-            return jsonify({'message': generic_message, 'delivery': 'email'}), 200
-
-        print(f"[WARN] SMTP not configured. Username reminder for {user['email']}: {user['username']}")
-        return jsonify({
-            'message': generic_message,
-            'delivery': 'manual',
-            'username': user['username'],
-        }), 200
-    except Exception as e:
-        print(f"[ERROR] forgot_username: {e}")
-        return jsonify({'message': generic_message}), 200
-
-
-@app.route('/api/reset-password', methods=['POST', 'OPTIONS'])
-@rate_limit(max_calls=5, window_seconds=300)
-def reset_password():
-    """Consume a reset token and set a new password."""
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    data = request.get_json() or {}
-    token = data.get('token', '').strip()
-    new_password = data.get('password', '')
-    if not token or not new_password:
-        return jsonify({'error': 'Token and new password are required'}), 400
-    if len(new_password) < 8:
-        return jsonify({'error': 'Password must be at least 8 characters'}), 400
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    record = query_one(
-        """
-        SELECT prt.user_id, u.email, u.full_name, u.username, u.plan
-        FROM password_reset_tokens prt
-        JOIN users u ON u.id = prt.user_id
-        WHERE prt.token_hash=%s AND prt.consumed_at IS NULL AND prt.expires_at > now()
-        """,
-        (token_hash,)
-    )
-    if not record:
-        return jsonify({'error': 'Reset link is invalid or has expired'}), 400
-    execute(
-        'UPDATE password_reset_tokens SET consumed_at=now() WHERE token_hash=%s', (token_hash,)
-    )
-    execute(
-        'UPDATE users SET password_hash=%s WHERE id=%s',
-        (hash_password(new_password), record['user_id'])
-    )
-    new_token = create_token(str(record['user_id']), record['email'], record['full_name'], record['plan'])
-    return jsonify({'message': 'Password updated successfully.', 'token': new_token})
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  ACCOUNT DELETION (GDPR)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route('/api/me', methods=['DELETE', 'OPTIONS'])
-@verify_auth_token
-def delete_account():
-    """Permanently delete the authenticated user and all their data."""
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    data = request.get_json() or {}
-    password = data.get('password', '')
-    user_id = request.user['id']
-    user = query_one('SELECT password_hash FROM users WHERE id=%s', (user_id,))
-    if not user or not check_password(password, user['password_hash']):
-        return jsonify({'error': 'Password confirmation failed'}), 403
-    try:
-        # Delete stored audio/resume files
-        audio_files = list_folder(f'audio/{user_id}')
-        if audio_files:
-            delete_files([f['relative_path'] for f in audio_files])
-        resume_rows = query_all('SELECT stored_path FROM resumes WHERE user_id=%s', (user_id,))
-        if resume_rows:
-            delete_files([r['stored_path'] for r in resume_rows if r.get('stored_path')])
-        # Cascade deletes handle all related DB rows
-        execute('DELETE FROM users WHERE id=%s', (user_id,))
-        return jsonify({'success': True, 'message': 'Account deleted.'})
-    except Exception as e:
-        print(f'[ERROR] delete_account: {e}')
-        return jsonify({'error': 'Account deletion failed'}), 500
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  INTERVIEW HISTORY  (paginated)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route('/api/interview-history', methods=['GET'])
-@verify_auth_token
-def interview_history():
-    """Paginated list of the user's past interviews with feedback summaries."""
-    user_id = request.user['id']
-    page  = max(1, int(request.args.get('page', 1)))
-    limit = min(50, max(1, int(request.args.get('limit', 10))))
-    offset = (page - 1) * limit
-
-    total_row = query_one(
-        "SELECT COUNT(*) AS cnt FROM interviews WHERE user_id=%s AND status='ENDED'", (user_id,)
-    )
-    total = int(total_row['cnt']) if total_row else 0
-
-    rows = query_all(
-        """
-        SELECT i.id, i.status, i.scheduled_at, i.attempt_number,
-               jd.title as job_title,
-               f.summary, f.metrics, f.audio_url
-        FROM interviews i
-        LEFT JOIN job_descriptions jd ON jd.id = i.jd_id
-        LEFT JOIN interview_feedback f ON f.interview_id = i.id
-        WHERE i.user_id=%s AND i.status='ENDED'
-        ORDER BY i.scheduled_at DESC
-        LIMIT %s OFFSET %s
-        """,
-        (user_id, limit, offset)
-    )
-    return jsonify({
-        'success': True,
-        'data': [dict(r) for r in rows],
-        'page': page,
-        'limit': limit,
-        'total': total,
-        'total_pages': max(1, -(-total // limit))
-    })
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  SESSION CLEANUP  (admin utility)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route('/api/admin/purge-sessions', methods=['POST'])
-@verify_auth_token
-def admin_purge_sessions():
-    """Purge stale interview sessions older than N hours (admin only)."""
-    if not _can_view_admin_logs(query_one('SELECT * FROM users WHERE id=%s', (request.user['id'],))):
-        return jsonify({'error': 'Forbidden'}), 403
-    hours = int((request.get_json() or {}).get('hours', 24))
-    purge_old_sessions(hours)
-    return jsonify({'success': True, 'message': f'Sessions older than {hours}h purged.'})
-
-import atexit
-from common.db import close_pool
-
-atexit.register(close_pool)
 
 print("[INFO] Scheduling AI warmup...")
 schedule_background_ai_warmup()

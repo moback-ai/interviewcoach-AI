@@ -74,6 +74,7 @@ CREATE TABLE questions (
     question_text TEXT NOT NULL,
     expected_answer TEXT,
     difficulty_level TEXT NOT NULL DEFAULT 'medium',
+    difficulty_experience TEXT NOT NULL DEFAULT 'beginner',
     question_set INTEGER NOT NULL DEFAULT 1,
     requires_code BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT now()
@@ -146,24 +147,3 @@ CREATE TABLE user_files (
     file_size INTEGER,
     created_at TIMESTAMPTZ DEFAULT now()
 );
-
--- Password reset tokens
-CREATE TABLE IF NOT EXISTS password_reset_tokens (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash TEXT NOT NULL UNIQUE,
-    expires_at TIMESTAMPTZ NOT NULL,
-    consumed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_pwd_reset_user ON password_reset_tokens(user_id, expires_at DESC);
-
--- Persistent interview sessions (replaces in-memory dict)
-CREATE TABLE IF NOT EXISTS interview_sessions (
-    session_key TEXT PRIMARY KEY,
-    state_json  JSONB NOT NULL,
-    updated_at  TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_interview_sessions_updated ON interview_sessions(updated_at);
