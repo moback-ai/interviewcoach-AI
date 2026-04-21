@@ -143,6 +143,33 @@ def ensure_auth_schema():
     execute("CREATE INDEX IF NOT EXISTS idx_email_verification_lookup ON email_verification_tokens (user_id, expires_at DESC)")
 
 
+_ALLOWED_DIFFICULTY_EXPERIENCE = frozenset({"beginner", "intermediate", "expert"})
+
+
+def normalize_difficulty_experience(value) -> str:
+    if value is None:
+        return "beginner"
+    normalized = str(value).strip().lower()
+    if normalized in _ALLOWED_DIFFICULTY_EXPERIENCE:
+        return normalized
+    if normalized in {"weak", "junior", "novice"}:
+        return "beginner"
+    if normalized in {"medium", "mid", "strong_mid"}:
+        return "intermediate"
+    if normalized in {"strong", "expert", "senior", "advanced"}:
+        return "expert"
+    return "beginner"
+
+
+def ensure_questions_schema():
+    execute(
+        """
+        ALTER TABLE questions
+        ADD COLUMN IF NOT EXISTS difficulty_experience TEXT NOT NULL DEFAULT 'beginner'
+        """
+    )
+
+
 def serialize_user(user):
     if not user:
         return None
@@ -216,6 +243,7 @@ def get_user_for_auth(identifier: str):
 
 
 ensure_auth_schema()
+ensure_questions_schema()
 
 PUBLIC_DOC_ENDPOINTS = {
     "/api/health",
@@ -1457,12 +1485,13 @@ def save_questions():
     questions = data.get('questions', [])
     saved = []
     for q in questions:
+        exp = normalize_difficulty_experience(q.get("difficulty_experience"))
         row = execute(
             "INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, "
-            "difficulty_level, question_set, requires_code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+            "difficulty_level, difficulty_experience, question_set, requires_code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (interview_id, data.get('resume_id'), data.get('jd_id'),
              q.get('question_text'), q.get('expected_answer'),
-             q.get('difficulty_level', 'medium'), q.get('question_set', 1),
+             q.get('difficulty_level', 'medium'), exp, q.get('question_set', 1),
              q.get('requires_code', False))
         )
         saved.append(str(row['id']))
@@ -1671,6 +1700,12 @@ def generate_questions():
             temp_resume = tf.name
 
         try:
+            resume_text = extract_text_from_uploaded_document(temp_resume, ext)
+            if not resume_text or not resume_text.strip():
+                return jsonify({
+                    "success": False,
+                    "message": "Resume is empty. Please upload a resume with readable content before generating questions."
+                }), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             try:
                 if not ollama_ready():
@@ -1692,7 +1727,6 @@ def generate_questions():
                 )
             except Exception as pipeline_error:
                 print(f"[WARN] Falling back to local question generator: {pipeline_error}")
-                resume_text = extract_text_from_uploaded_document(temp_resume, ext)
                 result = build_local_question_set(job_title, job_description, resume_text, question_counts)
             if not result.get('success'):
                 return jsonify({"success": False, "message": result.get('error', 'Pipeline failed')}), 500
@@ -1713,6 +1747,7 @@ def generate_questions():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
+@app.route('/api/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 @user_rate_limit(max_calls=30, window_seconds=60)
 def transcribe_audio():
@@ -2691,10 +2726,11 @@ def legacy_questions():
     question_set = data.get('question_set', 1)
     saved = []
     for question in data.get('questions', []):
+        exp = normalize_difficulty_experience(question.get("difficulty_experience"))
         row = execute(
             """
-            INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, question_set, requires_code)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, difficulty_experience, question_set, requires_code)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
@@ -2704,6 +2740,7 @@ def legacy_questions():
                 question.get('question_text') or question.get('question'),
                 question.get('expected_answer') or question.get('answer'),
                 question.get('difficulty_category') or question.get('difficulty_level') or 'medium',
+                exp,
                 question.get('question_set') or question_set,
                 question.get('requires_code', False),
             ),

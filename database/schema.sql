@@ -74,6 +74,7 @@ CREATE TABLE questions (
     question_text TEXT NOT NULL,
     expected_answer TEXT,
     difficulty_level TEXT NOT NULL DEFAULT 'medium',
+    difficulty_experience TEXT NOT NULL DEFAULT 'beginner',
     question_set INTEGER NOT NULL DEFAULT 1,
     requires_code BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT now()

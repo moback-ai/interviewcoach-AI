@@ -17,8 +17,18 @@ function getHeaders(isFileUpload = false) {
 
 function buildUrl(endpoint) {
   if (endpoint.startsWith('http')) return endpoint;
-  const clean = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
-  return `${API_BASE.replace(/\/$/, '')}/${clean}`;
+  const normalizedBase = API_BASE.replace(/\/$/, '');
+
+  if (endpoint === '/api' && normalizedBase.endsWith('/api')) {
+    return normalizedBase;
+  }
+
+  if (endpoint.startsWith('/api/') && normalizedBase.endsWith('/api')) {
+    return `${normalizedBase}${endpoint.slice(4)}`;
+  }
+
+  const clean = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return `${normalizedBase}${clean}`;
 }
 
 // ── Core fetch wrapper ────────────────────────────────────────────────────────

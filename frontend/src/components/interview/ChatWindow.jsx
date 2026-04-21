@@ -579,7 +579,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             formData.append('interview_id', interviewId);
           }
 
-          const result = await uploadFile('/api/transcribe-audio', formData);
+          const result = await uploadFile('/transcribe-audio', formData);
           
           console.log('📥 Backend response:', result);
           
