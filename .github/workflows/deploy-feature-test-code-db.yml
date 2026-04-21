@@ -11,6 +11,16 @@ on:
         required: true
         default: main
         type: string
+      branch_details:
+        description: Branch details or release notes
+        required: false
+        default: ""
+        type: string
+      code_review_notes:
+        description: Code review status or notes
+        required: false
+        default: ""
+        type: string
       deploy_target:
         description: Which part should be deployed?
         required: true
@@ -23,21 +33,33 @@ on:
           - database
 
 jobs:
-  deploy:
+  pre_requirements:
     runs-on: ubuntu-latest
-    environment:
-      name: production
-    concurrency:
-      group: deploy-feature-test-code-db-production
-      cancel-in-progress: false
+    outputs:
+      frontend: ${{ steps.targets.outputs.frontend }}
+      backend: ${{ steps.targets.outputs.backend }}
+      database: ${{ steps.targets.outputs.database }}
+      selected_ref: ${{ github.event.inputs.git_ref }}
+      deploy_target: ${{ github.event.inputs.deploy_target }}
 
     steps:
-      - name: Checkout
+      - name: 1. Pre Requirements - Checkout Selected Branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.git_ref }}
 
-      - name: Detect changed areas
+      - name: 1. Pre Requirements - Capture Branch Details and Code Review Notes
+        run: |
+          {
+            echo "## 1. Pre Requirements"
+            echo "- Selected ref: \`${{ github.event.inputs.git_ref }}\`"
+            echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
+            echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
+            echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
+            echo "- Requested by: \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 1. Pre Requirements - Detect Changed Areas
         id: changes
         uses: dorny/paths-filter@v3
         with:
@@ -49,7 +71,7 @@ jobs:
             database:
               - 'database/**'
 
-      - name: Resolve deployment targets
+      - name: 1. Pre Requirements - Resolve Deployment Targets
         id: targets
         run: |
           target="${{ github.event.inputs.deploy_target }}"
@@ -80,46 +102,138 @@ jobs:
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
           echo "database=$database" >> "$GITHUB_OUTPUT"
           echo "Detected targets -> frontend=$frontend backend=$backend database=$database"
+          {
+            echo "### Selected Components"
+            echo "- Frontend: \`$frontend\`"
+            echo "- Backend: \`$backend\`"
+            echo "- Database: \`$database\`"
+            echo "### Changed Areas On Selected Ref"
+            echo "- Frontend files changed: \`${{ steps.changes.outputs.frontend }}\`"
+            echo "- Backend files changed: \`${{ steps.changes.outputs.backend }}\`"
+            echo "- Database files changed: \`${{ steps.changes.outputs.database }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Setup Node
-        if: steps.targets.outputs.frontend == 'true'
+  pre_build:
+    name: 2. Pre Build
+    runs-on: ubuntu-latest
+    needs: pre_requirements
+    steps:
+      - name: 2. Pre Build - Checkout Selected Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.pre_requirements.outputs.selected_ref }}
+
+      - name: 2. Pre Build - Validate Tooling
+        run: |
+          python3 --version
+          node --version
+          npm --version
+          {
+            echo "## 2. Pre Build"
+            echo "- Python, Node, and npm are available on the runner."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: 3. Build
+    runs-on: ubuntu-latest
+    needs: [pre_requirements, pre_build]
+    steps:
+      - name: 3. Build - Checkout Selected Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.pre_requirements.outputs.selected_ref }}
+
+      - name: 3. Build - Setup Node
+        if: needs.pre_requirements.outputs.frontend == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: current
 
-      - name: Build frontend
-        if: steps.targets.outputs.frontend == 'true'
+      - name: 3. Build - Build Frontend
+        if: needs.pre_requirements.outputs.frontend == 'true'
         working-directory: frontend
         run: |
           echo "VITE_API_BASE_URL=/api" > .env
           echo "VITE_STORAGE_URL=/storage" >> .env
           npm install --legacy-peer-deps
           npm run build
+          {
+            echo "## 3. Build"
+            echo "- Frontend build completed successfully."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Require Govardhan approval for non-owner pushes
-        if: github.event_name == 'push' && github.actor != 'govardhanreddy66'
+      - name: 3. Build - Upload Frontend Artifact
+        if: needs.pre_requirements.outputs.frontend == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+      - name: 3. Build - Skip Frontend Build When Not Requested
+        if: needs.pre_requirements.outputs.frontend != 'true'
         run: |
-          echo "This push was made by ${{ github.actor }}."
-          echo "Build completed, but deployment is blocked until Govardhan manually approves by running this workflow."
+          echo "Frontend build skipped because deploy target does not include frontend."
+          {
+            echo "## 3. Build"
+            echo "- Frontend build skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Mark deploy as approved
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
-        run: echo "Deployment approved for actor ${{ github.actor }}."
+  deployment_approval:
+    name: 4. Approval for Deployment
+    runs-on: ubuntu-latest
+    needs: [pre_requirements, pre_build, build]
+    environment:
+      name: production
+    steps:
+      - name: 4. Approval for Deployment - Record Approval
+        run: |
+          echo "Deployment approved for ref ${{ needs.pre_requirements.outputs.selected_ref }} by ${{ github.actor }}."
+          {
+            echo "## 4. Approval for Deployment"
+            echo "- Production deployment approved."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Setup SSH
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+  deploy:
+    name: 5. Environment and 6. Deploy
+    runs-on: ubuntu-latest
+    needs: [pre_requirements, pre_build, build, deployment_approval]
+    concurrency:
+      group: deploy-feature-test-code-db-production
+      cancel-in-progress: false
+
+    steps:
+      - name: 5. Environment - Checkout Selected Branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.pre_requirements.outputs.selected_ref }}
+
+      - name: 5. Environment - Download Frontend Build Artifact
+        if: needs.pre_requirements.outputs.frontend == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: 5. Environment - Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
+          {
+            echo "## 5. Environment"
+            echo "- Selected ref: \`${{ needs.pre_requirements.outputs.selected_ref }}\`"
+            echo "- Frontend host: \`${{ secrets.FRONTEND_HOST }}\`"
+            echo "- Backend host: \`${{ secrets.BACKEND_HOST }}\`"
+            echo "- Deploy target: \`${{ needs.pre_requirements.outputs.deploy_target }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Define SSH options
-        if: github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66'
+      - name: 5. Environment - Define SSH Options
         run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
-      - name: Sync backend source
-        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.backend == 'true'
+      - name: 6. Deploy - Sync Backend Source
+        if: needs.pre_requirements.outputs.backend == 'true'
         run: |
           BACKEND_RELEASE="/apps/backend/releases/${{ github.sha }}"
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
@@ -128,8 +242,8 @@ jobs:
             backend/ \
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
 
-      - name: Configure backend and restart
-        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.backend == 'true'
+      - name: 6. Deploy - Configure Backend and Restart
+        if: needs.pre_requirements.outputs.backend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
@@ -193,8 +307,8 @@ jobs:
           fi
           EOFSSH
 
-      - name: Sync database source
-        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.database == 'true'
+      - name: 6. Deploy - Sync Database Source
+        if: needs.pre_requirements.outputs.database == 'true'
         run: |
           DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
@@ -203,8 +317,8 @@ jobs:
             database/ \
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
 
-      - name: Apply database schema
-        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.database == 'true'
+      - name: 6. Deploy - Apply Database Schema
+        if: needs.pre_requirements.outputs.database == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
@@ -276,16 +390,16 @@ jobs:
           rm -f "$BACKUP_FILE"
           EOFSSH
 
-      - name: Upload frontend build
-        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
+      - name: 6. Deploy - Upload Frontend Build
+        if: needs.pre_requirements.outputs.frontend == 'true'
         run: |
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
             frontend/dist/ \
             ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
 
-      - name: Publish frontend
-        if: (github.event_name == 'workflow_dispatch' || github.actor == 'govardhanreddy66') && steps.targets.outputs.frontend == 'true'
+      - name: 6. Deploy - Publish Frontend
+        if: needs.pre_requirements.outputs.frontend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
@@ -520,3 +634,55 @@ jobs:
             exit 1
           fi
           EOFSSH
+
+  status:
+    name: 7. Status
+    runs-on: ubuntu-latest
+    needs: [pre_requirements, deploy]
+    steps:
+      - name: 7. Status - Report Deployment Status
+        env:
+          FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN }}
+          FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
+        run: |
+          if [ -n "$FRONTEND_DOMAIN" ]; then
+            FRONTEND_ORIGIN="https://$FRONTEND_DOMAIN"
+          else
+            FRONTEND_ORIGIN="http://$FRONTEND_HOST"
+          fi
+
+          {
+            echo "## 7. Status"
+            echo "- Selected ref: \`${{ needs.pre_requirements.outputs.selected_ref }}\`"
+            echo "- Deploy target: \`${{ needs.pre_requirements.outputs.deploy_target }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.pre_requirements.outputs.frontend }}" = "true" ]; then
+            curl -fsS --max-time 15 "$FRONTEND_ORIGIN/" >/dev/null
+            echo "- Frontend check: success ($FRONTEND_ORIGIN/)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ needs.pre_requirements.outputs.backend }}" = "true" ] || [ "${{ needs.pre_requirements.outputs.frontend }}" = "true" ]; then
+            curl -fsS --max-time 15 "$FRONTEND_ORIGIN/api/health" >/dev/null
+            echo "- Backend health check: success ($FRONTEND_ORIGIN/api/health)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ needs.pre_requirements.outputs.database }}" = "true" ]; then
+            echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  merge_to_main_approval:
+    name: 8. Approval for Code Merge to Main Branch Only
+    runs-on: ubuntu-latest
+    needs: [pre_requirements, status]
+    if: ${{ needs.pre_requirements.outputs.selected_ref != 'main' }}
+    environment:
+      name: main-merge-approval
+    steps:
+      - name: 8. Approval for Code Merge to Main Branch Only - Record Approval
+        run: |
+          {
+            echo "## 8. Approval for Code Merge to Main Branch Only"
+            echo "- Branch \`${{ needs.pre_requirements.outputs.selected_ref }}\` is approved for merge review into \`main\`."
+            echo "- This workflow does not merge automatically; it records approval only."
+          } >> "$GITHUB_STEP_SUMMARY"
