@@ -21,6 +21,11 @@ on:
         required: false
         default: ""
         type: string
+      version_audit:
+        description: Check version upgrades before deploy (advisory only)
+        required: true
+        default: true
+        type: boolean
       deploy_target:
         description: Which part should be deployed?
         required: true
@@ -41,6 +46,7 @@ jobs:
       database: ${{ steps.targets.outputs.database }}
       selected_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
+      version_audit: ${{ github.event.inputs.version_audit }}
 
     steps:
       - name: 1. Pre Requirements - Checkout Selected Branch
@@ -131,6 +137,71 @@ jobs:
           {
             echo "## 2. Pre Build"
             echo "- Python, Node, and npm are available on the runner."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Pre Build - Audit Frontend Dependency Versions
+        if: needs.pre_requirements.outputs.version_audit == 'true'
+        working-directory: frontend
+        run: |
+          {
+            echo "### Frontend Version Audit"
+            echo "- package manager: npm"
+            echo "- package file: \`frontend/package.json\`"
+            echo ""
+            echo '```'
+            npm outdated --long || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Pre Build - Audit Backend Dependency Versions
+        if: needs.pre_requirements.outputs.version_audit == 'true'
+        run: |
+          python3 <<'PY'
+          import json
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          requirements = []
+          for raw_line in Path("backend/requirements.txt").read_text().splitlines():
+              line = raw_line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              match = re.match(r"([A-Za-z0-9_.-]+)(==|>=)(.+)", line)
+              if not match:
+                  continue
+              requirements.append((match.group(1), match.group(2), match.group(3).strip()))
+
+          rows = []
+          for package, operator, current in requirements:
+              latest = "unknown"
+              try:
+                  with urllib.request.urlopen(f"https://pypi.org/pypi/{package}/json", timeout=10) as response:
+                      payload = json.load(response)
+                  latest = payload.get("info", {}).get("version", "unknown")
+              except Exception as exc:
+                  latest = f"lookup failed: {exc}"
+              rows.append((package, operator, current, latest))
+
+          with open(Path.home() / "backend_version_audit.md", "w", encoding="utf-8") as handle:
+              handle.write("### Backend Version Audit\n")
+              handle.write("- package manager: pip requirements\n")
+              handle.write("- package file: `backend/requirements.txt`\n\n")
+              handle.write("| Package | Current constraint | Latest on PyPI |\n")
+              handle.write("| --- | --- | --- |\n")
+              for package, operator, current, latest in rows:
+                  handle.write(f"| {package} | {operator}{current} | {latest} |\n")
+          PY
+          cat "$HOME/backend_version_audit.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Pre Build - Note Upgrade Policy
+        if: needs.pre_requirements.outputs.version_audit == 'true'
+        run: |
+          {
+            echo "### Upgrade Policy"
+            echo "- Ubuntu, database engine, and app dependency upgrades are reported here for review."
+            echo "- This workflow does not auto-upgrade production OS packages, RDS/PostgreSQL, or app dependencies."
+            echo "- Apply infrastructure upgrades in a separate approved maintenance window."
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
@@ -231,6 +302,60 @@ jobs:
       - name: 5. Environment - Define SSH Options
         run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+
+      - name: 5. Environment - Audit Target Versions
+        if: needs.pre_requirements.outputs.version_audit == 'true'
+        run: |
+          {
+            echo "### Target Environment Version Audit"
+            echo "- This is advisory only; no upgrades are applied automatically."
+            echo ""
+            echo "#### Backend Host"
+            echo '```'
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+              set -e
+              echo "Hostname: $(hostname)"
+              if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds; fi
+              uname -r
+              python3 --version || true
+              node --version || true
+              npm --version || true
+              pm2 --version || true
+              psql --version || true
+              apt list --upgradable 2>/dev/null | sed -n "1,25p" || true
+            ' || true
+            echo '```'
+            echo ""
+            echo "#### Frontend Host"
+            echo '```'
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+              set -e
+              echo "Hostname: $(hostname)"
+              if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds; fi
+              uname -r
+              node --version || true
+              npm --version || true
+              nginx -v 2>&1 || true
+              apt list --upgradable 2>/dev/null | sed -n "1,25p" || true
+            ' || true
+            echo '```'
+            echo ""
+            echo "#### Database"
+            echo '```'
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+              set -e
+              export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+              psql \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --tuples-only \
+                --no-align \
+                --command="SHOW server_version; SHOW server_version_num;" || true
+            ' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 6. Deploy - Sync Backend Source
         if: needs.pre_requirements.outputs.backend == 'true'
