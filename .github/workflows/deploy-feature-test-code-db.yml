@@ -442,7 +442,7 @@ jobs:
             database/ \
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
 
-      - name: 6. Deploy - Apply Database Schema
+      - name: 6. Deploy - Apply Database Migrations
         if: needs.pre_requirements.outputs.database == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
@@ -510,8 +510,50 @@ jobs:
             --username="${{ secrets.DB_USER }}" \
             --dbname="${{ secrets.DB_NAME }}" \
             --set=ON_ERROR_STOP=1 \
-            --single-transaction \
-            --file="$DATABASE_RELEASE/schema.sql"
+            --command="
+              CREATE TABLE IF NOT EXISTS schema_migrations (
+                filename TEXT PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              );
+            "
+          MIGRATIONS_DIR="$DATABASE_RELEASE/migrations"
+          if [ -d "$MIGRATIONS_DIR" ]; then
+            for migration in $(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort); do
+              filename="$(basename "$migration")"
+              already_applied="$(
+                "$PG_BINDIR/psql" \
+                  --host="${{ secrets.DB_HOST }}" \
+                  --port="${{ secrets.DB_PORT }}" \
+                  --username="${{ secrets.DB_USER }}" \
+                  --dbname="${{ secrets.DB_NAME }}" \
+                  --tuples-only \
+                  --no-align \
+                  --command="SELECT 1 FROM schema_migrations WHERE filename = '$filename' LIMIT 1;"
+              )"
+              if [ "$already_applied" = "1" ]; then
+                echo "Skipping already applied migration: $filename"
+                continue
+              fi
+              echo "Applying migration: $filename"
+              "$PG_BINDIR/psql" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --set=ON_ERROR_STOP=1 \
+                --single-transaction \
+                --file="$migration"
+              "$PG_BINDIR/psql" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --set=ON_ERROR_STOP=1 \
+                --command="INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT (filename) DO NOTHING;"
+            done
+          else
+            echo "No migrations directory found. Skipping database migration step."
+          fi
           rm -f "$BACKUP_FILE"
           EOFSSH
 
