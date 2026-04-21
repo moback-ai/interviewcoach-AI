@@ -1,14 +1,16 @@
-name: Deploy Feature Branch
+name: Manual Deploy
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
-  push:
-    branches:
-      - feature/test-code-DB
   workflow_dispatch:
     inputs:
+      git_ref:
+        description: Branch or tag to deploy
+        required: true
+        default: main
+        type: string
       deploy_target:
         description: Which part should be deployed?
         required: true
@@ -32,6 +34,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.git_ref }}
 
       - name: Detect changed areas
         id: changes
@@ -48,35 +52,29 @@ jobs:
       - name: Resolve deployment targets
         id: targets
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            target="${{ github.event.inputs.deploy_target }}"
-            case "$target" in
-              all)
-                frontend=true
-                backend=true
-                database=true
-                ;;
-              frontend)
-                frontend=true
-                backend=false
-                database=false
-                ;;
-              backend)
-                frontend=false
-                backend=true
-                database=false
-                ;;
-              database)
-                frontend=false
-                backend=false
-                database=true
-                ;;
-            esac
-          else
-            frontend="${{ steps.changes.outputs.frontend }}"
-            backend="${{ steps.changes.outputs.backend }}"
-            database="${{ steps.changes.outputs.database }}"
-          fi
+          target="${{ github.event.inputs.deploy_target }}"
+          case "$target" in
+            all)
+              frontend=true
+              backend=true
+              database=true
+              ;;
+            frontend)
+              frontend=true
+              backend=false
+              database=false
+              ;;
+            backend)
+              frontend=false
+              backend=true
+              database=false
+              ;;
+            database)
+              frontend=false
+              backend=false
+              database=true
+              ;;
+          esac
 
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
