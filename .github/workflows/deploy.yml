@@ -2,7 +2,6 @@ name: Manual Deploy
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  ADMIN_DEPLOY_USERS: govardhanreddy66
   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
   AWS_REGION: ap-south-1
 
@@ -51,35 +50,23 @@ jobs:
       selected_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
       version_audit: ${{ github.event.inputs.version_audit }}
-      actor_authorized: ${{ steps.authorize.outputs.authorized }}
 
     steps:
-      - name: 1. Authorize and Prepare - Authorize Admin Deployment User
-        id: authorize
+      - name: 1. Authorize and Prepare - Record Request
         run: |
-          admin_csv=",${ADMIN_DEPLOY_USERS},"
-          actor=",${{ github.actor }},"
-          triggering_actor=",${{ github.triggering_actor || github.actor }},"
-          if [[ "$admin_csv" != *"$actor"* ]] || [[ "$admin_csv" != *"$triggering_actor"* ]]; then
-            echo "Only admin users can run deployment approvals and deployment workflow steps."
-            echo "Current actor: ${{ github.actor }}"
-            echo "Triggering actor: ${{ github.triggering_actor || github.actor }}"
-            echo "Allowed admin users: ${ADMIN_DEPLOY_USERS}"
-            echo "authorized=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "authorized=true" >> "$GITHUB_OUTPUT"
           {
             echo "## 1. Authorize and Prepare"
-            echo "### Admin Authorization"
-            echo "- Approved actor: \`${{ github.actor }}\`"
-            echo "- Approved triggering actor: \`${{ github.triggering_actor || github.actor }}\`"
+            echo "### Deployment Request"
+            echo "- Requested by: \`${{ github.actor }}\`"
+            echo "- Triggering actor: \`${{ github.triggering_actor || github.actor }}\`"
+            echo "- Deployment will continue only after protected environment approval."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 1. Authorize and Prepare - Checkout Selected Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.git_ref }}
+          fetch-depth: 20
 
       - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
         run: |
@@ -93,8 +80,9 @@ jobs:
 
       - name: 1. Authorize and Prepare - Detect Changed Areas
         id: changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
+          base: ${{ github.event.repository.default_branch }}
           filters: |
             frontend:
               - 'frontend/**'
@@ -149,10 +137,9 @@ jobs:
     name: 2. Build and Audit
     runs-on: ubuntu-latest
     needs: authorize_and_prepare
-    if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     steps:
       - name: 2. Build and Audit - Checkout Selected Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
 
@@ -269,37 +256,28 @@ jobs:
     name: 3. Approval
     runs-on: ubuntu-latest
     needs: [authorize_and_prepare, build_and_audit]
-    if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     environment:
       name: production
     steps:
-      - name: 3. Approval - Confirm Admin Approval
+      - name: 3. Approval - Record Protected Approval
         run: |
-          admin_csv=",${ADMIN_DEPLOY_USERS},"
-          actor=",${{ github.actor }},"
-          triggering_actor=",${{ github.triggering_actor || github.actor }},"
-          if [[ "$admin_csv" != *"$actor"* ]] || [[ "$admin_csv" != *"$triggering_actor"* ]]; then
-            echo "Only admin users can approve and deploy."
-            exit 1
-          fi
           {
             echo "## 3. Approval"
-            echo "- Deployment approved by admin actor \`${{ github.actor }}\`."
-            echo "- Triggering actor \`${{ github.triggering_actor || github.actor }}\` is authorized."
+            echo "- Deployment request approved through the protected \`production\` environment."
+            echo "- Requested by: \`${{ github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy_and_verify:
     name: 4. Deploy and Verify
     runs-on: ubuntu-latest
     needs: [authorize_and_prepare, build_and_audit, deployment_approval]
-    if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     concurrency:
       group: deploy-feature-test-code-db-production
       cancel-in-progress: false
 
     steps:
       - name: 4. Deploy and Verify - Checkout Selected Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
 
@@ -310,15 +288,9 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
-      - name: 4. Deploy and Verify - Recheck Admin Authorization
+      - name: 4. Deploy and Verify - Record Approved Deployment
         run: |
-          admin_csv=",${ADMIN_DEPLOY_USERS},"
-          actor=",${{ github.actor }},"
-          triggering_actor=",${{ github.triggering_actor || github.actor }},"
-          if [[ "$admin_csv" != *"$actor"* ]] || [[ "$admin_csv" != *"$triggering_actor"* ]]; then
-            echo "Only admin users can use deployment credentials."
-            exit 1
-          fi
+          echo "Protected environment approval completed. Starting deployment."
 
       - name: 4. Deploy and Verify - Setup SSH
         run: |
