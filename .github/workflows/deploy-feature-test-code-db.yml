@@ -77,9 +77,10 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 1. Authorize and Prepare - Checkout Selected Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.git_ref }}
+          fetch-depth: 20
 
       - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
         run: |
@@ -93,8 +94,9 @@ jobs:
 
       - name: 1. Authorize and Prepare - Detect Changed Areas
         id: changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
+          base: ${{ github.event.repository.default_branch }}
           filters: |
             frontend:
               - 'frontend/**'
@@ -152,7 +154,7 @@ jobs:
     if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     steps:
       - name: 2. Build and Audit - Checkout Selected Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
 
@@ -299,7 +301,7 @@ jobs:
 
     steps:
       - name: 4. Deploy and Verify - Checkout Selected Branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
 
