@@ -41,7 +41,8 @@ on:
           - database
 
 jobs:
-  pre_requirements:
+  authorize_and_prepare:
+    name: 1. Authorize and Prepare
     runs-on: ubuntu-latest
     outputs:
       frontend: ${{ steps.targets.outputs.frontend }}
@@ -50,32 +51,39 @@ jobs:
       selected_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
       version_audit: ${{ github.event.inputs.version_audit }}
+      actor_authorized: ${{ steps.authorize.outputs.authorized }}
 
     steps:
-      - name: 1. Pre Requirements - Authorize Admin Deployment User
+      - name: 1. Authorize and Prepare - Authorize Admin Deployment User
+        id: authorize
         run: |
           admin_csv=",${ADMIN_DEPLOY_USERS},"
           actor=",${{ github.actor }},"
-          if [[ "$admin_csv" != *"$actor"* ]]; then
+          triggering_actor=",${{ github.triggering_actor || github.actor }},"
+          if [[ "$admin_csv" != *"$actor"* ]] || [[ "$admin_csv" != *"$triggering_actor"* ]]; then
             echo "Only admin users can run deployment approvals and deployment workflow steps."
             echo "Current actor: ${{ github.actor }}"
+            echo "Triggering actor: ${{ github.triggering_actor || github.actor }}"
             echo "Allowed admin users: ${ADMIN_DEPLOY_USERS}"
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
             exit 1
           fi
+          echo "authorized=true" >> "$GITHUB_OUTPUT"
           {
+            echo "## 1. Authorize and Prepare"
             echo "### Admin Authorization"
             echo "- Approved actor: \`${{ github.actor }}\`"
+            echo "- Approved triggering actor: \`${{ github.triggering_actor || github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 1. Pre Requirements - Checkout Selected Branch
+      - name: 1. Authorize and Prepare - Checkout Selected Branch
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.git_ref }}
 
-      - name: 1. Pre Requirements - Capture Branch Details and Code Review Notes
+      - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
         run: |
           {
-            echo "## 1. Pre Requirements"
             echo "- Selected ref: \`${{ github.event.inputs.git_ref }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
             echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
@@ -83,7 +91,7 @@ jobs:
             echo "- Requested by: \`${{ github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 1. Pre Requirements - Detect Changed Areas
+      - name: 1. Authorize and Prepare - Detect Changed Areas
         id: changes
         uses: dorny/paths-filter@v3
         with:
@@ -95,7 +103,7 @@ jobs:
             database:
               - 'database/**'
 
-      - name: 1. Pre Requirements - Resolve Deployment Targets
+      - name: 1. Authorize and Prepare - Resolve Deployment Targets
         id: targets
         run: |
           target="${{ github.event.inputs.deploy_target }}"
@@ -137,28 +145,29 @@ jobs:
             echo "- Database files changed: \`${{ steps.changes.outputs.database }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  pre_build:
-    name: 2. Pre Build
+  build_and_audit:
+    name: 2. Build and Audit
     runs-on: ubuntu-latest
-    needs: pre_requirements
+    needs: authorize_and_prepare
+    if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     steps:
-      - name: 2. Pre Build - Checkout Selected Branch
+      - name: 2. Build and Audit - Checkout Selected Branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.pre_requirements.outputs.selected_ref }}
+          ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
 
-      - name: 2. Pre Build - Validate Tooling
+      - name: 2. Build and Audit - Validate Tooling
         run: |
           python3 --version
           node --version
           npm --version
           {
-            echo "## 2. Pre Build"
+            echo "## 2. Build and Audit"
             echo "- Python, Node, and npm are available on the runner."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Pre Build - Audit Frontend Dependency Versions
-        if: needs.pre_requirements.outputs.version_audit == 'true'
+      - name: 2. Build and Audit - Audit Frontend Dependency Versions
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         working-directory: frontend
         run: |
           {
@@ -171,8 +180,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Pre Build - Audit Backend Dependency Versions
-        if: needs.pre_requirements.outputs.version_audit == 'true'
+      - name: 2. Build and Audit - Audit Backend Dependency Versions
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           python3 <<'PY'
           import json
@@ -212,8 +221,8 @@ jobs:
           PY
           cat "$HOME/backend_version_audit.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Pre Build - Note Upgrade Policy
-        if: needs.pre_requirements.outputs.version_audit == 'true'
+      - name: 2. Build and Audit - Note Upgrade Policy
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           {
             echo "### Upgrade Policy"
@@ -222,24 +231,14 @@ jobs:
             echo "- Apply infrastructure upgrades in a separate approved maintenance window."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  build:
-    name: 3. Build
-    runs-on: ubuntu-latest
-    needs: [pre_requirements, pre_build]
-    steps:
-      - name: 3. Build - Checkout Selected Branch
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.pre_requirements.outputs.selected_ref }}
-
-      - name: 3. Build - Setup Node
-        if: needs.pre_requirements.outputs.frontend == 'true'
+      - name: 2. Build and Audit - Setup Node
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: current
 
-      - name: 3. Build - Build Frontend
-        if: needs.pre_requirements.outputs.frontend == 'true'
+      - name: 2. Build and Audit - Build Frontend
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         working-directory: frontend
         run: |
           echo "VITE_API_BASE_URL=/api" > .env
@@ -247,82 +246,99 @@ jobs:
           npm install --legacy-peer-deps
           npm run build
           {
-            echo "## 3. Build"
             echo "- Frontend build completed successfully."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 3. Build - Upload Frontend Artifact
-        if: needs.pre_requirements.outputs.frontend == 'true'
+      - name: 2. Build and Audit - Upload Frontend Artifact
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
           if-no-files-found: error
 
-      - name: 3. Build - Skip Frontend Build When Not Requested
-        if: needs.pre_requirements.outputs.frontend != 'true'
+      - name: 2. Build and Audit - Skip Frontend Build When Not Requested
+        if: needs.authorize_and_prepare.outputs.frontend != 'true'
         run: |
           echo "Frontend build skipped because deploy target does not include frontend."
           {
-            echo "## 3. Build"
             echo "- Frontend build skipped."
           } >> "$GITHUB_STEP_SUMMARY"
 
   deployment_approval:
-    name: 4. Approval for Deployment
+    name: 3. Approval
     runs-on: ubuntu-latest
-    needs: [pre_requirements, pre_build, build]
+    needs: [authorize_and_prepare, build_and_audit]
+    if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     environment:
       name: production
     steps:
-      - name: 4. Approval for Deployment - Record Approval
+      - name: 3. Approval - Confirm Admin Approval
         run: |
-          echo "Deployment approved for ref ${{ needs.pre_requirements.outputs.selected_ref }} by ${{ github.actor }}."
+          admin_csv=",${ADMIN_DEPLOY_USERS},"
+          actor=",${{ github.actor }},"
+          triggering_actor=",${{ github.triggering_actor || github.actor }},"
+          if [[ "$admin_csv" != *"$actor"* ]] || [[ "$admin_csv" != *"$triggering_actor"* ]]; then
+            echo "Only admin users can approve and deploy."
+            exit 1
+          fi
           {
-            echo "## 4. Approval for Deployment"
-            echo "- Production deployment approved."
+            echo "## 3. Approval"
+            echo "- Deployment approved by admin actor \`${{ github.actor }}\`."
+            echo "- Triggering actor \`${{ github.triggering_actor || github.actor }}\` is authorized."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  deploy:
-    name: 5. Environment and 6. Deploy
+  deploy_and_verify:
+    name: 4. Deploy and Verify
     runs-on: ubuntu-latest
-    needs: [pre_requirements, pre_build, build, deployment_approval]
+    needs: [authorize_and_prepare, build_and_audit, deployment_approval]
+    if: needs.authorize_and_prepare.outputs.actor_authorized == 'true'
     concurrency:
       group: deploy-feature-test-code-db-production
       cancel-in-progress: false
 
     steps:
-      - name: 5. Environment - Checkout Selected Branch
+      - name: 4. Deploy and Verify - Checkout Selected Branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.pre_requirements.outputs.selected_ref }}
+          ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
 
-      - name: 5. Environment - Download Frontend Build Artifact
-        if: needs.pre_requirements.outputs.frontend == 'true'
+      - name: 4. Deploy and Verify - Download Frontend Build Artifact
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
 
-      - name: 5. Environment - Setup SSH
+      - name: 4. Deploy and Verify - Recheck Admin Authorization
+        run: |
+          admin_csv=",${ADMIN_DEPLOY_USERS},"
+          actor=",${{ github.actor }},"
+          triggering_actor=",${{ github.triggering_actor || github.actor }},"
+          if [[ "$admin_csv" != *"$actor"* ]] || [[ "$admin_csv" != *"$triggering_actor"* ]]; then
+            echo "Only admin users can use deployment credentials."
+            exit 1
+          fi
+
+      - name: 4. Deploy and Verify - Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
           {
-            echo "## 5. Environment"
-            echo "- Selected ref: \`${{ needs.pre_requirements.outputs.selected_ref }}\`"
+            echo "## 4. Deploy and Verify"
+            echo "- Selected ref: \`${{ needs.authorize_and_prepare.outputs.selected_ref }}\`"
             echo "- Frontend host: \`${{ secrets.FRONTEND_HOST }}\`"
             echo "- Backend host: \`${{ secrets.BACKEND_HOST }}\`"
-            echo "- Deploy target: \`${{ needs.pre_requirements.outputs.deploy_target }}\`"
+            echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 5. Environment - Define SSH Options
+      - name: 4. Deploy and Verify - Define SSH Options
         run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
-      - name: 5. Environment - Audit Target Versions
-        if: needs.pre_requirements.outputs.version_audit == 'true'
+      - name: 4. Deploy and Verify - Audit Target Versions
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           {
             echo "### Target Environment Version Audit"
@@ -375,8 +391,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 6. Deploy - Sync Backend Source
-        if: needs.pre_requirements.outputs.backend == 'true'
+      - name: 4. Deploy and Verify - Sync Backend Source
+        if: needs.authorize_and_prepare.outputs.backend == 'true'
         run: |
           BACKEND_RELEASE="/apps/backend/releases/${{ github.sha }}"
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
@@ -385,8 +401,8 @@ jobs:
             backend/ \
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
 
-      - name: 6. Deploy - Configure Backend and Restart
-        if: needs.pre_requirements.outputs.backend == 'true'
+      - name: 4. Deploy and Verify - Configure Backend and Restart
+        if: needs.authorize_and_prepare.outputs.backend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
@@ -424,8 +440,8 @@ jobs:
           fi
           EOFSSH
 
-      - name: 6. Deploy - Sync Database Source
-        if: needs.pre_requirements.outputs.database == 'true'
+      - name: 4. Deploy and Verify - Sync Database Source
+        if: needs.authorize_and_prepare.outputs.database == 'true'
         run: |
           DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
@@ -434,8 +450,8 @@ jobs:
             database/ \
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
 
-      - name: 6. Deploy - Apply Database Migrations
-        if: needs.pre_requirements.outputs.database == 'true'
+      - name: 4. Deploy and Verify - Apply Database Migrations
+        if: needs.authorize_and_prepare.outputs.database == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
@@ -549,16 +565,16 @@ jobs:
           rm -f "$BACKUP_FILE"
           EOFSSH
 
-      - name: 6. Deploy - Upload Frontend Build
-        if: needs.pre_requirements.outputs.frontend == 'true'
+      - name: 4. Deploy and Verify - Upload Frontend Build
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
           rsync -avz --delete \
             -e "ssh $SSH_OPTS" \
             frontend/dist/ \
             ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
 
-      - name: 6. Deploy - Publish Frontend
-        if: needs.pre_requirements.outputs.frontend == 'true'
+      - name: 4. Deploy and Verify - Publish Frontend
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
@@ -794,12 +810,7 @@ jobs:
           fi
           EOFSSH
 
-  status:
-    name: 7. Status
-    runs-on: ubuntu-latest
-    needs: [pre_requirements, deploy]
-    steps:
-      - name: 7. Status - Report Deployment Status
+      - name: 4. Deploy and Verify - Report Deployment Status
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
@@ -811,37 +822,21 @@ jobs:
           fi
 
           {
-            echo "## 7. Status"
-            echo "- Selected ref: \`${{ needs.pre_requirements.outputs.selected_ref }}\`"
-            echo "- Deploy target: \`${{ needs.pre_requirements.outputs.deploy_target }}\`"
+            echo "### Deployment Status"
+            echo "- Selected ref: \`${{ needs.authorize_and_prepare.outputs.selected_ref }}\`"
+            echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "${{ needs.pre_requirements.outputs.frontend }}" = "true" ]; then
+          if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
             curl -fsS --max-time 15 "$FRONTEND_ORIGIN/" >/dev/null
             echo "- Frontend check: success ($FRONTEND_ORIGIN/)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [ "${{ needs.pre_requirements.outputs.backend }}" = "true" ] || [ "${{ needs.pre_requirements.outputs.frontend }}" = "true" ]; then
+          if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ] || [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
             curl -fsS --max-time 15 "$FRONTEND_ORIGIN/api/health" >/dev/null
             echo "- Backend health check: success ($FRONTEND_ORIGIN/api/health)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [ "${{ needs.pre_requirements.outputs.database }}" = "true" ]; then
+          if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
             echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
           fi
-
-  merge_to_main_approval:
-    name: 8. Approval for Code Merge to Main Branch Only
-    runs-on: ubuntu-latest
-    needs: [pre_requirements, status]
-    if: ${{ needs.pre_requirements.outputs.selected_ref != 'main' }}
-    environment:
-      name: main-merge-approval
-    steps:
-      - name: 8. Approval for Code Merge to Main Branch Only - Record Approval
-        run: |
-          {
-            echo "## 8. Approval for Code Merge to Main Branch Only"
-            echo "- Branch \`${{ needs.pre_requirements.outputs.selected_ref }}\` is approved for merge review into \`main\`."
-            echo "- This workflow does not merge automatically; it records approval only."
-          } >> "$GITHUB_STEP_SUMMARY"
