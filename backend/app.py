@@ -1814,19 +1814,25 @@ def generate_response():
         job_description = interview_row['description'] or ''
         questions = [dict(q) for q in questions_rows]
 
-        seen = set()
-        core_questions = []
+        seen = {}
         for q in questions:
-            if q['question_text'] not in seen:
-                seen.add(q['question_text'])
-                core_questions.append(q['question_text'])
-        coding_requirement = [q['requires_code'] for q in questions]
+            question_text = (q.get('question_text') or '').strip()
+            if not question_text:
+                continue
+            key = question_text.lower()
+            if key not in seen:
+                seen[key] = {
+                    "question_text": question_text,
+                    "requires_code": bool(q.get('requires_code', False)),
+                    "difficulty_level": q.get('difficulty_level') or q.get('difficulty_category') or 'medium',
+                }
+        core_questions = list(seen.values())
 
         dynamic_config = {
             "job_title": job_title,
             "job_description": job_description,
             "core_questions": core_questions,
-            "coding_requirement": coding_requirement,
+            "coding_requirement": [],
             "time_limit_minutes": 150,
             "custom_questions": []
         }

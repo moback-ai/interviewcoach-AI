@@ -39,6 +39,22 @@ const getStrengthColor = (strength) => {
   }
 };
 
+const normalizeLevel = (level) => {
+  const normalized = String(level || '').trim().toLowerCase();
+  if (normalized === 'beginner' || normalized === 'easy') return 'easy';
+  if (normalized === 'intermediate' || normalized === 'medium' || normalized === 'mid') return 'medium';
+  if (normalized === 'expert' || normalized === 'hard' || normalized === 'advanced') return 'hard';
+  return normalized || 'medium';
+};
+
+const normalizeStrength = (strength) => {
+  const normalized = String(strength || '').trim().toLowerCase();
+  if (normalized === 'weak' || normalized === 'beginner') return 'beginner';
+  if (normalized === 'medium' || normalized === 'intermediate') return 'intermediate';
+  if (normalized === 'strong' || normalized === 'expert' || normalized === 'advanced') return 'expert';
+  return normalized || 'beginner';
+};
+
 
 
 // ... existing mock data and helper functions ...
@@ -544,21 +560,22 @@ export default function QuestionsPage() {
     }
   };
 
-  // Group questions by question_text to show all strength levels together
+  // Group questions by difficulty + text so duplicate text across levels stays separate.
   const groupedQuestions = questions.reduce((acc, item) => {
-    const questionKey = item.question_text; // Use question_text as the key
+    const normalizedLevel = normalizeLevel(item.difficulty_category || item.difficulty_level);
+    const questionKey = `${normalizedLevel}::${item.question_text}`;
     
     if (!acc[questionKey]) {
       acc[questionKey] = {
         question_id: item.id, // Use database ID
         question: item.question_text,
-        level: item.difficulty_category, // Map from database field
+        level: normalizedLevel,
         answers: []
       };
     }
     
     acc[questionKey].answers.push({
-      strength: item.difficulty_experience, // Map from database field
+      strength: normalizeStrength(item.difficulty_experience), // Map from database field
       answer: item.expected_answer || 'No answer provided'
     });
     
@@ -594,9 +611,10 @@ export default function QuestionsPage() {
 
   const filteredQuestions = sortQuestionsByDifficulty(
     sortedGroupedQuestions.filter(q => {
-    const matchesLevel = filterLevel === 'all' || q.level === filterLevel;
+    const matchesLevel = filterLevel === 'all' || normalizeLevel(q.level) === normalizeLevel(filterLevel);
     const matchesSearch = q.question.toLowerCase().includes(searchTerm.toLowerCase());
-    return matchesLevel && matchesSearch;
+    const matchesStrength = filterStrength === 'all' || q.answers.some((answer) => normalizeStrength(answer.strength) === normalizeStrength(filterStrength));
+    return matchesLevel && matchesSearch && matchesStrength;
     })
   );
 
