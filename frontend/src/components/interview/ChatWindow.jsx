@@ -9,8 +9,9 @@ import { useChatHistory } from '../../hooks/useChatHistory';
 import { trackEvents } from '../../services/mixpanel';
 import CodeEditorPopup from './CodeEditorPopup';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaDevices';
+import { canUseBrowserSpeech, chooseBrowserVoice, getInterviewerVoicePreset } from '../../utils/interviewerVoices';
 
-function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange }) {
+function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange, selectedVoiceId = 'server_default' }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isButtonDisabled, setIsButtonDisabled] = useState(false);
   const mediaRecorderRef = useRef(null);
@@ -25,8 +26,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   // Add this state for loading
   const [isEndingInterview, setIsEndingInterview] = useState(false);
   const [currentAudioElement, setCurrentAudioElement] = useState(null);
+  const speechUtteranceRef = useRef(null);
   const [canEndInterview, setCanEndInterview] = useState(false); // Start disabled
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
+  const [browserVoices, setBrowserVoices] = useState([]);
+  const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
   
   // ✅ NEW: Add state for timeout modal
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
@@ -58,20 +62,40 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
   // Cleanup function to stop media stream when component unmounts
   useEffect(() => {
+    if (!canUseBrowserSpeech()) return undefined;
+
+    const loadVoices = () => {
+      const availableVoices = window.speechSynthesis.getVoices();
+      if (availableVoices.length > 0) {
+        setBrowserVoices(availableVoices);
+      }
+    };
+
+    loadVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
+
+    return () => {
+      window.speechSynthesis.removeEventListener?.('voiceschanged', loadVoices);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
-      // ✅ NEW: Clean up audio state
       if (currentAudioElement) {
         currentAudioElement.pause();
         currentAudioElement.currentTime = 0;
       }
+      if (canUseBrowserSpeech()) {
+        window.speechSynthesis.cancel();
+      }
+      speechUtteranceRef.current = null;
       setIsAudioPlaying(false);
       setCurrentAudioElement(null);
-      // ✅ FIXED: Don't unconditionally enable button - let stage logic handle it
     };
-  }, []);
+  }, [currentAudioElement, setIsAudioPlaying]);
 
   // Debug loading state changes
   useEffect(() => {
@@ -88,6 +112,112 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       });
     }
   }, [isRecording, isResponseInProgress, canEndInterview, onStateChange]);
+
+  const deleteGeneratedAudio = useCallback(async (audioUrl, shouldDeleteAudio) => {
+    if (!audioUrl || !shouldDeleteAudio) return;
+
+    try {
+      await apiDelete('/api/delete-audio', {
+        body: { audio_url: audioUrl }
+      });
+    } catch (error) {
+      console.error('❌ Failed to delete audio file:', error);
+    }
+  }, []);
+
+  const speakWithBrowserVoice = useCallback((text) => new Promise((resolve, reject) => {
+    if (!canUseBrowserSpeech()) {
+      reject(new Error('Browser speech synthesis is unavailable'));
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new window.SpeechSynthesisUtterance(text);
+    const selectedVoice = chooseBrowserVoice(browserVoices, selectedVoiceId);
+
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice.lang;
+    }
+
+    utterance.rate = activeVoicePreset.rate;
+    utterance.pitch = activeVoicePreset.pitch;
+    utterance.volume = 1;
+    speechUtteranceRef.current = utterance;
+
+    utterance.onend = () => {
+      speechUtteranceRef.current = null;
+      resolve();
+    };
+
+    utterance.onerror = (event) => {
+      speechUtteranceRef.current = null;
+      reject(new Error(event.error || 'Speech synthesis failed'));
+    };
+
+    window.speechSynthesis.speak(utterance);
+  }), [activeVoicePreset.pitch, activeVoicePreset.rate, browserVoices, selectedVoiceId]);
+
+  const playServerAudio = useCallback((audioUrl) => new Promise((resolve, reject) => {
+    const audio = new Audio(audioUrl);
+    audio.preload = 'auto';
+    setCurrentAudioElement(audio);
+
+    const cleanupAudio = () => {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.oncanplaythrough = null;
+    };
+
+    const startPlayback = () => {
+      audio.play().catch((error) => {
+        cleanupAudio();
+        reject(error);
+      });
+    };
+
+    if (audio.readyState >= 2) {
+      startPlayback();
+    } else {
+      audio.oncanplaythrough = startPlayback;
+      setTimeout(() => {
+        if (audio.readyState >= 2) {
+          startPlayback();
+        }
+      }, 100);
+    }
+
+    audio.onended = () => {
+      cleanupAudio();
+      resolve();
+    };
+
+    audio.onerror = (error) => {
+      cleanupAudio();
+      reject(error);
+    };
+  }), []);
+
+  const playInterviewerResponseAudio = useCallback(async (textResponse, audioUrl, shouldDeleteAudio) => {
+    if (!audioUrl && !(activeVoicePreset.mode === 'browser' && canUseBrowserSpeech())) {
+      return;
+    }
+
+    setIsAudioPlaying(true);
+
+    try {
+      if (activeVoicePreset.mode === 'browser' && canUseBrowserSpeech()) {
+        await speakWithBrowserVoice(textResponse);
+      } else if (audioUrl) {
+        await playServerAudio(audioUrl);
+      }
+    } finally {
+      setIsAudioPlaying(false);
+      setCurrentAudioElement(null);
+      await deleteGeneratedAudio(audioUrl, shouldDeleteAudio);
+    }
+  }, [activeVoicePreset.mode, deleteGeneratedAudio, playServerAudio, setIsAudioPlaying, speakWithBrowserVoice]);
 
   // Function to call Interview Manager API
   const callInterviewManager = async (userInput) => {
@@ -180,119 +310,20 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           }
         }
         
-        // ✅ FIXED: Preload audio first, then show text and play simultaneously
-        if (audio_url) {
-          console.log('🔊 Preloading audio response:', audio_url);
-          const audio = new Audio(audio_url);
-          
-          // Preload the audio
-          audio.preload = 'auto';
-          
-          // ✅ FIX: Add flag to prevent duplicate message addition
-          let messageAdded = false;
-          
-          // Wait for audio to be ready, then show text and play simultaneously
-          const playAudioWhenReady = () => {
-            // ✅ Prevent duplicate calls
-            if (messageAdded) {
-              console.log('⚠️ playAudioWhenReady already called, skipping duplicate');
-              return;
-            }
-            messageAdded = true;
-            
-            // ✅ Remove thinking message right before showing the response
-            setConversation(prev => {
-              const filtered = prev.filter(msg => !msg.isThinking);
-              return filtered;
-            });
-            
-            // Add message and start playing at the same time
-            addMessageToConversation('interviewer', textResponse).then(() => {
-              console.log('✅ Interviewer response added, starting audio playback');
-              
-              // Track audio playback state
-              setIsAudioPlaying(true);
-              setCurrentAudioElement(audio);
-              
-              // Start playing immediately
-              audio.play().catch(error => {
-                console.error('❌ Failed to play audio:', error);
-                setIsAudioPlaying(false);
-                setCurrentAudioElement(null);
-                setIsResponseInProgress(false);
-              });
-            });
-          };
-          
-          // If audio is already loaded, play immediately
-          if (audio.readyState >= 2) { // HAVE_CURRENT_DATA or higher
-            playAudioWhenReady();
-          } else {
-            // Wait for audio to be ready
-            audio.addEventListener('canplaythrough', playAudioWhenReady, { once: true });
-            
-            // Fallback: if canplaythrough doesn't fire, wait a bit then play
-            setTimeout(() => {
-              if (audio.readyState >= 2 && !messageAdded) {
-                playAudioWhenReady();
-              }
-            }, 100);
-          }
-          
-          // ✅ NEW: Delete audio file after playback
-          audio.onended = async () => {
-            console.log('✅ Audio playback completed');
-            setIsAudioPlaying(false);
-            setCurrentAudioElement(null);
-            setIsResponseInProgress(false);
-            
-            if (should_delete_audio) {
-              try {
-                console.log('🗑️ Deleting audio file after playback...');
-                console.log('🗑️ Audio URL to delete:', audio_url);
-                
-                await apiDelete('/api/delete-audio', {
-                  body: { audio_url }
-                });
-                console.log('✅ Audio file deleted successfully');
-              } catch (error) {
-                console.error('❌ Failed to delete audio file:', error);
-                console.error('❌ Error details:', error.message);
-              }
-            } else {
-              console.log('ℹ️ Audio deletion skipped (should_delete_audio is false)');
-            }
-          };
-          
-          // ✅ NEW: Handle audio play errors
-          audio.onerror = (error) => {
+        setConversation(prev => prev.filter(msg => !msg.isThinking));
+        await addMessageToConversation('interviewer', textResponse);
+
+        if (audio_url || activeVoicePreset.mode === 'browser') {
+          try {
+            await playInterviewerResponseAudio(textResponse, audio_url, should_delete_audio);
+          } catch (error) {
             console.error('❌ Audio playback failed:', error);
-            setIsAudioPlaying(false);
-            setCurrentAudioElement(null);
-            setIsResponseInProgress(false);
-            
-            // ✅ Remove thinking message before showing text
-            setConversation(prev => {
-              const filtered = prev.filter(msg => !msg.isThinking);
-              return filtered;
-            });
-            
-            // Still show the text even if audio fails
-            addMessageToConversation('interviewer', textResponse);
-          };
+          }
         } else {
           console.log('ℹ️ No audio URL provided in response');
-          
-          // ✅ Remove thinking message before showing text
-          setConversation(prev => {
-            const filtered = prev.filter(msg => !msg.isThinking);
-            return filtered;
-          });
-          
-          // No audio, just show text
-          await addMessageToConversation('interviewer', textResponse);
-          setIsResponseInProgress(false);
         }
+
+        setIsResponseInProgress(false);
       } else {
         console.error('❌ Interview Manager API error:', response.message);
       }
@@ -379,139 +410,30 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             }
           }
           
-          // ✅ FIXED: Preload audio first, then show text and play simultaneously
-          if (audio_url) {
-            console.log('🔊 Preloading final audio response:', audio_url);
-            const audio = new Audio(audio_url);
-            
-            // Preload the audio
-            audio.preload = 'auto';
-            
-            // Wait for audio to be ready, then show text and play simultaneously
-            const playFinalAudioWhenReady = () => {
-              // ✅ Remove thinking message right before showing the final response
-              setConversation(prev => {
-                const filtered = prev.filter(msg => !msg.isThinking);
-                return filtered;
-              });
-              
-              // Add final message and start playing at the same time
-              const finalMessage = {
-                id: Date.now(),
-                speaker: 'interviewer',
-                message: textResponse,
-                timestamp: new Date().toLocaleTimeString()
-              };
-              setConversation(prev => [...prev, finalMessage]);
-              
-              console.log('✅ Final response added, starting audio playback');
-              
-              // Track final audio playback state
-              setIsAudioPlaying(true);
-              setCurrentAudioElement(audio);
-              setCanEndInterview(false); // Disable end interview button while final audio plays
-              
-              // Start playing immediately
-              audio.play().catch(error => {
-                console.error('❌ Failed to play final audio:', error);
-                setIsAudioPlaying(false);
-                setCurrentAudioElement(null);
-                // Still redirect even if audio fails
-                if (interview_done) {
-                  window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-                }
-              });
-            };
-            
-            // If audio is already loaded, play immediately
-            if (audio.readyState >= 2) { // HAVE_CURRENT_DATA or higher
-              playFinalAudioWhenReady();
-            } else {
-              // Wait for audio to be ready
-              audio.addEventListener('canplaythrough', playFinalAudioWhenReady, { once: true });
-              
-              // Fallback: if canplaythrough doesn't fire, wait a bit then play
-              setTimeout(() => {
-                if (audio.readyState >= 2) {
-                  playFinalAudioWhenReady();
-                }
-              }, 100);
-            }
-            
-            audio.onended = async () => {
-              console.log('✅ Final audio playback completed');
-              setIsAudioPlaying(false);
-              setCurrentAudioElement(null);
-              setCanEndInterview(true); // Re-enable end interview button
-              
-              if (should_delete_audio) {
-                try {
-                  console.log('🗑️ Deleting final audio file after playback...');
-                  console.log('🗑️ Final audio URL to delete:', audio_url);
-                  
-                  await apiDelete('/api/delete-audio', {
-                    body: { audio_url }
-                  });
-                  console.log('✅ Final audio file deleted successfully');
-                } catch (error) {
-                  console.error('❌ Failed to delete final audio file:', error);
-                  console.error('❌ Error details:', error.message);
-                }
-              }
-              
-              // ✅ NEW: Redirect to feedback page after audio finishes
-              if (interview_done) {
-                console.log('🎯 Interview completed, redirecting to feedback...');
-                
-                // Add a small delay to ensure audio deletion completes
-                setTimeout(() => {
-                  window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-                }, 1000);
-              }
-            };
-            
-            // Handle audio errors
-            audio.onerror = (error) => {
+          setConversation(prev => prev.filter(msg => !msg.isThinking));
+          const finalMessage = {
+            id: Date.now(),
+            speaker: 'interviewer',
+            message: textResponse,
+            timestamp: new Date().toLocaleTimeString()
+          };
+          setConversation(prev => [...prev, finalMessage]);
+
+          if (audio_url || activeVoicePreset.mode === 'browser') {
+            setCanEndInterview(false);
+            try {
+              await playInterviewerResponseAudio(textResponse, audio_url, should_delete_audio);
+            } catch (error) {
               console.error('❌ Final audio playback failed:', error);
-              setIsAudioPlaying(false);
-              setCurrentAudioElement(null);
-              
-              // ✅ Remove thinking message before showing text
-              setConversation(prev => {
-                const filtered = prev.filter(msg => !msg.isThinking);
-                return filtered;
-              });
-              
-              // Still show the text even if audio fails
-              const finalMessage = {
-                id: Date.now(),
-                speaker: 'interviewer',
-                message: textResponse,
-                timestamp: new Date().toLocaleTimeString()
-              };
-              setConversation(prev => [...prev, finalMessage]);
-              // Redirect if interview is done
-              if (interview_done) {
-                window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-              }
-            };
-          } else if (interview_done) {
-            // ✅ Remove thinking message before showing final message
-            setConversation(prev => {
-              const filtered = prev.filter(msg => !msg.isThinking);
-              return filtered;
-            });
-            
-            // ✅ NEW: If no audio but interview is done, show message and redirect immediately
-            const finalMessage = {
-              id: Date.now(),
-              speaker: 'interviewer',
-              message: textResponse,
-              timestamp: new Date().toLocaleTimeString()
-            };
-            setConversation(prev => [...prev, finalMessage]);
-            console.log('🎯 Interview completed (no audio), redirecting to feedback...');
-            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+            } finally {
+              setCanEndInterview(true);
+            }
+          }
+
+          if (interview_done) {
+            setTimeout(() => {
+              window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+            }, 600);
           }
           
         } else {
@@ -1049,139 +971,30 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           }
         }
         
-        // ✅ FIXED: Preload audio first, then show text and play simultaneously
-        if (audio_url) {
-          console.log('🔊 Preloading final audio response:', audio_url);
-          const audio = new Audio(audio_url);
-          
-          // Preload the audio
-          audio.preload = 'auto';
-          
-          // Wait for audio to be ready, then show text and play simultaneously
-          const playFinalAudioWhenReady = () => {
-            // ✅ Remove thinking message right before showing the final response
-            setConversation(prev => {
-              const filtered = prev.filter(msg => !msg.isThinking);
-              return filtered;
-            });
-            
-            // Add final message and start playing at the same time
-            const finalMessage = {
-              id: Date.now(),
-              speaker: 'interviewer',
-              message: textResponse,
-              timestamp: new Date().toLocaleTimeString()
-            };
-            setConversation(prev => [...prev, finalMessage]);
-            
-            console.log('✅ Final response added, starting audio playback');
-            
-            // Track final audio playback state
-            setIsAudioPlaying(true);
-            setCurrentAudioElement(audio);
-            setCanEndInterview(false); // Disable end interview button while final audio plays
-            
-            // Start playing immediately
-            audio.play().catch(error => {
-              console.error('❌ Failed to play final audio:', error);
-              setIsAudioPlaying(false);
-              setCurrentAudioElement(null);
-              // Still redirect even if audio fails
-              if (interview_done) {
-                window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-              }
-            });
-          };
-          
-          // If audio is already loaded, play immediately
-          if (audio.readyState >= 2) { // HAVE_CURRENT_DATA or higher
-            playFinalAudioWhenReady();
-          } else {
-            // Wait for audio to be ready
-            audio.addEventListener('canplaythrough', playFinalAudioWhenReady, { once: true });
-            
-            // Fallback: if canplaythrough doesn't fire, wait a bit then play
-            setTimeout(() => {
-              if (audio.readyState >= 2) {
-                playFinalAudioWhenReady();
-              }
-            }, 100);
-          }
-          
-          audio.onended = async () => {
-            console.log('✅ Final audio playback completed');
-            setIsAudioPlaying(false);
-            setCurrentAudioElement(null);
-            setCanEndInterview(true); // Re-enable end interview button
-            
-            if (should_delete_audio) {
-              try {
-                console.log('🗑️ Deleting final audio file after playback...');
-                console.log('🗑️ Final audio URL to delete:', audio_url);
-                
-                await apiDelete('/api/delete-audio', {
-                  body: { audio_url }
-                });
-                console.log('✅ Final audio file deleted successfully');
-              } catch (error) {
-                console.error('❌ Failed to delete final audio file:', error);
-                console.error('❌ Error details:', error.message);
-              }
-            }
-            
-            // ✅ NEW: Redirect to feedback page after audio finishes
-            if (interview_done) {
-              console.log('🎯 Interview completed, redirecting to feedback...');
-              
-              // Add a small delay to ensure audio deletion completes
-              setTimeout(() => {
-                window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-              }, 1000);
-            }
-          };
-          
-          // Handle audio errors
-          audio.onerror = (error) => {
+        setConversation(prev => prev.filter(msg => !msg.isThinking));
+        const finalMessage = {
+          id: Date.now(),
+          speaker: 'interviewer',
+          message: textResponse,
+          timestamp: new Date().toLocaleTimeString()
+        };
+        setConversation(prev => [...prev, finalMessage]);
+
+        if (audio_url || activeVoicePreset.mode === 'browser') {
+          setCanEndInterview(false);
+          try {
+            await playInterviewerResponseAudio(textResponse, audio_url, should_delete_audio);
+          } catch (error) {
             console.error('❌ Final audio playback failed:', error);
-            setIsAudioPlaying(false);
-            setCurrentAudioElement(null);
-            
-            // ✅ Remove thinking message before showing text
-            setConversation(prev => {
-              const filtered = prev.filter(msg => !msg.isThinking);
-              return filtered;
-            });
-            
-            // Still show the text even if audio fails
-            const finalMessage = {
-              id: Date.now(),
-              speaker: 'interviewer',
-              message: textResponse,
-              timestamp: new Date().toLocaleTimeString()
-            };
-            setConversation(prev => [...prev, finalMessage]);
-            // Redirect if interview is done
-            if (interview_done) {
-              window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-            }
-          };
-        } else if (interview_done) {
-          // ✅ Remove thinking message before showing final message
-          setConversation(prev => {
-            const filtered = prev.filter(msg => !msg.isThinking);
-            return filtered;
-          });
-          
-          // ✅ NEW: If no audio but interview is done, show message and redirect immediately
-          const finalMessage = {
-            id: Date.now(),
-            speaker: 'interviewer',
-            message: textResponse,
-            timestamp: new Date().toLocaleTimeString()
-          };
-          setConversation(prev => [...prev, finalMessage]);
-          console.log('🎯 Interview completed (no audio), redirecting to feedback...');
-          window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+          } finally {
+            setCanEndInterview(true);
+          }
+        }
+
+        if (interview_done) {
+          setTimeout(() => {
+            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+          }, 600);
         }
         
       } else {

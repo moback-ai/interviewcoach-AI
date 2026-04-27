@@ -11,6 +11,9 @@
   --color-border: #E2E8F0; /* Softer border */
   --color-card: #ffffff;
   --color-input-bg: #f0f0f0; 
+  --color-surface-glow: rgba(51, 102, 255, 0.16);
+  --color-surface-shadow: 0 30px 80px rgba(15, 23, 42, 0.08);
+  --color-grid: rgba(148, 163, 184, 0.12);
 }
 
 .dark {
@@ -24,13 +27,84 @@
   --color-border: #2C2F36;
   --color-card: #1C1F26;
   --color-input-bg: #1f2937; 
+  --color-surface-glow: rgba(102, 153, 255, 0.18);
+  --color-surface-shadow: 0 30px 80px rgba(2, 6, 23, 0.34);
+  --color-grid: rgba(148, 163, 184, 0.08);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background-color: var(--color-bg);
   color: var(--color-text-primary);
   font-family: 'Poppins', sans-serif;
-  transition: all 0.3s ease;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  background-image:
+    radial-gradient(circle at top, rgba(59, 130, 246, 0.10), transparent 32%),
+    radial-gradient(circle at 85% 15%, rgba(103, 197, 232, 0.12), transparent 24%);
+  min-height: 100vh;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black 24%, transparent 78%);
+  opacity: 0.45;
+  z-index: -1;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-primary) 25%, transparent);
+  color: var(--color-text-primary);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.glass-panel {
+  background: color-mix(in srgb, var(--color-card) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  box-shadow: var(--color-surface-shadow);
+  backdrop-filter: blur(18px);
+}
+
+.ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(circle, var(--color-surface-glow), transparent 70%);
+  filter: blur(10px);
+  pointer-events: none;
+}
+
+.floating-card {
+  animation: float-card 8s ease-in-out infinite;
+}
+
+.interview-grid-bg {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--color-border) 40%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--color-border) 35%, transparent) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+@keyframes float-card {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -10px, 0);
+  }
 }
 
 /* Custom Slider Styles - Light Theme */
@@ -147,4 +221,19 @@ body {
 
 .animate-shimmer {
   animation: shimmer 2s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
