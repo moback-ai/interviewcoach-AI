@@ -771,7 +771,16 @@ jobs:
           sudo ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
           sudo nginx -t
           sudo systemctl reload nginx
-          if ! curl -fsS --max-time 10 http://127.0.0.1/ >/dev/null || ! curl -fsS --max-time 10 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
+          frontend_check() {
+            if [ -n "$APP_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]; then
+              curl -kfsS --max-time 10 \
+                --resolve "$APP_DOMAIN:443:127.0.0.1" \
+                "https://$APP_DOMAIN/index.html" >/dev/null
+            else
+              curl -fsS --max-time 10 http://127.0.0.1/index.html >/dev/null
+            fi
+          }
+          if ! frontend_check || ! curl -fsS --max-time 10 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
             if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
               echo "Rolling back frontend to $PREVIOUS_RELEASE"
               sudo ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
