@@ -64,7 +64,10 @@ function Navbar({ disableNavigation = false }) {
   };
 
   return (
-    <header className="sticky top-0 z-50 bg-[var(--color-bg)] border-b border-[var(--color-border)]">
+    <header
+      className="sticky top-0 z-50 border-b border-[var(--color-border)]/60 backdrop-blur-xl"
+      style={{ backgroundColor: 'color-mix(in srgb, var(--color-bg) 76%, transparent)' }}
+    >
       <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-3 sm:py-4 flex items-center justify-between">
         {/* Logo */}
         {disableNavigation ? (
@@ -72,13 +75,13 @@ function Navbar({ disableNavigation = false }) {
             Interview<span className="text-[var(--color-text-secondary)]">Coach</span>
           </span>
         ) : (
-          <Link to="/" className="text-lg sm:text-xl md:text-2xl font-bold text-[var(--color-primary)] tracking-tight hover:opacity-90 transition-opacity duration-200">
+          <Link to="/" className="text-lg sm:text-xl md:text-2xl font-bold text-[var(--color-primary)] tracking-tight hover:opacity-90 transition-all duration-300">
             Interview<span className="text-[var(--color-accent)]">Coach</span>
           </Link>
         )}
 
         {/* Desktop Nav */}
-        <nav className="hidden md:flex space-x-4 lg:space-x-6 text-sm font-medium">
+        <nav className="hidden md:flex items-center space-x-4 lg:space-x-6 text-sm font-medium">
           {renderNavLink("/", "Home")}
           {user && renderNavLink("/dashboard", "Dashboard")}
           {renderNavLink("/upload", "Upload")}
