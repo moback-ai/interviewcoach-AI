@@ -557,11 +557,22 @@ jobs:
           PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
           NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
+          APP_DOMAIN_WWW=""
           BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
           BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
           BACKEND_PROXY_HOST="127.0.0.1:5001"
           sudo mkdir -p "$RELEASES_DIR"
           sudo rsync -av --delete /tmp/frontend-dist/ "$NEW_RELEASE/"
+          if [ -z "$APP_DOMAIN" ]; then
+            DETECTED_CERT_DIR="$(find /etc/letsencrypt/live -mindepth 1 -maxdepth 1 -type d ! -name 'README' | head -n 1 || true)"
+            if [ -n "$DETECTED_CERT_DIR" ]; then
+              APP_DOMAIN="$(basename "$DETECTED_CERT_DIR")"
+              echo "FRONTEND_DOMAIN secret missing, auto-detected HTTPS domain: $APP_DOMAIN"
+            fi
+          fi
+          if [ -n "$APP_DOMAIN" ]; then
+            APP_DOMAIN_WWW="www.$APP_DOMAIN"
+          fi
           cat > "$BACKEND_TUNNEL_KEY" <<'KEYEOF'
           ${{ secrets.EC2_SSH_KEY }}
           KEYEOF
@@ -591,13 +602,13 @@ jobs:
             {
               echo "server {"
               echo "    listen 80;"
-              echo "    server_name $APP_DOMAIN;"
+              echo "    server_name $APP_DOMAIN $APP_DOMAIN_WWW;"
               echo '    return 301 https://$host$request_uri;'
               echo "}"
               echo
               echo "server {"
               echo "    listen 443 ssl http2;"
-              echo "    server_name $APP_DOMAIN;"
+              echo "    server_name $APP_DOMAIN $APP_DOMAIN_WWW;"
               echo
               echo "    ssl_certificate /etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem;"
               echo "    ssl_certificate_key /etc/letsencrypt/live/$APP_DOMAIN/privkey.pem;"
