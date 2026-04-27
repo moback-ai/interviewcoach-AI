@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { PhoneOff } from 'lucide-react';
+import { Sparkles, Waves, Mic2 } from 'lucide-react';
 import { useTheme } from '@/hooks/useTheme';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
 import ChatWindow from '@/components/interview/ChatWindow';
@@ -12,6 +12,7 @@ import WaveAnimation from '@/components/interview/WaveAnimation';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
+import { INTERVIEWER_VOICE_PRESETS, getInterviewerVoicePreset } from '../utils/interviewerVoices';
 
 function InterviewPage() {
   const { isDark } = useTheme();
@@ -31,6 +32,10 @@ function InterviewPage() {
     isRecording: false,
     isResponseInProgress: false,
     canEndInterview: true
+  });
+  const [selectedVoiceId, setSelectedVoiceId] = useState(() => {
+    if (typeof window === 'undefined') return 'server_default';
+    return window.localStorage.getItem('interviewcoach.voicePreset') || 'server_default';
   });
 
   // ✅ ADD: Callback to receive state changes from ChatWindow
@@ -71,12 +76,19 @@ function InterviewPage() {
   const calibrationInProgressRef = useRef(false);
   
   const streamRef = useRef(null);
+  const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
   const [cameraError, setCameraError] = useState(null);
   const [isCameraLoading, setIsCameraLoading] = useState(true);
   const cameraRetryCountRef = useRef(0);
   const MAX_RETRIES = 3;
 
   // Initialize camera with retry logic and proper error handling
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('interviewcoach.voicePreset', selectedVoiceId);
+    }
+  }, [selectedVoiceId]);
+
   useEffect(() => {
     const startCamera = async (retryCount = 0) => {
       try {
@@ -724,17 +736,17 @@ function InterviewPage() {
         )}
       </AnimatePresence>
       
-      <div className="min-h-screen" style={{ backgroundColor: 'var(--color-bg)' }}>
+      <div className="min-h-screen interview-grid-bg" style={{ backgroundColor: 'var(--color-bg)' }}>
         {/* Top Bar with End Interview Button */}
         <div 
-          className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 sm:gap-6 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b"
+          className="flex flex-col gap-4 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b backdrop-blur-xl"
           style={{ 
-            backgroundColor: 'var(--color-card)',
+            backgroundColor: 'color-mix(in srgb, var(--color-card) 74%, transparent)',
             borderColor: 'var(--color-border)' 
           }}
         >
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 w-full sm:w-auto">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 w-full">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 w-full sm:w-auto">
               <div className="flex flex-col">
                 <h1 
                   className="text-lg sm:text-xl lg:text-2xl font-bold tracking-tight leading-tight"
@@ -742,50 +754,92 @@ function InterviewPage() {
                 >
                   AI Interview Session
                 </h1>
+                <p className="mt-1 text-xs sm:text-sm text-[var(--color-text-secondary)]">
+                  Cinematic motion, faster transitions, and a selectable interviewer voice without leaving the flow.
+                </p>
               </div>
               
-              {/* Monitoring Status */}
-              {headTrackingStarted && headTrackingEnabled && (
-                <div className="flex items-center gap-1.5 bg-green-500/90 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg border border-green-400/30">
-                  <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                  <span className="tracking-wide text-xs hidden xs:inline">HEAD TRACKING</span>
-                  <span className="tracking-wide text-xs xs:hidden">HT</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <div
+                  className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)]/70 px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] shadow-md"
+                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-card) 78%, transparent)' }}
+                >
+                  <Sparkles size={14} className="text-[var(--color-primary)]" />
+                  Premium Interview Mode
                 </div>
-              )}
+                {headTrackingStarted && headTrackingEnabled && (
+                  <div className="flex items-center gap-1.5 bg-green-500/90 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg border border-green-400/30">
+                    <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                    <span className="tracking-wide text-xs hidden xs:inline">HEAD TRACKING</span>
+                    <span className="tracking-wide text-xs xs:hidden">HT</span>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
 
-          {/* Head Tracking Toggle */}
-          <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-between sm:justify-end">
-            <label className={`flex items-center gap-2 sm:gap-3 ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress ? 'cursor-not-allowed opacity-60' : 'cursor-pointer group'}`}>
-              <div className="relative">
-                <input
-                  type="checkbox"
-                  checked={headTrackingEnabled}
-                  onChange={(e) => setHeadTrackingEnabled(e.target.checked)}
-                  disabled={isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress}
-                  className="sr-only peer"
-                />
-                <div className={`
-                  w-10 h-6 sm:w-12 sm:h-7 rounded-full transition-all duration-300 ease-in-out shadow-inner flex items-center
-                  peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-offset-2
-                  ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress
-                    ? 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed opacity-60'
-                    : headTrackingEnabled 
-                      ? 'bg-blue-500 peer-focus:ring-blue-500/20 shadow-lg' 
-                      : 'bg-gray-300 dark:bg-gray-600 peer-focus:ring-gray-500/20 shadow-inner'
-                  }
-                `}>
-                  <div className={`
-                    w-4 h-4 sm:w-5 sm:h-5 bg-white rounded-full shadow-lg transition-all duration-300 ease-in-out mx-0.5 sm:mx-1
-                    ${headTrackingEnabled ? 'translate-x-4 sm:translate-x-5' : 'translate-x-0'}
-                  `}></div>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 w-full lg:w-auto lg:justify-end">
+              <div className="glass-panel rounded-2xl px-3 py-3 sm:px-4 w-full sm:w-auto">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--color-text-secondary)]">
+                  <Mic2 size={14} className="text-[var(--color-primary)]" />
+                  Interviewer voice
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {INTERVIEWER_VOICE_PRESETS.map((preset) => {
+                    const active = preset.id === selectedVoiceId;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setSelectedVoiceId(preset.id)}
+                        className={`rounded-2xl border px-3 py-2 text-left transition-all duration-300 ${
+                          active
+                            ? 'border-transparent text-white shadow-lg'
+                            : 'border-[var(--color-border)] text-[var(--color-text-primary)] hover:-translate-y-0.5 hover:border-[var(--color-primary)]/45'
+                        }`}
+                        style={{
+                          background: active
+                            ? `linear-gradient(135deg, ${preset.accentColor}, var(--color-primary))`
+                            : 'color-mix(in srgb, var(--color-card) 88%, transparent)',
+                        }}
+                      >
+                        <div className="text-sm font-semibold">{preset.label}</div>
+                        <div className={`text-[11px] ${active ? 'text-white/80' : 'text-[var(--color-text-secondary)]'}`}>{preset.subtitle}</div>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-              <span className={`text-xs sm:text-sm font-medium ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress ? 'opacity-60' : ''}`} style={{ color: 'var(--color-text-primary)' }}>
-                Head Tracking
-              </span>
-            </label>
+
+              <label className={`flex items-center gap-2 sm:gap-3 ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress ? 'cursor-not-allowed opacity-60' : 'cursor-pointer group'} glass-panel rounded-full px-3 py-2`}>
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={headTrackingEnabled}
+                    onChange={(e) => setHeadTrackingEnabled(e.target.checked)}
+                    disabled={isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress}
+                    className="sr-only peer"
+                  />
+                  <div className={`
+                    w-10 h-6 sm:w-12 sm:h-7 rounded-full transition-all duration-300 ease-in-out shadow-inner flex items-center
+                    peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-offset-2
+                    ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress
+                      ? 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed opacity-60'
+                      : headTrackingEnabled 
+                        ? 'bg-blue-500 peer-focus:ring-blue-500/20 shadow-lg' 
+                        : 'bg-gray-300 dark:bg-gray-600 peer-focus:ring-gray-500/20 shadow-inner'
+                    }
+                  `}>
+                    <div className={`
+                      w-4 h-4 sm:w-5 sm:h-5 bg-white rounded-full shadow-lg transition-all duration-300 ease-in-out mx-0.5 sm:mx-1
+                      ${headTrackingEnabled ? 'translate-x-4 sm:translate-x-5' : 'translate-x-0'}
+                    `}></div>
+                  </div>
+                </div>
+                <span className={`text-xs sm:text-sm font-medium ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress ? 'opacity-60' : ''}`} style={{ color: 'var(--color-text-primary)' }}>
+                  Head Tracking
+                </span>
+              </label>
+            </div>
           </div>
         </div>
 
@@ -794,7 +848,7 @@ function InterviewPage() {
           <div 
             className="w-full xl:w-1/3 border-b xl:border-b-0 xl:border-r p-3 sm:p-4 lg:p-6 flex-shrink-0"
             style={{ 
-              backgroundColor: 'var(--color-card)', 
+              backgroundColor: 'color-mix(in srgb, var(--color-card) 78%, transparent)', 
               borderColor: 'var(--color-border)' 
             }}
           >
@@ -804,17 +858,18 @@ function InterviewPage() {
                 className="h-40 sm:h-52 md:h-64 lg:h-72 xl:flex-1 relative rounded-xl sm:rounded-2xl overflow-hidden shadow-lg border flex items-center justify-center"
                 style={{ 
                   borderColor: isAudioPlaying ? 'var(--color-primary)' : 'var(--color-border)', 
-                  backgroundColor: 'var(--color-bg)',
+                  background: 'radial-gradient(circle at top, color-mix(in srgb, var(--color-primary) 14%, transparent), var(--color-bg) 55%)',
                   borderWidth: isAudioPlaying ? '3px' : '1px'
                 }}
               >
+                <div className="ambient-orb h-40 w-40 opacity-70" style={{ background: `radial-gradient(circle, ${activeVoicePreset.accentColor}44, transparent 70%)` }} />
                 {/* Interviewer Image and Info Container */}
                 <div className="flex flex-col items-center">
                   {/* Interviewer Image - Circular with Wave Animation */}
                   <div className="relative mb-2 sm:mb-4">
                     <motion.img
                       src="/assets/interview/interviewer_1.png"
-                      alt="Sadhan"
+                      alt={activeVoicePreset.personaName}
                       className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 lg:w-36 lg:h-36 xl:w-40 xl:h-40 object-cover rounded-full border-2 sm:border-4 shadow-xl relative z-10"
                       style={{
                         borderColor: isAudioPlaying ? 'var(--color-primary)' : 'white'
@@ -861,8 +916,9 @@ function InterviewPage() {
                     className="font-bold text-sm sm:text-base md:text-lg lg:text-xl mb-1 drop-shadow-lg"
                     style={{ color: 'var(--color-text-primary)' }}
                   >
-                    Sadhan
+                    {activeVoicePreset.personaName}
                   </h3>
+                  <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">{activeVoicePreset.role}</p>
                 </div>
               </div>
             </div>
@@ -971,6 +1027,7 @@ function InterviewPage() {
               isAudioPlaying={isAudioPlaying}
               setIsAudioPlaying={setIsAudioPlaying}
               onStateChange={handleChatStateChange}
+              selectedVoiceId={selectedVoiceId}
             />
           </div>
         </div>

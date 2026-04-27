@@ -50,7 +50,8 @@ function WaveAnimation({ isActive, size = 160, imageSize = 128, listening = fals
         style={{
           width: primaryWaveSize,
           height: primaryWaveSize,
-          backgroundColor: 'var(--color-text-secondary)', // Theme-aware gray
+          background: 'radial-gradient(circle, color-mix(in srgb, var(--color-primary) 22%, transparent), transparent 68%)',
+          border: '1px solid color-mix(in srgb, var(--color-primary) 28%, transparent)',
           opacity: 0.3,
         }}
         animate={listening ? {
@@ -74,7 +75,8 @@ function WaveAnimation({ isActive, size = 160, imageSize = 128, listening = fals
         style={{
           width: secondaryWaveSize,
           height: secondaryWaveSize,
-          backgroundColor: 'var(--color-text-secondary)',
+          background: 'radial-gradient(circle, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 72%)',
+          border: '1px solid color-mix(in srgb, var(--color-accent) 24%, transparent)',
           opacity: 0.2,
         }}
         animate={listening ? {
@@ -96,4 +98,3 @@ function WaveAnimation({ isActive, size = 160, imageSize = 128, listening = fals
 }
 
 export default WaveAnimation;
-
