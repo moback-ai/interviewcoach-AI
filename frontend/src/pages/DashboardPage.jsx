@@ -14,6 +14,32 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
+const parseApiJson = async (response, fallbackMessage) => {
+  const contentType = response.headers.get('content-type') || '';
+  const rawText = await response.text();
+  let payload = null;
+
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!response.ok) {
+    const serverMessage = payload?.message || payload?.error || payload?.detail;
+    throw new Error(serverMessage || `${fallbackMessage}: HTTP ${response.status}`);
+  }
+
+  if (!payload) {
+    const responseType = contentType || 'non-JSON';
+    throw new Error(`${fallbackMessage}: server returned ${responseType}`);
+  }
+
+  return payload;
+};
+
 function DashboardPage() {
   const { theme } = useTheme();
   const { user } = useAuth();
@@ -72,12 +98,7 @@ function DashboardPage() {
         }
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to fetch dashboard data: ${response.status}`);
-      }
-
-      const result = await response.json();
+      const result = await parseApiJson(response, 'Failed to fetch dashboard data');
       setResumeJobPairings(result.data || []);
 
     } catch (error) {
@@ -394,12 +415,7 @@ function DashboardPage() {
         }
       });
 
-      if (!getCurrentQuestionSetsResponse.ok) {
-        const errorData = await getCurrentQuestionSetsResponse.json();
-        throw new Error(errorData.message || `Failed to get current question sets: ${getCurrentQuestionSetsResponse.status}`);
-      }
-
-      const currentQuestionSetsResult = await getCurrentQuestionSetsResponse.json();
+      const currentQuestionSetsResult = await parseApiJson(getCurrentQuestionSetsResponse, 'Failed to get current question sets');
       const questionsForThisCombination = currentQuestionSetsResult.data || [];
       
       // Find the highest question set number for this specific resume_id + jd_id combination
@@ -427,12 +443,7 @@ function DashboardPage() {
         })
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to save questions: ${response.status}`);
-      }
-
-      return await response.json();
+      return await parseApiJson(response, 'Failed to save questions');
     } catch (error) {
       console.error('Error saving questions:', error);
       throw error;

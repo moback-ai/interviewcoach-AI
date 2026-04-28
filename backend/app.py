@@ -147,6 +147,19 @@ def ensure_auth_schema():
 _ALLOWED_DIFFICULTY_EXPERIENCE = frozenset({"beginner", "intermediate", "expert"})
 
 
+def normalize_question_difficulty(value) -> str:
+    if value is None:
+        return "medium"
+    normalized = str(value).strip().lower()
+    if normalized in {"easy", "beginner", "basic", "junior", "novice", "simple"}:
+        return "easy"
+    if normalized in {"medium", "intermediate", "mid", "moderate", "coding"}:
+        return "medium"
+    if normalized in {"hard", "expert", "advanced", "senior", "difficult", "complex"}:
+        return "hard"
+    return "medium"
+
+
 def normalize_difficulty_experience(value) -> str:
     if value is None:
         return "beginner"
@@ -160,6 +173,35 @@ def normalize_difficulty_experience(value) -> str:
     if normalized in {"strong", "expert", "senior", "advanced"}:
         return "expert"
     return "beginner"
+
+
+QUESTION_ORDER_SQL = """
+    CASE
+        WHEN lower(coalesce(difficulty_level, '')) IN ('easy', 'beginner', 'basic', 'junior', 'novice', 'simple') THEN 1
+        WHEN lower(coalesce(difficulty_level, '')) IN ('medium', 'intermediate', 'mid', 'moderate', 'coding') THEN 2
+        WHEN lower(coalesce(difficulty_level, '')) IN ('hard', 'expert', 'advanced', 'senior', 'difficult', 'complex') THEN 3
+        ELSE 4
+    END,
+    lower(coalesce(question_text, '')),
+    CASE
+        WHEN lower(coalesce(difficulty_experience, '')) IN ('beginner', 'weak', 'easy') THEN 1
+        WHEN lower(coalesce(difficulty_experience, '')) IN ('intermediate', 'medium', 'mid') THEN 2
+        WHEN lower(coalesce(difficulty_experience, '')) IN ('expert', 'strong', 'hard', 'advanced') THEN 3
+        ELSE 4
+    END,
+    created_at ASC
+"""
+QUESTION_ORDER_SQL_Q_ALIAS = QUESTION_ORDER_SQL.replace("created_at ASC", "q.created_at ASC")
+
+
+def format_feedback_text(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "\n".join(str(item) for item in value if str(item).strip())
+    if value is None:
+        return ""
+    return json.dumps(value)
 
 
 def ensure_questions_schema():
@@ -1149,6 +1191,34 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
     }
 
     questions = []
+
+    def answer_variant(expected_answer, experience):
+        if experience == "beginner":
+            return (
+                f"A concise answer should cover the main point clearly. {expected_answer} "
+                "Keep the response direct and mention one relevant example if possible."
+            )
+        if experience == "intermediate":
+            return (
+                f"A stronger answer should add context, reasoning, and a concrete example. {expected_answer} "
+                "Include the situation, action taken, and result or tradeoff."
+            )
+        return (
+            f"An expert answer should connect the example to business impact, alternatives, risks, and lessons learned. "
+            f"{expected_answer} Explain why the approach was chosen and how success was measured."
+        )
+
+    def append_question(prompt, expected_answer, difficulty, requires_code=False):
+        normalized_difficulty = normalize_question_difficulty("medium" if requires_code else difficulty)
+        for experience in ("beginner", "intermediate", "expert"):
+            questions.append({
+                "question_text": prompt,
+                "expected_answer": answer_variant(expected_answer, experience),
+                "difficulty_level": normalized_difficulty,
+                "difficulty_category": normalized_difficulty,
+                "difficulty_experience": experience,
+                "requires_code": requires_code,
+            })
     normalized_counts = {
         "beginner": int((question_counts or {}).get("beginner", 0) or 0),
         "medium": int((question_counts or {}).get("medium", 0) or 0),
@@ -1162,13 +1232,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
         bank = templates[difficulty]
         for index in range(count):
             prompt, expected = bank[index % len(bank)]
-            questions.append({
-                "question_text": prompt,
-                "expected_answer": expected,
-                "difficulty_level": "medium" if difficulty == "coding" else difficulty,
-                "difficulty_category": difficulty,
-                "requires_code": difficulty == "coding",
-            })
+            append_question(prompt, expected, difficulty, difficulty == "coding")
 
     return {
         "success": True,
@@ -1487,12 +1551,13 @@ def save_questions():
     saved = []
     for q in questions:
         exp = normalize_difficulty_experience(q.get("difficulty_experience"))
+        level = normalize_question_difficulty(q.get('difficulty_category') or q.get('difficulty_level'))
         row = execute(
             "INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, "
             "difficulty_level, difficulty_experience, question_set, requires_code) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
             (interview_id, data.get('resume_id'), data.get('jd_id'),
              q.get('question_text'), q.get('expected_answer'),
-             q.get('difficulty_level', 'medium'), exp, q.get('question_set', 1),
+             level, exp, q.get('question_set', 1),
              q.get('requires_code', False))
         )
         saved.append(str(row['id']))
@@ -1502,7 +1567,7 @@ def save_questions():
 @app.route('/api/questions/<interview_id>', methods=['GET'])
 @verify_auth_token
 def get_questions(interview_id):
-    rows = query_all("SELECT * FROM questions WHERE interview_id=%s ORDER BY created_at", (interview_id,))
+    rows = query_all(f"SELECT * FROM questions WHERE interview_id=%s ORDER BY {QUESTION_ORDER_SQL}", (interview_id,))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1802,14 +1867,36 @@ def generate_response():
         # Fetch interview data directly (no loopback HTTP call)
         interview_row = query_one(
             "SELECT i.*, jd.title, jd.description FROM interviews i "
-            "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s",
-            (interview_id,)
+            "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s AND i.user_id=%s",
+            (interview_id, request.user['id'])
         )
         if not interview_row:
             return jsonify({"success": False, "message": "Interview not found"}), 404
         questions_rows = query_all(
-            "SELECT * FROM questions WHERE interview_id=%s ORDER BY created_at", (interview_id,)
+            f"SELECT * FROM questions WHERE interview_id=%s ORDER BY {QUESTION_ORDER_SQL}", (interview_id,)
         )
+        if not questions_rows and interview_row.get('resume_id') and interview_row.get('jd_id') and interview_row.get('question_set') is not None:
+            questions_rows = query_all(
+                f"""
+                SELECT q.*
+                FROM questions q
+                JOIN resumes r ON r.id = q.resume_id
+                JOIN job_descriptions jd ON jd.id = q.jd_id
+                WHERE q.resume_id=%s
+                  AND q.jd_id=%s
+                  AND q.question_set=%s
+                  AND r.user_id=%s
+                  AND jd.user_id=%s
+                ORDER BY {QUESTION_ORDER_SQL_Q_ALIAS}
+                """,
+                (
+                    interview_row['resume_id'],
+                    interview_row['jd_id'],
+                    int(interview_row['question_set']),
+                    request.user['id'],
+                    request.user['id'],
+                )
+            )
         job_title = interview_row['title'] or ''
         job_description = interview_row['description'] or ''
         questions = [dict(q) for q in questions_rows]
@@ -1824,7 +1911,7 @@ def generate_response():
                 seen[key] = {
                     "question_text": question_text,
                     "requires_code": bool(q.get('requires_code', False)),
-                    "difficulty_level": q.get('difficulty_level') or q.get('difficulty_category') or 'medium',
+                    "difficulty_level": normalize_question_difficulty(q.get('difficulty_level') or q.get('difficulty_category')),
                 }
         core_questions = list(seen.values())
 
@@ -1874,6 +1961,10 @@ def generate_response():
         execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
                 (interview_id, 'user', user_input))
 
+        if response.get("message"):
+            execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
+                    (interview_id, 'assistant', response["message"]))
+
         # Generate audio for interviewer response
         audio_url = None
         if response.get("message") and not response.get("interview_done", False):
@@ -1896,10 +1987,7 @@ def generate_response():
             except Exception as ae:
                 print(f"[WARN] Audio generation failed: {ae}")
             finally:
-                # Always save AI response to chat history regardless of audio success
-                if response.get("message"):
-                    execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-                            (interview_id, 'assistant', response["message"]))
+                pass
 
         # Handle timeout (flag from InterviewManager)
         if response.get("timeout_detected", False):
@@ -1930,8 +2018,8 @@ def generate_response():
                     "improvement_areas=EXCLUDED.improvement_areas, metrics=EXCLUDED.metrics, audio_url=EXCLUDED.audio_url",
                     (interview_id,
                      getattr(manager, 'final_summary', None),
-                     json.dumps(getattr(manager, 'key_strengths', [])),
-                     json.dumps(getattr(manager, 'improvement_areas', [])),
+                     format_feedback_text(getattr(manager, 'key_strengths', [])),
+                     format_feedback_text(getattr(manager, 'improvement_areas', [])),
                      json.dumps(getattr(manager, 'metrics', {})),
                      merged_url)
                 )
@@ -2268,22 +2356,39 @@ def _normalize_metrics(value):
 
 
 def _normalize_list(value):
+    def split_numbered_text(text):
+        text = str(text).replace("\\n", "\n").strip()
+        if not text:
+            return []
+        parts = re.split(r'(?:^|\n)\s*\d+\.\s*', text)
+        points = [part.strip(" \n\t-•") for part in parts if part.strip(" \n\t-•")]
+        if len(points) > 1:
+            return points
+        bullet_points = [part.strip(" \n\t-•") for part in re.split(r'\n\s*[-•]\s*', text) if part.strip(" \n\t-•")]
+        return bullet_points or [text]
+
     if isinstance(value, list):
-        return value
+        normalized = []
+        for item in value:
+            normalized.extend(split_numbered_text(item) if isinstance(item, str) else [item])
+        return normalized
     if not value:
         return []
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
             if isinstance(parsed, list):
-                return parsed
+                normalized = []
+                for item in parsed:
+                    normalized.extend(split_numbered_text(item) if isinstance(item, str) else [item])
+                return normalized
             if isinstance(parsed, str):
-                return [parsed]
+                return split_numbered_text(parsed)
             if parsed is None:
                 return []
             return [str(parsed)]
         except Exception:
-            return [value]
+            return split_numbered_text(value)
     return [value]
 
 
@@ -2305,7 +2410,7 @@ def _pairing_key(resume_id, jd_id):
 
 def _serialize_question(row):
     data = dict(row)
-    difficulty = data.get('difficulty_level') or data.get('difficulty_category') or 'medium'
+    difficulty = normalize_question_difficulty(data.get('difficulty_level') or data.get('difficulty_category'))
     data['difficulty_level'] = difficulty
     data['difficulty_category'] = difficulty
     data['difficulty_experience'] = data.get('difficulty_experience') or 'beginner'
@@ -2732,7 +2837,7 @@ def legacy_questions():
         if question_set:
             sql += ' AND question_set=%s'
             params.append(int(question_set))
-        sql += ' ORDER BY created_at ASC'
+        sql += f' ORDER BY question_set DESC, {QUESTION_ORDER_SQL}'
         rows = [_serialize_question(row) for row in query_all(sql, tuple(params))]
         return jsonify({'success': True, 'data': rows})
     data = request.get_json() or {}
@@ -2742,6 +2847,7 @@ def legacy_questions():
     saved = []
     for question in data.get('questions', []):
         exp = normalize_difficulty_experience(question.get("difficulty_experience"))
+        level = normalize_question_difficulty(question.get('difficulty_category') or question.get('difficulty_level'))
         row = execute(
             """
             INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, difficulty_experience, question_set, requires_code)
@@ -2754,7 +2860,7 @@ def legacy_questions():
                 jd_id,
                 question.get('question_text') or question.get('question'),
                 question.get('expected_answer') or question.get('answer'),
-                question.get('difficulty_category') or question.get('difficulty_level') or 'medium',
+                level,
                 exp,
                 question.get('question_set') or question_set,
                 question.get('requires_code', False),
@@ -2942,8 +3048,17 @@ def forgot_password():
         )
         if smtp_is_configured():
             send_email('Reset your InterviewCoach password', user['email'], text_body, html_body)
+            return jsonify({
+                'message': 'If an account exists, a reset link has been sent.',
+                'delivery': 'email',
+            }), 200
         else:
             print(f"[WARN] SMTP not configured. Reset link for {user['email']}: {reset_link}")
+            return jsonify({
+                'message': 'SMTP is not configured, so use the reset link shown below.',
+                'delivery': 'manual',
+                'reset_link': reset_link,
+            }), 200
     except Exception as e:
         print(f"[ERROR] forgot_password: {e}")
     return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200

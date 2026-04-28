@@ -175,6 +175,9 @@ export const forgotPassword = async (email) => {
     body: JSON.stringify({ email: email.toLowerCase().trim() }),
   });
   const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || data.message || 'Unable to send password reset link');
+  }
   return data;
 };
 

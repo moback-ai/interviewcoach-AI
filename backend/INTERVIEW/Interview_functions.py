@@ -583,7 +583,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
     log("generate_final_summary_review")
 
     def build_deterministic_fallback():
-        overall_rating = round(avg_knowledge_depth, 1)
+        overall_rating = round(avg_overall_rating, 1)
         if overall_rating >= 7.5:
             final_label = "strong"
         elif overall_rating >= 5.5:
@@ -593,7 +593,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
 
         summary_parts = [
             f"The candidate showed {final_label} overall alignment for the {job_title} role.",
-            f"Knowledge depth averaged {avg_knowledge_depth:.1f}/10 and communication clarity averaged {avg_communication_clarity:.1f}/10.",
+            f"Overall performance averaged {overall_rating:.1f}/10, with knowledge depth at {avg_knowledge_depth:.1f}/10 and communication clarity at {avg_communication_clarity:.1f}/10.",
             f"The dominant emotional tone was {overall_emotion}, with reasoning ability at {avg_reasoning_ability:.1f}/10 and relevance at {avg_relevance_to_question:.1f}/10.",
         ]
         if strong_responses:
@@ -659,6 +659,14 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
         avg_reasoning_ability = sum(item.get('reasoning_ability', 5) for item in analyzed_log) / total_responses
         avg_relevance_to_question = sum(item.get('relevance_to_question', 5) for item in analyzed_log) / total_responses
         avg_motivation_indicator = sum(item.get('motivation_indicator', 5) for item in analyzed_log) / total_responses
+        avg_overall_rating = (
+            avg_knowledge_depth +
+            avg_communication_clarity +
+            avg_confidence_tone +
+            avg_reasoning_ability +
+            avg_relevance_to_question +
+            avg_motivation_indicator
+        ) / 6
 
         weak_responses = sum(1 for item in analyzed_log if item.get('evaluation') in ['weak', 'confused'])
         strong_responses = sum(1 for item in analyzed_log if item.get('evaluation') in ['strong', 'good'])
@@ -676,6 +684,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
     else:
         avg_knowledge_depth = avg_communication_clarity = avg_confidence_tone = 5
         avg_reasoning_ability = avg_relevance_to_question = avg_motivation_indicator = 5
+        avg_overall_rating = 5
         weak_responses = strong_responses = nervous_responses = unsure_responses = 0
         overall_emotion = "neutral"  # ✅ ADD THIS LINE - Initialize overall_emotion for empty log case
 
@@ -743,7 +752,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
         "summary": "2–3 sentence summary here",
         "key_strengths": "1. [Specific strength 1]\\n2. [Specific strength 2]\\n3. [Specific strength 3]",
         "improvement_areas": "1. [Specific area 1]\\n2. [Specific area 2]\\n3. [Specific area 3]",
-        "overall_rating": {avg_knowledge_depth:.1f},
+        "overall_rating": {avg_overall_rating:.1f},
         "overall_emotion_summary": "Short sentence describing emotional tone, e.g., 'Started nervous but became confident by the end.'"
     }}
 
@@ -754,11 +763,11 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
         "summary": "Interview completed. Detailed AI summary was unavailable, so a fallback summary was generated.",
         "key_strengths": "1. Completed the interview flow and answered multiple questions.\n2. Provided enough conversation data for a baseline evaluation.",
         "improvement_areas": "1. Improve depth and specificity in answers.\n2. Practice confidence, clarity, and structured examples before the next interview.",
-        "overall_rating": avg_knowledge_depth,
+        "overall_rating": avg_overall_rating,
         "overall_emotion_summary": "Emotion summary not generated",
     }
 
-    max_retries = 100
+    max_retries = 3
     for attempt in range(max_retries):
         try:
             result = ollama_chat(model=model, messages=[{"role": "system", "content": prompt}])
@@ -775,13 +784,18 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
                 parsed_response = json.loads(response_text)
 
             # ✅ Success → return with rating in summary
+            parsed_rating = parsed_response.get('overall_rating', avg_overall_rating)
+            try:
+                parsed_rating = float(parsed_rating)
+            except Exception:
+                parsed_rating = avg_overall_rating
             return {
-                'summary': parsed_response.get('summary', '') + f" (Overall Rating: {avg_knowledge_depth:.1f}/10)",
+                'summary': parsed_response.get('summary', '') + f" (Overall Rating: {parsed_rating:.1f}/10)",
                 'key_strengths': parsed_response.get('key_strengths', ''),
                 'improvement_areas': parsed_response.get('improvement_areas', ''),
-                'overall_rating': parsed_response.get('overall_rating', avg_knowledge_depth),
+                'overall_rating': parsed_rating,
                 'metrics': {
-                    "overall_rating": parsed_response.get('overall_rating', avg_knowledge_depth),
+                    "overall_rating": round(parsed_rating, 1),
                     "knowledge_depth": round(avg_knowledge_depth, 1),
                     "communication_clarity": round(avg_communication_clarity, 1),
                     "confidence_tone": round(avg_confidence_tone, 1),
@@ -804,4 +818,3 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
 
     # === Fallback if all retries fail ===
     return build_deterministic_fallback()
-

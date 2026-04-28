@@ -72,8 +72,10 @@ class InterviewManager:
         # Resume Q&A
         self.resume_stage_done = False
         self.core_questions = config.get("core_questions", [])  # already exists
+        self.current_resume_question_obj = None
         self.current_resume_question = ""
         self.current_coding_requirement = config.get("coding_requirement", "")
+        self.asked_question_texts = []
         self.last_resume_response = ""
         self.resume_followup_retry_count = 0
         self.max_resume_followup_retries = 3
@@ -101,26 +103,61 @@ class InterviewManager:
         print(f"\n {greeting}\n")
         self.conversation_history.append({"role": "assistant", "content": greeting})
 
-    def _pop_next_resume_question(self):
-        if not self.core_questions:
-            self.current_resume_question_obj = None
-            self.current_resume_question = ""
-            self.current_coding_requirement = False
-            return False
+    def _question_key(self, text):
+        return " ".join((text or "").strip().lower().split())
 
-        self.current_resume_question_obj = self.core_questions.pop(0)
-        if isinstance(self.current_resume_question_obj, dict):
-            self.current_resume_question = self.current_resume_question_obj.get('question_text', '')
-            self.current_coding_requirement = bool(self.current_resume_question_obj.get('requires_code', False))
-        else:
-            self.current_resume_question = self.current_resume_question_obj
-            self.current_coding_requirement = False
-        return bool(self.current_resume_question)
+    def _ensure_runtime_state(self):
+        if not hasattr(self, "asked_question_texts") or not isinstance(self.asked_question_texts, list):
+            self.asked_question_texts = []
+        if not hasattr(self, "current_resume_question_obj"):
+            self.current_resume_question_obj = None
+        if self.core_questions is None:
+            self.core_questions = []
+
+    def _has_asked_question(self, text):
+        key = self._question_key(text)
+        return bool(key) and key in self.asked_question_texts
+
+    def _mark_question_asked(self, text):
+        key = self._question_key(text)
+        if key and key not in self.asked_question_texts:
+            self.asked_question_texts.append(key)
+
+    def _pop_next_resume_question(self):
+        self._ensure_runtime_state()
+
+        while self.core_questions:
+            self.current_resume_question_obj = self.core_questions.pop(0)
+            if isinstance(self.current_resume_question_obj, dict):
+                question_text = self.current_resume_question_obj.get('question_text', '')
+                requires_code = bool(self.current_resume_question_obj.get('requires_code', False))
+            else:
+                question_text = self.current_resume_question_obj
+                requires_code = False
+
+            if not question_text or self._has_asked_question(question_text):
+                continue
+
+            self.current_resume_question = question_text
+            self.current_coding_requirement = requires_code
+            self._mark_question_asked(question_text)
+            return True
+
+        self.current_resume_question_obj = None
+        self.current_resume_question = ""
+        self.current_coding_requirement = False
+        return False
 
     def _build_resume_followup(self, user_input):
         followup = generate_followup_question(self.current_resume_question, user_input)
-        if (followup or "").strip().lower() == (self.current_resume_question or "").strip().lower():
+        if (
+            (followup or "").strip().lower() == (self.current_resume_question or "").strip().lower()
+            or self._has_asked_question(followup)
+        ):
             followup = "Could you walk me through that with a concrete example from your experience?"
+        if self._has_asked_question(followup):
+            followup = "What was your specific role in that example, and what outcome did your work create?"
+        self._mark_question_asked(followup)
         return followup
 
     def is_time_exceeded(self):
@@ -131,6 +168,7 @@ class InterviewManager:
 
 
     def receive_input(self, user_input: str):
+        self._ensure_runtime_state()
         self.api_call_count += 1
         print(f"[INFO] API call #{self.api_call_count} | Stage: {self.stage}")
         
