@@ -391,8 +391,8 @@ def generate_support_reply(faq_sections, conversation_history, user_input, model
         - Always be friendly and professional.
         """
 
+    # conversation_history already contains the latest user message
     messages = [{"role": "system", "content": system_prompt}] + conversation_history
-    messages.append({"role": "user", "content": user_input})
 
     if not ollama_available():
         if user_context:

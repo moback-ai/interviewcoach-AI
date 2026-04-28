@@ -714,6 +714,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
                 'improvement_areas': parsed_response.get('improvement_areas', ''),
                 'overall_rating': parsed_response.get('overall_rating', avg_knowledge_depth),
                 'metrics': {
+                    "overall_rating": parsed_response.get('overall_rating', avg_knowledge_depth),
                     "knowledge_depth": round(avg_knowledge_depth, 1),
                     "communication_clarity": round(avg_communication_clarity, 1),
                     "confidence_tone": round(avg_confidence_tone, 1),
@@ -739,6 +740,7 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
     'improvement_areas': parsed_response.get('improvement_areas', ''),
     'overall_rating': parsed_response.get('overall_rating', avg_knowledge_depth),
     'metrics': {
+        "overall_rating": parsed_response.get('overall_rating', avg_knowledge_depth),
         "knowledge_depth": round(avg_knowledge_depth, 1),
         "communication_clarity": round(avg_communication_clarity, 1),
         "confidence_tone": round(avg_confidence_tone, 1),
@@ -749,6 +751,5 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
         "overall_emotion_summary": parsed_response.get("overall_emotion_summary", "Emotion summary not generated")  # ✅ qualitative LLM summary
     }
 }
-
 
 

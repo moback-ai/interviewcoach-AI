@@ -320,6 +320,19 @@ function InterviewFeedbackPage() {
   }, [interviewId]);
 
   const getOverallRating = () => {
+    const metrics = feedbackData?.metrics;
+    if (metrics) {
+      const metricRating = Number(
+        metrics.overall_rating ??
+        metrics.knowledge_depth ??
+        metrics.communication_clarity ??
+        metrics.reasoning_ability
+      );
+      if (!Number.isNaN(metricRating) && metricRating > 0) {
+        return metricRating;
+      }
+    }
+
     // Extract overall rating from the summary text if available
     if (feedbackData?.summary) {
       // Look for pattern like "Overall Rating: X.X/10" or "(Overall Rating: X.X/10)"
@@ -380,9 +393,12 @@ function InterviewFeedbackPage() {
 
   const formatKeyStrengths = (strengthsText) => {
     if (!strengthsText) return [];
-    
+    if (Array.isArray(strengthsText)) {
+      return strengthsText.map((point) => String(point).trim()).filter(Boolean);
+    }
+
     // Split by numbered points (1., 2., 3., etc.)
-    const points = strengthsText.split(/\d+\.\s*/).filter(point => point.trim());
+    const points = String(strengthsText).split(/\d+\.\s*/).filter(point => point.trim());
     
     // Clean up each point and return as array
     return points.map(point => point.trim());
@@ -390,9 +406,12 @@ function InterviewFeedbackPage() {
 
   const formatImprovementAreas = (improvementsText) => {
     if (!improvementsText) return [];
-    
+    if (Array.isArray(improvementsText)) {
+      return improvementsText.map((point) => String(point).trim()).filter(Boolean);
+    }
+
     // Split by numbered points (1., 2., 3., etc.)
-    const points = improvementsText.split(/\d+\.\s*/).filter(point => point.trim());
+    const points = String(improvementsText).split(/\d+\.\s*/).filter(point => point.trim());
     
     // Clean up each point and return as array
     return points.map(point => point.trim());
