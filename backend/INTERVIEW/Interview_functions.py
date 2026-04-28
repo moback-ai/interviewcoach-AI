@@ -582,6 +582,73 @@ def analyze_individual_responses(evaluation_log, model="llama3"):
 def generate_final_summary_review(job_title, conversation_history, analyzed_log, model="llama3"):
     log("generate_final_summary_review")
 
+    def build_deterministic_fallback():
+        overall_rating = round(avg_knowledge_depth, 1)
+        if overall_rating >= 7.5:
+            final_label = "strong"
+        elif overall_rating >= 5.5:
+            final_label = "average"
+        else:
+            final_label = "weak"
+
+        summary_parts = [
+            f"The candidate showed {final_label} overall alignment for the {job_title} role.",
+            f"Knowledge depth averaged {avg_knowledge_depth:.1f}/10 and communication clarity averaged {avg_communication_clarity:.1f}/10.",
+            f"The dominant emotional tone was {overall_emotion}, with reasoning ability at {avg_reasoning_ability:.1f}/10 and relevance at {avg_relevance_to_question:.1f}/10.",
+        ]
+        if strong_responses:
+            summary_parts.append(f"There were {strong_responses} stronger responses that showed useful baseline capability.")
+        if weak_responses:
+            summary_parts.append(f"There were {weak_responses} weaker responses where the candidate needed more depth or specificity.")
+        summary = " ".join(summary_parts).strip()
+        if not summary.endswith(final_label):
+            summary = f"{summary} {final_label}"
+
+        strengths = []
+        if avg_knowledge_depth >= 6:
+            strengths.append("Demonstrated workable baseline knowledge for several interview topics.")
+        if avg_communication_clarity >= 6:
+            strengths.append("Communicated ideas with reasonable clarity in parts of the interview.")
+        if avg_relevance_to_question >= 6:
+            strengths.append("Stayed relevant to the questions and generally addressed the intent of prompts.")
+        if avg_motivation_indicator >= 6:
+            strengths.append("Showed signs of motivation and interest in the role.")
+        if not strengths:
+            strengths.append("Completed the interview flow and provided enough responses for a baseline evaluation.")
+            strengths.append("Showed willingness to engage with the interview process.")
+
+        improvements = []
+        if avg_knowledge_depth < 6:
+            improvements.append("Improve technical depth by preparing clearer examples, concepts, and project details.")
+        if avg_communication_clarity < 6:
+            improvements.append("Use more structured answers with context, action, and outcome to improve clarity.")
+        if avg_confidence_tone < 6 or nervous_responses > 0 or unsure_responses > 0:
+            improvements.append("Practice delivery and mock interviews to improve confidence and reduce hesitation.")
+        if avg_reasoning_ability < 6:
+            improvements.append("Explain the reasoning behind decisions more explicitly instead of giving short conclusions.")
+        if avg_relevance_to_question < 6:
+            improvements.append("Answer the exact question first, then support it with a concrete example.")
+        if not improvements:
+            improvements.append("Continue sharpening role-specific examples to make strong answers more consistent.")
+
+        return {
+            "summary": f"{summary} (Overall Rating: {overall_rating:.1f}/10)",
+            "key_strengths": "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(strengths[:8])),
+            "improvement_areas": "\n".join(f"{idx + 1}. {item}" for idx, item in enumerate(improvements[:8])),
+            "overall_rating": overall_rating,
+            "metrics": {
+                "overall_rating": overall_rating,
+                "knowledge_depth": round(avg_knowledge_depth, 1),
+                "communication_clarity": round(avg_communication_clarity, 1),
+                "confidence_tone": round(avg_confidence_tone, 1),
+                "reasoning_ability": round(avg_reasoning_ability, 1),
+                "relevance_to_question": round(avg_relevance_to_question, 1),
+                "motivation_indicator": round(avg_motivation_indicator, 1),
+                "overall_emotion": overall_emotion,
+                "overall_emotion_summary": f"The candidate's overall tone was {overall_emotion}.",
+            }
+        }
+
 
     # Calculate overall statistics for context using new detailed metrics
     total_responses = len(analyzed_log)
@@ -728,28 +795,13 @@ def generate_final_summary_review(job_title, conversation_history, analyzed_log,
 
         except Exception as e:
             print(f"[WARN] Attempt {attempt+1}/{max_retries} failed: {e}")
+            if "Failed to connect to Ollama" in str(e):
+                return build_deterministic_fallback()
             if attempt < max_retries - 1:
                 continue  # 🔁 retry again
             else:
                 print("[ERROR] All retries failed")
 
     # === Fallback if all retries fail ===
-    return {
-    'summary': parsed_response.get('summary', '') + f" (Overall Rating: {avg_knowledge_depth:.1f}/10)",
-    'key_strengths': parsed_response.get('key_strengths', ''),
-    'improvement_areas': parsed_response.get('improvement_areas', ''),
-    'overall_rating': parsed_response.get('overall_rating', avg_knowledge_depth),
-    'metrics': {
-        "overall_rating": parsed_response.get('overall_rating', avg_knowledge_depth),
-        "knowledge_depth": round(avg_knowledge_depth, 1),
-        "communication_clarity": round(avg_communication_clarity, 1),
-        "confidence_tone": round(avg_confidence_tone, 1),
-        "reasoning_ability": round(avg_reasoning_ability, 1),
-        "relevance_to_question": round(avg_relevance_to_question, 1),
-        "motivation_indicator": round(avg_motivation_indicator, 1),
-        "overall_emotion": overall_emotion,  # ✅ dominant quantitative emotion
-        "overall_emotion_summary": parsed_response.get("overall_emotion_summary", "Emotion summary not generated")  # ✅ qualitative LLM summary
-    }
-}
-
+    return build_deterministic_fallback()
 

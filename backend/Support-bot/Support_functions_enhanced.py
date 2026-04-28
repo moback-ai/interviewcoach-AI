@@ -403,9 +403,19 @@ def generate_support_reply(faq_sections, conversation_history, user_input, model
             return f"{title}: {compact[:400]}".strip(), [title for title, _ in relevant_sections]
         return "Hello! How can I help you today?", []
 
+    def deterministic_fallback():
+        retrieved_titles = [title for title, _ in relevant_sections]
+        if user_context:
+            return user_context, retrieved_titles
+        if relevant_sections:
+            title, content = relevant_sections[0]
+            compact = " ".join(content.split())
+            return f"{title}: {compact[:400]}".strip(), retrieved_titles
+        return "Hello! How can I help you today?", []
+
     try:
         response = ollama.chat(model=model, messages=messages)
         return response["message"]["content"].strip(), [title for title, _ in relevant_sections]
     except Exception as e:
         print(f"[ERROR] generate_support_reply failed: {e}")
-        return "Sorry, I encountered an error. Please try again.", []
+        return deterministic_fallback()
