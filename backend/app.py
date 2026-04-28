@@ -2067,7 +2067,8 @@ def support_bot():
         return jsonify({"success": True, "data": {
             "response": response.get("message", "Sorry, I couldn't process your request."),
             "session_id": response.get("session_id"),
-            "conversation_length": response.get("conversation_length", 0)
+            "conversation_length": response.get("conversation_length", 0),
+            "retrieved_sections": response.get("retrieved_sections", [])
         }})
     except Exception as e:
         traceback.print_exc()
@@ -2274,7 +2275,13 @@ def _normalize_list(value):
     if isinstance(value, str):
         try:
             parsed = json.loads(value)
-            return parsed if isinstance(parsed, list) else [value]
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, str):
+                return [parsed]
+            if parsed is None:
+                return []
+            return [str(parsed)]
         except Exception:
             return [value]
     return [value]
@@ -2785,7 +2792,13 @@ def legacy_interview_feedback():
     interview_id = request.args.get('interview_id')
     if interview_id:
         row = query_one('SELECT * FROM interview_feedback WHERE interview_id=%s', (interview_id,))
-        return jsonify({'success': True, 'data': [dict(row)] if row else []})
+        if not row:
+            return jsonify({'success': True, 'data': []})
+        normalized = dict(row)
+        normalized['metrics'] = _normalize_metrics(normalized.get('metrics'))
+        normalized['key_strengths'] = _normalize_list(normalized.get('key_strengths'))
+        normalized['improvement_areas'] = _normalize_list(normalized.get('improvement_areas'))
+        return jsonify({'success': True, 'data': [normalized]})
     limit = int(request.args.get('limit', 100))
     rows = query_all(
         """

@@ -13,7 +13,7 @@ const SupportBot = () => {
     isAuthenticated
   } = useSupportBot();
   
-  const { isDarkMode } = useTheme();
+  const { isDark } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
   const [inputMessage, setInputMessage] = useState('');
   const [isMinimized, setIsMinimized] = useState(false);
@@ -83,14 +83,14 @@ const SupportBot = () => {
               ? 'w-80 h-16' 
               : 'w-80 h-[600px]'
           } rounded-lg shadow-2xl border flex flex-col ${
-            isDarkMode 
+            isDark 
               ? 'bg-gray-800 border-gray-700' 
               : 'bg-white border-gray-200'
           }`}
         >
           {/* Header */}
           <div className={`flex items-center justify-between p-4 border-b ${
-            isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-gradient-to-r from-blue-600 to-blue-700 border-gray-200'
+            isDark ? 'bg-gray-700 border-gray-600' : 'bg-gradient-to-r from-blue-600 to-blue-700 border-gray-200'
           }`}>
             <div className="flex items-center space-x-3">
               <div className="flex items-center space-x-2">
@@ -155,7 +155,7 @@ const SupportBot = () => {
                             ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white'
                             : msg.type === 'error'
                             ? 'bg-red-50 text-red-800 border border-red-200'
-                            : isDarkMode
+                            : isDark
                             ? 'bg-gray-700 text-gray-100'
                             : 'bg-gray-100 text-gray-800'
                         }`}
@@ -179,7 +179,7 @@ const SupportBot = () => {
                 {isLoading && (
                   <div className="flex justify-start">
                     <div className={`max-w-xs px-4 py-3 rounded-2xl text-sm ${
-                      isDarkMode ? 'bg-gray-700 text-gray-100' : 'bg-gray-100 text-gray-800'
+                      isDark ? 'bg-gray-700 text-gray-100' : 'bg-gray-100 text-gray-800'
                     }`}>
                       <div className="flex items-center space-x-2">
                         <div className="flex space-x-1">
@@ -228,7 +228,7 @@ const SupportBot = () => {
                     placeholder="Type your message..."
                     disabled={isLoading}
                     className={`flex-1 px-4 py-3 rounded-full border text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all ${
-                      isDarkMode
+                      isDark
                         ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'
                         : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
                     }`}
