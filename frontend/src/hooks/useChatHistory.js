@@ -2,6 +2,13 @@ import { useState, useCallback } from 'react';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
+const normalizeChatSpeaker = (speaker = '') => {
+  const normalized = String(speaker).trim().toLowerCase();
+  if (['assistant', 'interviewer', 'bot'].includes(normalized)) return 'interviewer';
+  if (['user', 'candidate', 'you'].includes(normalized)) return 'candidate';
+  return normalized || 'system';
+};
+
 export const useChatHistory = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -60,8 +67,13 @@ export const useChatHistory = () => {
             continue;
           }
           
-          const speaker = line.substring(0, colonIndex).trim();
+          const speaker = normalizeChatSpeaker(line.substring(0, colonIndex));
           const message = line.substring(colonIndex + 1).trim();
+
+          const previous = conversation[conversation.length - 1];
+          if (previous?.speaker === speaker && previous?.message === message) {
+            continue;
+          }
           
           conversation.push({
             id: conversation.length + 1,
