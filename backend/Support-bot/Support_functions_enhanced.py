@@ -83,22 +83,26 @@ def build_faq_index(faq_sections):
         return
 
     cache_key = tuple(faq_sections.keys())
-    if faq_index is not None and faq_cache_key == cache_key:
+    if faq_cache_key == cache_key and faq_titles and faq_contents:
         return
 
     faq_titles = list(faq_sections.keys())
     faq_contents = list(faq_sections.values())
     faq_cache_key = cache_key
 
-    corpus_embeddings = get_embedding_model().encode(
-        [title + " " + content for title, content in faq_sections.items()],
-        convert_to_numpy=True,
-        normalize_embeddings=True
-    )
+    try:
+        corpus_embeddings = get_embedding_model().encode(
+            [title + " " + content for title, content in faq_sections.items()],
+            convert_to_numpy=True,
+            normalize_embeddings=True
+        )
 
-    dim = corpus_embeddings.shape[1]
-    faq_index = faiss.IndexFlatIP(dim)
-    faq_index.add(corpus_embeddings)
+        dim = corpus_embeddings.shape[1]
+        faq_index = faiss.IndexFlatIP(dim)
+        faq_index.add(corpus_embeddings)
+    except Exception as exc:
+        print(f"[WARN] FAQ embedding index unavailable, using keyword retrieval: {exc}")
+        faq_index = None
 
 # -------------------------------
 # Retriever (unchanged)

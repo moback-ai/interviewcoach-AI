@@ -257,8 +257,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
         console.log('Question Requires Code: ', requires_code);
         
+        const answeredResumeQuestion = interviewStage === 'resume_discussion' && userInput.trim().length > 0;
+        const nextHasAnsweredResumeQuestion = hasAnsweredResumeQuestion || answeredResumeQuestion;
+
         // ✅ NEW: Track when user answers resume questions (check current stage before updating)
-        if (interviewStage === 'resume_discussion' && userInput.trim().length > 0) {
+        if (answeredResumeQuestion) {
           console.log('✅ User answered resume question - marking as answered');
           setHasAnsweredResumeQuestion(true);
         }
@@ -293,17 +296,17 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           }
           
           // Enable End Interview button only when user has answered at least one resume question
-          if (stage === 'resume_discussion' && hasAnsweredResumeQuestion) {
+          if (stage === 'resume_discussion' && nextHasAnsweredResumeQuestion) {
             console.log('✅ Resume question answered - enabling End Interview button');
             setCanEndInterview(true);
-          } else if (stage === 'custom_questions' || stage === 'candidate_questions' || stage === 'wrapup_evaluation' || stage === 'manual_end' || stage === 'timeout') {
+          } else if (stage === 'custom_questions' || stage === 'candidate_questions' || stage === 'wrapup_evaluation' || stage === 'manual_end' || stage === 'timeout' || stage === 'done') {
             console.log('✅ Later stage reached - enabling End Interview button');
             setCanEndInterview(true);
           } else {
             console.log('⏳ Waiting for resume question answer - keeping End Interview button disabled');
             console.log('🔍 Debug info:', {
               stage,
-              hasAnsweredResumeQuestion,
+              hasAnsweredResumeQuestion: nextHasAnsweredResumeQuestion,
               isResumeDiscussion: stage === 'resume_discussion'
             });
             setCanEndInterview(false);
@@ -326,9 +329,13 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         setIsResponseInProgress(false);
       } else {
         console.error('❌ Interview Manager API error:', response.message);
+        setConversation(prev => prev.filter(msg => !msg.isThinking));
+        setIsResponseInProgress(false);
       }
     } catch (error) {
       console.error('❌ Error calling Interview Manager:', error);
+      setConversation(prev => prev.filter(msg => !msg.isThinking));
+      setIsResponseInProgress(false);
     }
   };
 
@@ -338,21 +345,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     
     if (confirmed) {
       console.log('✅ User confirmed ending interview');
-      
-      // ✅ NEW: Delete chat history for this interview
-      const urlParams = new URLSearchParams(window.location.search);
-      const interviewId = urlParams.get('interview_id');
-      
-      if (interviewId) {
-        try {
-          console.log('🗑️ Deleting chat history for interview:', interviewId);
-          await deleteChatHistory(interviewId);
-          console.log('✅ Chat history deleted successfully');
-        } catch (error) {
-          console.error('❌ Failed to delete chat history:', error);
-          // Continue with interview ending even if chat history deletion fails
-        }
-      }
       
       // ✅ NEW: Show loading state
       setIsEndingInterview(true);
@@ -780,7 +772,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   };
 
   // Update the useChatHistory hook usage
-  const { loadChatHistory, appendToChatHistory, deleteChatHistory } = useChatHistory();
+  const { loadChatHistory } = useChatHistory();
 
   // Load chat history when component mounts
   useEffect(() => {
@@ -796,9 +788,10 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     };
     
     loadHistory();
-  }, [loadChatHistory]);
+  }, [loadChatHistory, setConversation]);
 
-  // Function to add message and save to database
+  // Function to add a message locally. The backend owns chat-history persistence
+  // for interview turns, which avoids duplicate rows after refresh.
   const addMessageToConversation = useCallback(async (speaker, message) => {
     // Add to local state immediately
     const newMessage = {
@@ -809,14 +802,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     };
     
     setConversation(prev => [...prev, newMessage]);
-    
-    // Save to database
-    const urlParams = new URLSearchParams(window.location.search);
-    const interviewId = urlParams.get('interview_id');
-    if (interviewId) {
-      await appendToChatHistory(interviewId, speaker, message);
-    }
-  }, [appendToChatHistory]);
+  }, [setConversation]);
 
   // Update your existing message handling functions to use addMessageToConversation
   // The callInterviewManager function already uses addMessageToConversation internally

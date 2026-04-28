@@ -41,19 +41,23 @@ const getStrengthColor = (strength) => {
 
 const normalizeLevel = (level) => {
   const normalized = String(level || '').trim().toLowerCase();
-  if (normalized === 'beginner' || normalized === 'easy') return 'easy';
-  if (normalized === 'intermediate' || normalized === 'medium' || normalized === 'mid') return 'medium';
-  if (normalized === 'expert' || normalized === 'hard' || normalized === 'advanced') return 'hard';
+  if (['beginner', 'easy', 'basic', 'junior', 'novice', 'simple'].includes(normalized)) return 'easy';
+  if (['intermediate', 'medium', 'mid', 'moderate', 'coding'].includes(normalized)) return 'medium';
+  if (['expert', 'hard', 'advanced', 'senior', 'difficult', 'complex'].includes(normalized)) return 'hard';
   return normalized || 'medium';
 };
 
 const normalizeStrength = (strength) => {
   const normalized = String(strength || '').trim().toLowerCase();
-  if (normalized === 'weak' || normalized === 'beginner') return 'beginner';
-  if (normalized === 'medium' || normalized === 'intermediate') return 'intermediate';
-  if (normalized === 'strong' || normalized === 'expert' || normalized === 'advanced') return 'expert';
+  if (['weak', 'beginner', 'easy', 'basic'].includes(normalized)) return 'beginner';
+  if (['medium', 'intermediate', 'mid'].includes(normalized)) return 'intermediate';
+  if (['strong', 'expert', 'advanced', 'hard'].includes(normalized)) return 'expert';
   return normalized || 'beginner';
 };
+
+const DIFFICULTY_ORDER = { easy: 1, medium: 2, hard: 3 };
+const EXPERIENCE_ORDER = { beginner: 1, intermediate: 2, expert: 3 };
+const formatLabel = (value) => String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
 
 
 
@@ -560,24 +564,33 @@ export default function QuestionsPage() {
     }
   };
 
-  // Group questions by difficulty + text so duplicate text across levels stays separate.
+  // Group questions by difficulty + text so answer-depth rows stay under one prompt.
   const groupedQuestions = questions.reduce((acc, item) => {
     const normalizedLevel = normalizeLevel(item.difficulty_category || item.difficulty_level);
-    const questionKey = `${normalizedLevel}::${item.question_text}`;
+    const questionText = item.question_text || item.question || '';
+    const questionKey = `${normalizedLevel}::${questionText.trim().toLowerCase()}`;
     
     if (!acc[questionKey]) {
       acc[questionKey] = {
-        question_id: item.id, // Use database ID
-        question: item.question_text,
+        question_id: questionKey,
+        question: questionText,
         level: normalizedLevel,
+        originalIndex: Object.keys(acc).length,
         answers: []
       };
     }
+
+    const strength = normalizeStrength(item.difficulty_experience || item.strength);
+    const answer = item.expected_answer || item.answer || 'No answer provided';
+    const existingAnswer = acc[questionKey].answers.find((entry) => entry.strength === strength);
     
-    acc[questionKey].answers.push({
-      strength: normalizeStrength(item.difficulty_experience), // Map from database field
-      answer: item.expected_answer || 'No answer provided'
-    });
+    if (!existingAnswer || existingAnswer.answer === 'No answer provided') {
+      if (existingAnswer) {
+        existingAnswer.answer = answer;
+      } else {
+        acc[questionKey].answers.push({ strength, answer });
+      }
+    }
     
     return acc;
   }, {});
@@ -585,20 +598,18 @@ export default function QuestionsPage() {
 
   // Sort questions by difficulty level (easy -> medium -> hard)
   const sortQuestionsByDifficulty = (questions) => {
-    const difficultyOrder = { 'easy': 1, 'medium': 2, 'hard': 3 };
-    return questions.sort((a, b) => {
-      const aOrder = difficultyOrder[a.level] || 999;
-      const bOrder = difficultyOrder[b.level] || 999;
-      return aOrder - bOrder;
+    return [...questions].sort((a, b) => {
+      const aOrder = DIFFICULTY_ORDER[a.level] || 999;
+      const bOrder = DIFFICULTY_ORDER[b.level] || 999;
+      return aOrder - bOrder || a.originalIndex - b.originalIndex;
     });
   };
 
   // Sort answers by experience level (beginner -> intermediate -> expert)
   const sortAnswersByExperience = (answers) => {
-    const experienceOrder = { 'beginner': 1, 'intermediate': 2, 'expert': 3 };
-    return answers.sort((a, b) => {
-      const aOrder = experienceOrder[a.strength] || 999;
-      const bOrder = experienceOrder[b.strength] || 999;
+    return [...answers].sort((a, b) => {
+      const aOrder = EXPERIENCE_ORDER[a.strength] || 999;
+      const bOrder = EXPERIENCE_ORDER[b.strength] || 999;
       return aOrder - bOrder;
     });
   };
@@ -1037,7 +1048,7 @@ export default function QuestionsPage() {
                               Q{index + 1}
                             </span>
                             <span className={`px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-medium rounded-lg sm:rounded-xl border ${getLevelColor(questionGroup.level)}`}>
-                              {questionGroup.level}
+                              {formatLabel(questionGroup.level)}
                             </span>
                           </div>
                           <h3 className="text-base sm:text-lg lg:text-xl font-semibold text-[var(--color-text-primary)] leading-relaxed">
@@ -1066,7 +1077,7 @@ export default function QuestionsPage() {
                         >
                           <div className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
                             {questionGroup.answers
-                              .filter(answer => filterStrength === 'all' || answer.strength === filterStrength)
+                              .filter(answer => filterStrength === 'all' || normalizeStrength(answer.strength) === normalizeStrength(filterStrength))
                               .map((answer, answerIndex) => (
                                 <motion.div
                                   key={answerIndex}
@@ -1078,10 +1089,10 @@ export default function QuestionsPage() {
                                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0 mb-3 sm:mb-4">
                                     <h4 className="text-sm font-medium text-[var(--color-text-primary)] flex items-center">
                                       <FiCode className="mr-2" size={16} />
-                                      Answer ({answer.strength})
+                                      Answer ({formatLabel(answer.strength)})
                                     </h4>
                                     <span className={`px-3 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-medium rounded-lg sm:rounded-xl border ${getStrengthColor(answer.strength)}`}>
-                                      {answer.strength}
+                                      {formatLabel(answer.strength)}
                                     </span>
                                   </div>
                                   <div className="bg-[var(--color-card)] rounded-lg sm:rounded-xl p-3 sm:p-6 border border-[var(--color-border)]">

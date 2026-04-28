@@ -10,16 +10,19 @@ function ForgotPassword() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
+  const [resetLink, setResetLink] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
     setInfoMsg('');
+    setResetLink('');
 
     try {
       const data = await forgotPassword(email);
       setInfoMsg(data.message || 'If an account exists, a reset link has been sent.');
+      setResetLink(data.reset_link || '');
     } catch (error) {
       setErrorMsg(error.message || 'Unable to send password reset link.');
     } finally {
@@ -45,7 +48,15 @@ function ForgotPassword() {
 
           {infoMsg && (
             <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm text-center">
-              {infoMsg}
+              <p>{infoMsg}</p>
+              {resetLink && (
+                <a
+                  href={resetLink}
+                  className="mt-2 inline-block font-semibold text-[var(--color-primary)] hover:underline break-all"
+                >
+                  Open reset link
+                </a>
+              )}
             </div>
           )}
 
