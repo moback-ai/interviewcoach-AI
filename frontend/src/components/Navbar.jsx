@@ -5,6 +5,27 @@ import ThemeToggle from './ThemeToggle';
 import { useAuth } from '../contexts/AuthContext';
 import { trackEvents } from '../services/mixpanel';
 
+const BrandLogo = ({ disabled = false }) => {
+  const logoClass = disabled ? 'ai-brand-logo ai-brand-logo-disabled' : 'ai-brand-logo';
+  const textClass = disabled
+    ? 'text-[var(--color-text-secondary)] opacity-60'
+    : 'text-[var(--color-primary)]';
+
+  return (
+    <span className="inline-flex items-center gap-2.5">
+      <span className={logoClass} aria-hidden="true">
+        <span className="ai-brand-node ai-brand-node-a" />
+        <span className="ai-brand-node ai-brand-node-b" />
+        <span className="ai-brand-node ai-brand-node-c" />
+        <span className="ai-brand-mark">IC</span>
+      </span>
+      <span className={`text-lg sm:text-xl md:text-2xl font-bold tracking-tight ${textClass}`}>
+        Interview<span className={disabled ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-accent)]'}>Coach</span>
+      </span>
+    </span>
+  );
+};
+
 function Navbar({ disableNavigation = false }) {
   const { user, logout } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -71,12 +92,12 @@ function Navbar({ disableNavigation = false }) {
       <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-3 sm:py-4 flex items-center justify-between">
         {/* Logo */}
         {disableNavigation ? (
-          <span className="text-lg sm:text-xl md:text-2xl font-bold text-[var(--color-text-secondary)] tracking-tight opacity-60 cursor-not-allowed">
-            Interview<span className="text-[var(--color-text-secondary)]">Coach</span>
+          <span className="cursor-not-allowed">
+            <BrandLogo disabled />
           </span>
         ) : (
-          <Link to="/" className="text-lg sm:text-xl md:text-2xl font-bold text-[var(--color-primary)] tracking-tight hover:opacity-90 transition-all duration-300">
-            Interview<span className="text-[var(--color-accent)]">Coach</span>
+          <Link to="/" className="hover:opacity-90 transition-all duration-300">
+            <BrandLogo />
           </Link>
         )}
 

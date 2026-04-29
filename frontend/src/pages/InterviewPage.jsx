@@ -803,7 +803,12 @@ function InterviewPage() {
                         }}
                       >
                         <div className="text-sm font-semibold">{preset.label}</div>
-                        <div className={`text-[11px] ${active ? 'text-white/80' : 'text-[var(--color-text-secondary)]'}`}>{preset.subtitle}</div>
+                        <div className={`text-[11px] ${active ? 'text-white/80' : 'text-[var(--color-text-secondary)]'}`}>
+                          {preset.subtitle}
+                        </div>
+                        <div className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${active ? 'text-white/70' : 'text-[var(--color-text-secondary)]'}`}>
+                          {preset.voiceType}
+                        </div>
                       </button>
                     );
                   })}

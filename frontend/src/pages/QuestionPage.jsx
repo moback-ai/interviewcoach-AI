@@ -57,7 +57,54 @@ const normalizeStrength = (strength) => {
 
 const DIFFICULTY_ORDER = { easy: 1, medium: 2, hard: 3 };
 const EXPERIENCE_ORDER = { beginner: 1, intermediate: 2, expert: 3 };
+const ANSWER_LEVELS = ['beginner', 'intermediate', 'expert'];
 const formatLabel = (value) => String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
+
+const getAnswerDisplayLabel = (strength) => {
+  const normalized = normalizeStrength(strength);
+  if (normalized === 'beginner') return 'Easy';
+  return formatLabel(normalized);
+};
+
+const questionCardVariants = {
+  hidden: {
+    opacity: 0,
+    y: 44,
+    scale: 0.96,
+    filter: 'blur(10px)'
+  },
+  visible: (index) => ({
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    filter: 'blur(0px)',
+    transition: {
+      duration: 0.62,
+      delay: Math.min(index * 0.07, 0.45),
+      ease: [0.16, 1, 0.3, 1]
+    }
+  })
+};
+
+const answerCardVariants = {
+  hidden: {
+    opacity: 0,
+    y: 28,
+    scale: 0.97,
+    filter: 'blur(6px)'
+  },
+  visible: (index) => ({
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    filter: 'blur(0px)',
+    transition: {
+      duration: 0.42,
+      delay: index * 0.08,
+      ease: [0.16, 1, 0.3, 1]
+    }
+  })
+};
 
 
 
@@ -608,16 +655,39 @@ export default function QuestionsPage() {
   // Sort answers by experience level (beginner -> intermediate -> expert)
   const sortAnswersByExperience = (answers) => {
     return [...answers].sort((a, b) => {
-      const aOrder = EXPERIENCE_ORDER[a.strength] || 999;
-      const bOrder = EXPERIENCE_ORDER[b.strength] || 999;
+      const aOrder = EXPERIENCE_ORDER[normalizeStrength(a.strength)] || 999;
+      const bOrder = EXPERIENCE_ORDER[normalizeStrength(b.strength)] || 999;
       return aOrder - bOrder;
     });
+  };
+
+  const completeAnswerLevels = (answers) => {
+    const byStrength = sortAnswersByExperience(answers).reduce((acc, answer) => {
+      const strength = normalizeStrength(answer.strength);
+      if (!acc[strength] || acc[strength].missing) {
+        acc[strength] = {
+          ...answer,
+          strength,
+          answer: answer.answer || '',
+          missing: !answer.answer || answer.answer === 'No answer provided'
+        };
+      }
+      return acc;
+    }, {});
+
+    return ANSWER_LEVELS.map((strength) => (
+      byStrength[strength] || {
+        strength,
+        answer: '',
+        missing: true
+      }
+    ));
   };
 
   // Sort grouped questions and their answers
   const sortedGroupedQuestions = Object.values(groupedQuestions).map(q => ({
     ...q,
-    answers: sortAnswersByExperience(q.answers)
+    answers: completeAnswerLevels(q.answers)
   }));
 
   const filteredQuestions = sortQuestionsByDifficulty(
@@ -971,8 +1041,8 @@ export default function QuestionsPage() {
                   onChange={(e) => setFilterStrength(e.target.value)}
                      className="appearance-none w-full px-3 sm:px-4 py-2 sm:py-3 pr-10 border border-[var(--color-border)] rounded-lg sm:rounded-xl bg-[var(--color-input-bg)] text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition-all duration-200 text-sm sm:text-base hover:border-[var(--color-primary)] cursor-pointer"
                    >
-                     <option value="all">All Experience Levels</option>
-                     <option value="beginner">Beginner</option>
+                     <option value="all">All Answer Depths</option>
+                     <option value="beginner">Easy</option>
                      <option value="intermediate">Intermediate</option>
                      <option value="expert">Expert</option>
                 </select>
@@ -1032,9 +1102,11 @@ export default function QuestionsPage() {
                 {filteredQuestions.map((questionGroup, index) => (
                   <motion.div
                     key={questionGroup.question_id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4, delay: index * 0.08 }}
+                    custom={index}
+                    variants={questionCardVariants}
+                    initial="hidden"
+                    animate="visible"
+                    whileHover={{ y: -4, scale: 1.006 }}
                     className="bg-[var(--color-card)] rounded-xl sm:rounded-2xl lg:rounded-3xl shadow-lg sm:shadow-xl lg:shadow-2xl border border-[var(--color-border)] overflow-hidden"
                   >
                     <div 
@@ -1069,10 +1141,10 @@ export default function QuestionsPage() {
                     <AnimatePresence>
                       {expandedQuestions.has(questionGroup.question_id) && (
                         <motion.div
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          transition={{ duration: 0.3 }}
+                          initial={{ opacity: 0, height: 0, y: -12, filter: 'blur(8px)' }}
+                          animate={{ opacity: 1, height: 'auto', y: 0, filter: 'blur(0px)' }}
+                          exit={{ opacity: 0, height: 0, y: -12, filter: 'blur(8px)' }}
+                          transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
                           className="px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8 border-t border-[var(--color-border)]"
                         >
                           <div className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
@@ -1080,23 +1152,30 @@ export default function QuestionsPage() {
                               .filter(answer => filterStrength === 'all' || normalizeStrength(answer.strength) === normalizeStrength(filterStrength))
                               .map((answer, answerIndex) => (
                                 <motion.div
-                                  key={answerIndex}
-                                  initial={{ opacity: 0, y: 20 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ duration: 0.3, delay: answerIndex * 0.1 }}
+                                  key={answer.strength}
+                                  custom={answerIndex}
+                                  variants={answerCardVariants}
+                                  initial="hidden"
+                                  animate="visible"
                                   className="bg-[var(--color-input-bg)] rounded-lg sm:rounded-xl p-4 sm:p-6 border border-[var(--color-border)]"
                                 >
                                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0 mb-3 sm:mb-4">
                                     <h4 className="text-sm font-medium text-[var(--color-text-primary)] flex items-center">
                                       <FiCode className="mr-2" size={16} />
-                                      Answer ({formatLabel(answer.strength)})
+                                      Answer ({getAnswerDisplayLabel(answer.strength)})
                                     </h4>
                                     <span className={`px-3 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-medium rounded-lg sm:rounded-xl border ${getStrengthColor(answer.strength)}`}>
-                                      {formatLabel(answer.strength)}
+                                      {getAnswerDisplayLabel(answer.strength)}
                                     </span>
                                   </div>
                                   <div className="bg-[var(--color-card)] rounded-lg sm:rounded-xl p-3 sm:p-6 border border-[var(--color-border)]">
-                                    <AnswerContent answer={answer.answer} />
+                                    {answer.missing ? (
+                                      <p className="text-sm sm:text-base text-[var(--color-text-secondary)] leading-relaxed">
+                                        No {getAnswerDisplayLabel(answer.strength)} answer was generated for this question yet.
+                                      </p>
+                                    ) : (
+                                      <AnswerContent answer={answer.answer} />
+                                    )}
                                   </div>
                                 </motion.div>
                               ))}

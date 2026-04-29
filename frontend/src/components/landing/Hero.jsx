@@ -33,11 +33,7 @@ function Hero() {
 
   return (
     <section className="relative pt-20 sm:pt-24 md:pt-32 lg:pt-36 pb-16 sm:pb-20 md:pb-28 lg:pb-32 text-[var(--color-text-primary)] overflow-hidden">
-      <div className="absolute inset-0 -z-10 bg-gradient-to-br from-[var(--color-primary)]/12 via-[var(--color-accent)]/8 to-transparent dark:from-[var(--color-primary)]/20 dark:via-[var(--color-accent)]/12 blur-3xl opacity-70 pointer-events-none" />
-      <div
-        className="absolute inset-x-0 top-10 -z-10 mx-auto h-80 w-[88%] rounded-[3rem] opacity-70 blur-3xl"
-        style={{ backgroundColor: 'color-mix(in srgb, var(--color-card) 70%, transparent)' }}
-      />
+      <div className="absolute inset-0 -z-10 ai-hero-field pointer-events-none" />
 
       <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 grid grid-cols-1 lg:grid-cols-2 gap-8 sm:gap-12 md:gap-16 items-center">
         
@@ -92,8 +88,12 @@ function Hero() {
 
         <div className="flex justify-center relative z-10 order-1 lg:order-2">
           <motion.div
-            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-[var(--color-primary)] rounded-full blur-3xl opacity-20 z-[-1]"
-            animate={{ scale: [1, 1.05, 1], opacity: [0.2, 0.3, 0.2] }}
+            className="absolute top-1/2 left-1/2 -z-10 h-[120%] w-[120%] -translate-x-1/2 -translate-y-1/2 rounded-[2rem] border border-[var(--color-border)]/40"
+            style={{
+              background:
+                'linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent 44%), linear-gradient(45deg, transparent 0 48%, color-mix(in srgb, var(--color-accent) 18%, transparent) 50%, transparent 52%)'
+            }}
+            animate={{ y: [-8, 8, -8], opacity: [0.42, 0.7, 0.42] }}
             transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
           />
 
