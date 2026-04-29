@@ -1,6 +1,8 @@
 import json
 import random
+import re
 import time
+from difflib import SequenceMatcher
 
 from Interview_functions import (
     log,
@@ -78,7 +80,7 @@ class InterviewManager:
         self.asked_question_texts = []
         self.last_resume_response = ""
         self.resume_followup_retry_count = 0
-        self.max_resume_followup_retries = 3
+        self.max_resume_followup_retries = 2
 
         # Custom Questions
         self.custom_qna_done = True
@@ -104,7 +106,8 @@ class InterviewManager:
         self.conversation_history.append({"role": "assistant", "content": greeting})
 
     def _question_key(self, text):
-        return " ".join((text or "").strip().lower().split())
+        cleaned = re.sub(r"[^a-z0-9]+", " ", (text or "").strip().lower())
+        return " ".join(cleaned.split())
 
     def _ensure_runtime_state(self):
         if not hasattr(self, "asked_question_texts") or not isinstance(self.asked_question_texts, list):
@@ -116,12 +119,38 @@ class InterviewManager:
 
     def _has_asked_question(self, text):
         key = self._question_key(text)
-        return bool(key) and key in self.asked_question_texts
+        if not key:
+            return False
+        if key in self.asked_question_texts:
+            return True
+        return any(self._questions_are_similar(key, asked_key) for asked_key in self.asked_question_texts)
 
     def _mark_question_asked(self, text):
         key = self._question_key(text)
         if key and key not in self.asked_question_texts:
             self.asked_question_texts.append(key)
+
+    def _questions_are_similar(self, first, second):
+        first_key = self._question_key(first)
+        second_key = self._question_key(second)
+        if not first_key or not second_key:
+            return False
+        if first_key == second_key:
+            return True
+        first_words = set(first_key.split())
+        second_words = set(second_key.split())
+        if len(first_words) >= 5 and len(second_words) >= 5:
+            overlap = len(first_words & second_words) / max(len(first_words | second_words), 1)
+            if overlap >= 0.72:
+                return True
+        return SequenceMatcher(None, first_key, second_key).ratio() >= 0.82
+
+    def _is_resume_followup_repeated(self, text):
+        return (
+            not (text or "").strip()
+            or self._questions_are_similar(text, self.current_resume_question)
+            or self._has_asked_question(text)
+        )
 
     def _pop_next_resume_question(self):
         self._ensure_runtime_state()
@@ -150,13 +179,17 @@ class InterviewManager:
 
     def _build_resume_followup(self, user_input):
         followup = generate_followup_question(self.current_resume_question, user_input)
-        if (
-            (followup or "").strip().lower() == (self.current_resume_question or "").strip().lower()
-            or self._has_asked_question(followup)
-        ):
-            followup = "Could you walk me through that with a concrete example from your experience?"
-        if self._has_asked_question(followup):
-            followup = "What was your specific role in that example, and what outcome did your work create?"
+        if self._is_resume_followup_repeated(followup):
+            for candidate in [
+                "Could you add one concrete example from your experience?",
+                "What was your specific role in that work, and what outcome did it create?",
+                "What was the main challenge in that situation, and how did you handle it?",
+            ]:
+                if not self._is_resume_followup_repeated(candidate):
+                    followup = candidate
+                    break
+            else:
+                followup = "Thanks, let's keep going."
         self._mark_question_asked(followup)
         return followup
 
@@ -437,7 +470,7 @@ class InterviewManager:
         print(f"[DEBUG] Resume Q evaluation: {result}")
 
         # 3. Evaluate response
-        if result == "strong":
+        if result in {"strong", "weak"}:
             self.current_resume_question = ""
 
             # Ask the next question immediately if available
@@ -457,7 +490,13 @@ class InterviewManager:
                     "Cool. Let’s tackle the next question.",
                     "Awesome. Here comes another one."
                 ]
-                transition = random.choice(transitions)
+                weak_transitions = [
+                    "Thanks, let’s move to the next one.",
+                    "Got it. I’ll continue with the next question.",
+                    "Thanks for answering. Here’s the next one.",
+                    "Understood. Let’s keep going.",
+                ]
+                transition = random.choice(transitions if result == "strong" else weak_transitions)
 
                 self.conversation_history.append({"role": "assistant", "content": self.current_resume_question})
                 return {

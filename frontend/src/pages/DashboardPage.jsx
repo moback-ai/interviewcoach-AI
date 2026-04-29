@@ -150,8 +150,21 @@ function DashboardPage() {
   };
 
   const handleViewSummary = (questionSetId, pairing) => {
-    // TODO: Navigate to interview summary page
-    alert('Interview summary feature coming soon!');
+    const questionSetNumber = Number(String(questionSetId).split('-').pop());
+    const questionSet = pairing.questionSets?.find(
+      (item) => Number(item.questionSetNumber) === questionSetNumber
+    );
+    const completedInterviews = (questionSet?.interviews || [])
+      .filter((interview) => interview.status === 'completed' || interview.status === 'ENDED')
+      .sort((a, b) => new Date(b.scheduled_at || b.created_at || 0) - new Date(a.scheduled_at || a.created_at || 0));
+    const latestCompleted = completedInterviews[0];
+
+    if (!latestCompleted?.id) {
+      alert('No completed interview summary is available for this question set yet.');
+      return;
+    }
+
+    navigate(`/interview-feedback?interview_id=${latestCompleted.id}`);
   };
 
   const handleRegenerateQuestions = async (pairing) => {

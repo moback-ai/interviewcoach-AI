@@ -42,11 +42,12 @@ body {
   font-family: 'Poppins', sans-serif;
   transition: background-color 0.3s ease, color 0.3s ease;
   background-image:
-    radial-gradient(circle at top, rgba(59, 130, 246, 0.10), transparent 32%),
-    radial-gradient(circle at 85% 15%, rgba(103, 197, 232, 0.12), transparent 24%);
+    linear-gradient(135deg, rgba(51, 102, 255, 0.10), transparent 34%),
+    linear-gradient(315deg, rgba(20, 184, 166, 0.10), transparent 32%);
   min-height: 100vh;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  position: relative;
 }
 
 body::before {
@@ -56,11 +57,27 @@ body::before {
   pointer-events: none;
   background-image:
     linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
-  background-size: 72px 72px;
-  mask-image: radial-gradient(circle at center, black 24%, transparent 78%);
-  opacity: 0.45;
+    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(115deg, transparent 0 46%, color-mix(in srgb, var(--color-primary) 18%, transparent) 49%, transparent 52%),
+    linear-gradient(245deg, transparent 0 44%, color-mix(in srgb, var(--color-accent) 16%, transparent) 48%, transparent 51%);
+  background-size: 72px 72px, 72px 72px, 240px 240px, 280px 280px;
+  mask-image: linear-gradient(to bottom, black, transparent 92%);
+  opacity: 0.5;
   z-index: -1;
+  animation: ai-grid-drift 24s linear infinite;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 38px, color-mix(in srgb, var(--color-primary) 10%, transparent) 39px, transparent 40px),
+    repeating-linear-gradient(0deg, transparent 0 54px, color-mix(in srgb, var(--color-accent) 8%, transparent) 55px, transparent 56px);
+  opacity: 0.22;
+  z-index: -1;
+  animation: ai-scan 14s ease-in-out infinite alternate;
 }
 
 ::selection {
@@ -81,10 +98,13 @@ body::before {
 
 .ambient-orb {
   position: absolute;
-  border-radius: 9999px;
-  background: radial-gradient(circle, var(--color-surface-glow), transparent 70%);
-  filter: blur(10px);
+  border-radius: 2rem;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 18%, transparent), transparent),
+    linear-gradient(45deg, transparent 0 48%, color-mix(in srgb, var(--color-accent) 18%, transparent) 49% 51%, transparent 52%);
+  filter: blur(2px);
   pointer-events: none;
+  animation: ai-field-pulse 8s ease-in-out infinite;
 }
 
 .floating-card {
@@ -94,8 +114,98 @@ body::before {
 .interview-grid-bg {
   background-image:
     linear-gradient(to right, color-mix(in srgb, var(--color-border) 40%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in srgb, var(--color-border) 35%, transparent) 1px, transparent 1px);
-  background-size: 44px 44px;
+    linear-gradient(to bottom, color-mix(in srgb, var(--color-border) 35%, transparent) 1px, transparent 1px),
+    linear-gradient(135deg, transparent 0 46%, color-mix(in srgb, var(--color-primary) 12%, transparent) 49%, transparent 52%);
+  background-size: 44px 44px, 44px 44px, 220px 220px;
+  animation: ai-grid-drift 28s linear infinite;
+}
+
+.ai-hero-field {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--color-primary) 12%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--color-accent) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(125deg, transparent 0 44%, color-mix(in srgb, var(--color-primary) 16%, transparent) 47%, transparent 50%),
+    linear-gradient(235deg, transparent 0 42%, color-mix(in srgb, #14B8A6 16%, transparent) 46%, transparent 49%);
+  background-size: 52px 52px, 52px 52px, 260px 260px, 310px 310px;
+  mask-image: linear-gradient(to bottom, black 0%, transparent 86%);
+  opacity: 0.78;
+  animation: ai-grid-drift 22s linear infinite;
+}
+
+.ai-brand-logo {
+  position: relative;
+  display: inline-flex;
+  width: 2.35rem;
+  height: 2.35rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  color: white;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, var(--color-primary), var(--color-accent)),
+    linear-gradient(45deg, transparent 0 46%, rgba(255,255,255,0.38) 49%, transparent 52%);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--color-primary) 30%, transparent);
+  isolation: isolate;
+}
+
+.ai-brand-logo::before,
+.ai-brand-logo::after {
+  content: "";
+  position: absolute;
+  inset: 0.35rem;
+  border: 1px solid rgba(255,255,255,0.34);
+  border-radius: 0.55rem;
+  transform: rotate(45deg);
+  animation: logo-circuit 5s ease-in-out infinite;
+}
+
+.ai-brand-logo::after {
+  inset: 0.52rem;
+  animation-delay: -2.2s;
+  opacity: 0.78;
+}
+
+.ai-brand-logo-disabled {
+  filter: grayscale(1);
+  opacity: 0.64;
+  box-shadow: none;
+}
+
+.ai-brand-mark {
+  position: relative;
+  z-index: 2;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.ai-brand-node {
+  position: absolute;
+  z-index: 3;
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 9999px;
+  background: white;
+  box-shadow: 0 0 16px rgba(255,255,255,0.86);
+  animation: node-pulse 2.8s ease-in-out infinite;
+}
+
+.ai-brand-node-a {
+  top: 0.42rem;
+  left: 0.54rem;
+}
+
+.ai-brand-node-b {
+  right: 0.42rem;
+  top: 0.95rem;
+  animation-delay: -0.9s;
+}
+
+.ai-brand-node-c {
+  bottom: 0.42rem;
+  left: 0.95rem;
+  animation-delay: -1.7s;
 }
 
 @keyframes float-card {
@@ -104,6 +214,59 @@ body::before {
   }
   50% {
     transform: translate3d(0, -10px, 0);
+  }
+}
+
+@keyframes ai-grid-drift {
+  from {
+    background-position: 0 0, 0 0, 0 0, 0 0;
+  }
+  to {
+    background-position: 72px 72px, 72px 72px, 240px 240px, -280px 280px;
+  }
+}
+
+@keyframes ai-scan {
+  0% {
+    transform: translate3d(-1.5%, -1%, 0);
+    opacity: 0.12;
+  }
+  100% {
+    transform: translate3d(1.5%, 1%, 0);
+    opacity: 0.3;
+  }
+}
+
+@keyframes ai-field-pulse {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 0.46;
+  }
+  50% {
+    transform: scale(1.04) rotate(1deg);
+    opacity: 0.72;
+  }
+}
+
+@keyframes logo-circuit {
+  0%, 100% {
+    transform: rotate(45deg) scale(0.92);
+    opacity: 0.42;
+  }
+  50% {
+    transform: rotate(45deg) scale(1.08);
+    opacity: 0.88;
+  }
+}
+
+@keyframes node-pulse {
+  0%, 100% {
+    transform: scale(0.72);
+    opacity: 0.54;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
   }
 }
 

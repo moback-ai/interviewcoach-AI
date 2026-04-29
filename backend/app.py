@@ -166,11 +166,11 @@ def normalize_difficulty_experience(value) -> str:
     normalized = str(value).strip().lower()
     if normalized in _ALLOWED_DIFFICULTY_EXPERIENCE:
         return normalized
-    if normalized in {"weak", "junior", "novice"}:
+    if normalized in {"weak", "junior", "novice", "easy", "basic"}:
         return "beginner"
     if normalized in {"medium", "mid", "strong_mid"}:
         return "intermediate"
-    if normalized in {"strong", "expert", "senior", "advanced"}:
+    if normalized in {"strong", "expert", "senior", "advanced", "hard"}:
         return "expert"
     return "beginner"
 
@@ -202,6 +202,30 @@ def format_feedback_text(value):
     if value is None:
         return ""
     return json.dumps(value)
+
+
+def ensure_password_reset_schema():
+    execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            consumed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+    """)
+    execute("CREATE INDEX IF NOT EXISTS idx_pwd_reset_user ON password_reset_tokens(user_id, expires_at DESC)")
+
+
+def normalize_feedback_row(row):
+    if not row:
+        return None
+    normalized = dict(row)
+    normalized['metrics'] = _normalize_metrics(normalized.get('metrics'))
+    normalized['key_strengths'] = _normalize_list(normalized.get('key_strengths'))
+    normalized['improvement_areas'] = _normalize_list(normalized.get('improvement_areas'))
+    return normalized
 
 
 def ensure_questions_schema():
@@ -1507,8 +1531,8 @@ def update_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     data = request.get_json() or {}
-    execute("UPDATE interviews SET status=%s WHERE id=%s",
-            (data.get('status', 'ACTIVE'), interview_id))
+    execute("UPDATE interviews SET status=%s WHERE id=%s AND user_id=%s",
+            (data.get('status', 'ACTIVE'), interview_id, request.user['id']))
     return jsonify({"success": True})
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1521,8 +1545,8 @@ def get_interview_data():
     interview_id = request.args.get('interview_id')
     interview = query_one(
         "SELECT i.*, jd.title, jd.description FROM interviews i "
-        "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s",
-        (interview_id,)
+        "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s AND i.user_id=%s",
+        (interview_id, request.user['id'])
     )
     if not interview:
         return jsonify({"success": False, "message": "Interview not found"}), 404
@@ -1622,10 +1646,18 @@ def save_feedback():
 @app.route('/api/interview-feedback/<interview_id>', methods=['GET'])
 @verify_auth_token
 def get_feedback(interview_id):
-    row = query_one("SELECT * FROM interview_feedback WHERE interview_id=%s", (interview_id,))
+    row = query_one(
+        """
+        SELECT f.*
+        FROM interview_feedback f
+        JOIN interviews i ON i.id = f.interview_id
+        WHERE f.interview_id=%s AND i.user_id=%s
+        """,
+        (interview_id, request.user['id']),
+    )
     if not row:
         return jsonify({"success": False, "message": "Not found"}), 404
-    return jsonify({"success": True, "data": dict(row)})
+    return jsonify({"success": True, "data": normalize_feedback_row(row)})
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CHAT HISTORY
@@ -1996,10 +2028,15 @@ def generate_response():
         # Handle interview completion - direct DB writes, no loopback HTTP
         feedback_saved = False
         if response.get("interview_done", False):
+            merged_path = None
+            merged_url = None
             try:
                 merged_path = _merge_interview_audio(user_id, interview_id)
                 merged_url = public_url(merged_path) if merged_path else None
+            except Exception as audio_exc:
+                print(f"[WARN] Audio merge failed; saving text feedback without merged audio: {audio_exc}")
 
+            try:
                 # Save transcript directly
                 execute(
                     "INSERT INTO transcripts (interview_id, full_transcript, evaluation_data) "
@@ -2026,17 +2063,20 @@ def generate_response():
 
                 execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
 
-                # Clean up per-turn audio files after successful merge
-                if merged_path:
-                    per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
-                                if f['name'].startswith(('interviewer_', 'user_'))]
-                    delete_files([f['relative_path'] for f in per_turn])
-
                 # Remove session from store
                 delete_session(instance_key)
                 feedback_saved = True
             except Exception as se:
                 print(f"[ERROR] Save on completion failed: {se}")
+
+            # Clean up per-turn audio files only after feedback has been persisted.
+            if feedback_saved and merged_path:
+                try:
+                    per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
+                                if f['name'].startswith(('interviewer_', 'user_'))]
+                    delete_files([f['relative_path'] for f in per_turn])
+                except Exception as cleanup_exc:
+                    print(f"[WARN] Audio cleanup failed after feedback save: {cleanup_exc}")
 
         return jsonify({
             "success": True,
@@ -2133,6 +2173,53 @@ def generate_speech():
 #  SUPPORT BOT
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _load_support_faq_sections():
+    faq_path = os.path.join(SUPPORT_BOT_PATH, "support_bot.md")
+    sections = []
+    current_title = None
+    current_lines = []
+
+    try:
+        with open(faq_path, "r", encoding="utf-8") as faq_file:
+            for line in faq_file:
+                if line.startswith("## "):
+                    if current_title:
+                        sections.append((current_title, "".join(current_lines).strip()))
+                    current_title = line.strip("# \n")
+                    current_lines = []
+                elif current_title:
+                    current_lines.append(line)
+        if current_title:
+            sections.append((current_title, "".join(current_lines).strip()))
+    except Exception as exc:
+        print(f"[WARN] Unable to load support FAQ fallback: {exc}")
+
+    return sections
+
+
+def _support_bot_fallback_reply(user_message):
+    sections = _load_support_faq_sections()
+    if not sections:
+        return (
+            "I'm having trouble reaching the AI support service right now. "
+            "Please try again in a moment, or contact support if the issue continues."
+        ), []
+
+    tokens = [token for token in re.findall(r"[a-z0-9]+", user_message.lower()) if len(token) > 2]
+    scored = []
+    for title, content in sections:
+        haystack = f"{title}\n{content}".lower()
+        score = sum(1 for token in tokens if token in haystack)
+        scored.append((score, title, content))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best = [item for item in scored if item[0] > 0][:2] or scored[:1]
+    title, content = best[0][1], best[0][2]
+    compact = " ".join(content.split())
+    if not compact:
+        compact = "I found the related support topic, but it does not include detailed steps yet."
+    return f"{title}: {compact[:700]}", [item[1] for item in best]
+
+
 @app.route('/api/support-bot', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def support_bot():
@@ -2160,7 +2247,14 @@ def support_bot():
         }})
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"success": False, "message": "Support bot unavailable"}), 500
+        fallback_response, retrieved_sections = _support_bot_fallback_reply(user_message)
+        return jsonify({"success": True, "data": {
+            "response": fallback_response,
+            "session_id": None,
+            "conversation_length": 1,
+            "retrieved_sections": retrieved_sections,
+            "degraded": True
+        }})
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  PERFORMANCE ANALYSIS
@@ -2413,10 +2507,34 @@ def _serialize_question(row):
     difficulty = normalize_question_difficulty(data.get('difficulty_level') or data.get('difficulty_category'))
     data['difficulty_level'] = difficulty
     data['difficulty_category'] = difficulty
-    data['difficulty_experience'] = data.get('difficulty_experience') or 'beginner'
+    data['difficulty_experience'] = normalize_difficulty_experience(data.get('difficulty_experience'))
     data['question'] = data.get('question_text')
     data['answer'] = data.get('expected_answer')
     return data
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _question_sort_key(row):
+    difficulty_order = {"easy": 1, "medium": 2, "hard": 3}
+    experience_order = {"beginner": 1, "intermediate": 2, "expert": 3}
+    created_at = row.get('created_at')
+    if isinstance(created_at, datetime):
+        created_key = created_at.isoformat()
+    else:
+        created_key = str(created_at or '')
+    return (
+        -_safe_int(row.get('question_set')),
+        difficulty_order.get(normalize_question_difficulty(row.get('difficulty_level') or row.get('difficulty_category')), 4),
+        created_key,
+        (row.get('question_text') or row.get('question') or '').strip().lower(),
+        experience_order.get(normalize_difficulty_experience(row.get('difficulty_experience')), 4),
+    )
 
 
 def _build_dashboard_pairings(user_id):
@@ -2450,7 +2568,15 @@ def _build_dashboard_pairings(user_id):
     ]
     feedback_rows = {
         str(row['interview_id']): dict(row)
-        for row in query_all("SELECT * FROM interview_feedback", ())
+        for row in query_all(
+            """
+            SELECT f.*
+            FROM interview_feedback f
+            JOIN interviews i ON i.id = f.interview_id
+            WHERE i.user_id = %s
+            """,
+            (user_id,),
+        )
     }
     interviews = [
         dict(row)
@@ -2839,6 +2965,7 @@ def legacy_questions():
             params.append(int(question_set))
         sql += f' ORDER BY question_set DESC, {QUESTION_ORDER_SQL}'
         rows = [_serialize_question(row) for row in query_all(sql, tuple(params))]
+        rows.sort(key=_question_sort_key)
         return jsonify({'success': True, 'data': rows})
     data = request.get_json() or {}
     resume_id = data.get('resume_id')
@@ -2897,14 +3024,18 @@ def legacy_create_payment():
 def legacy_interview_feedback():
     interview_id = request.args.get('interview_id')
     if interview_id:
-        row = query_one('SELECT * FROM interview_feedback WHERE interview_id=%s', (interview_id,))
+        row = query_one(
+            """
+            SELECT f.*
+            FROM interview_feedback f
+            JOIN interviews i ON i.id = f.interview_id
+            WHERE f.interview_id=%s AND i.user_id=%s
+            """,
+            (interview_id, request.user['id']),
+        )
         if not row:
             return jsonify({'success': True, 'data': []})
-        normalized = dict(row)
-        normalized['metrics'] = _normalize_metrics(normalized.get('metrics'))
-        normalized['key_strengths'] = _normalize_list(normalized.get('key_strengths'))
-        normalized['improvement_areas'] = _normalize_list(normalized.get('improvement_areas'))
-        return jsonify({'success': True, 'data': [normalized]})
+        return jsonify({'success': True, 'data': [normalize_feedback_row(row)]})
     limit = int(request.args.get('limit', 100))
     rows = query_all(
         """
@@ -2917,7 +3048,7 @@ def legacy_interview_feedback():
         """,
         (request.user['id'], limit),
     )
-    return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+    return jsonify({'success': True, 'data': [normalize_feedback_row(row) for row in rows]})
 
 
 @app.route('/functions/v1/transcripts', methods=['GET'])
@@ -3013,16 +3144,7 @@ def forgot_password():
     if not user:
         return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
     try:
-        execute("""
-            CREATE TABLE IF NOT EXISTS password_reset_tokens (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                token_hash TEXT NOT NULL UNIQUE,
-                expires_at TIMESTAMPTZ NOT NULL,
-                consumed_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ DEFAULT now()
-            )
-        """)
+        ensure_password_reset_schema()
         # Invalidate old tokens
         execute(
             'UPDATE password_reset_tokens SET consumed_at=now() WHERE user_id=%s AND consumed_at IS NULL',
@@ -3031,8 +3153,8 @@ def forgot_password():
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         execute(
-            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (%s,%s, now() + interval '1 hour')",
-            (user['id'], token_hash)
+            "INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES (%s,%s,%s, now() + interval '1 hour')",
+            (str(uuid.uuid4()), user['id'], token_hash)
         )
         reset_link = build_public_url('reset-password', token=token)
         text_body = (

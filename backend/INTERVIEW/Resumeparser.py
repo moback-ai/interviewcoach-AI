@@ -1240,6 +1240,28 @@ def generate_answers_for_existing_questions(structured_resume, job_title, job_de
     if not os.path.exists(questions_csv_path):
         raise FileNotFoundError(f"[ERROR] CSV not found: {questions_csv_path}")
 
+    def fallback_answer(question, strength):
+        labels = {
+            "weak": "easy",
+            "medium": "intermediate",
+            "strong": "expert",
+        }
+        level = labels.get(strength, strength)
+        if strength == "weak":
+            return (
+                f"A good {level} answer should explain the core idea behind this question in simple terms, "
+                f"then connect it to one relevant example from the candidate's experience: {question}"
+            )
+        if strength == "medium":
+            return (
+                f"A good {level} answer should describe a practical approach, the main steps taken, "
+                f"the tools or concepts involved, and one measurable outcome related to: {question}"
+            )
+        return (
+            f"A good {level} answer should go deeper into tradeoffs, edge cases, design choices, "
+            f"risk handling, and how success would be measured for: {question}"
+        )
+
     # FIX: Use the correct output path instead of overwriting the input file
     with open(questions_csv_path, "r", encoding="utf-8") as infile, open(output_path, "w", newline='', encoding="utf-8") as outfile:
         reader = csv.DictReader(infile)
@@ -1275,12 +1297,16 @@ Only respond with the answer text, no formatting.
                 try:
                     response = try_ollama_chat(prompt.strip(), model=model)
                     answer = response["message"]["content"].strip().replace('"', "'")
+                    if not answer:
+                        raise ValueError("Empty answer generated")
                     # Include requires_code when writing the row
                     writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false"])
                     print(f"[DEBUG] ↳ {strength.capitalize()} answer generated.")
                 except Exception as e:
                     print(f"[ERROR] Failed generating answer for {row['question_id']} [{strength}]: {e}")
-                    print(f"[ERROR] ↳ {strength.capitalize()} answer failed for {row['question_id']}")
+                    answer = fallback_answer(row["question"], strength)
+                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false"])
+                    print(f"[WARN] ↳ Wrote fallback {strength} answer for {row['question_id']}")
 
     print(f"[DONE] Answers written to: {output_path}")
 
@@ -1813,29 +1839,45 @@ def read_questions_from_csv(csv_file_path):
         with open(csv_file_path, 'r', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
+                raw_level = (row.get('level') or '').strip().lower()
+                raw_strength = (row.get('strength') or '').strip().lower()
+
                 # Map CSV values to database constraint values
                 level_mapping = {
                     'beginner': 'easy',
+                    'easy': 'easy',
+                    'basic': 'easy',
                     'medium': 'medium', 
-                    'hard': 'hard'
+                    'intermediate': 'medium',
+                    'mid': 'medium',
+                    'hard': 'hard',
+                    'expert': 'hard',
+                    'advanced': 'hard'
                     # Removed 'coding' mapping - coding questions are now categorized by weight
                 }
                 
                 strength_mapping = {
                     'weak': 'beginner',
+                    'beginner': 'beginner',
+                    'easy': 'beginner',
                     'medium': 'intermediate',
-                    'strong': 'expert'
+                    'intermediate': 'intermediate',
+                    'mid': 'intermediate',
+                    'strong': 'expert',
+                    'expert': 'expert',
+                    'hard': 'expert',
+                    'advanced': 'expert'
                 }
                 
                 # Get the mapped values, with fallbacks
-                difficulty_category = level_mapping.get(row['level'], 'medium')
-                difficulty_experience = strength_mapping.get(row['strength'], 'beginner')
+                difficulty_category = level_mapping.get(raw_level, 'medium')
+                difficulty_experience = strength_mapping.get(raw_strength, 'beginner')
                 
                 # Get requires_code from CSV (default to False if not present)
                 requires_code = row.get('requires_code', 'false').lower() == 'true'
                 
                 # Debug logging
-                print(f"[DEBUG] Mapping CSV values: level='{row['level']}' -> difficulty_category='{difficulty_category}', strength='{row['strength']}' -> difficulty_experience='{difficulty_experience}', requires_code={requires_code}")
+                print(f"[DEBUG] Mapping CSV values: level='{row.get('level', '')}' -> difficulty_category='{difficulty_category}', strength='{row.get('strength', '')}' -> difficulty_experience='{difficulty_experience}', requires_code={requires_code}")
                 
                 question_data = {
                     "question_text": row['question'],

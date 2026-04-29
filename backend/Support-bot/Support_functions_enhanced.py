@@ -244,6 +244,8 @@ def call_backend_user_context(auth_token, backend_api_base=None):
         return None, f"Request failed: {str(e)}"
     except json.JSONDecodeError as e:
         return None, f"Invalid JSON response: {str(e)}"
+    except Exception as e:
+        return None, f"User context formatting failed: {str(e)}"
 
 # -------------------------------
 # Format User Context for LLM
@@ -254,6 +256,17 @@ def format_user_context(user_data):
     """
     if not user_data:
         return "No user data available."
+
+    def date_prefix(value):
+        if not value:
+            return "Unknown date"
+        return str(value)[:10]
+
+    def rupee_amount(value):
+        try:
+            return float(value) / 100
+        except (TypeError, ValueError):
+            return 0.0
     
     context_parts = []
     
@@ -270,8 +283,9 @@ def format_user_context(user_data):
     if payments:
         context_parts.append(f"\nPAYMENT HISTORY ({len(payments)} payments):")
         for payment in payments[:5]:  # Show last 5 payments
-            date = payment['paid_at'][:10] if payment['paid_at'] else 'Unknown date'
-            context_parts.append(f"- ₹{payment['amount'] / 100:.2f} on {date} (Status: {payment['payment_status']})")
+            date = date_prefix(payment.get('paid_at'))
+            amount = rupee_amount(payment.get('amount'))
+            context_parts.append(f"- ₹{amount:.2f} on {date} (Status: {payment.get('payment_status', 'unknown')})")
         if len(payments) > 5:
             context_parts.append(f"- ... and {len(payments) - 5} more payments")
     else:
@@ -282,8 +296,11 @@ def format_user_context(user_data):
     if interviews:
         context_parts.append(f"\nINTERVIEW HISTORY ({len(interviews)} interviews):")
         for interview in interviews[:5]:  # Show last 5 interviews
-            date = interview['created_at'][:10] if interview['created_at'] else 'Unknown date'
-            context_parts.append(f"- {interview['job_title']} on {date} (Status: {interview['status']}, Attempt: {interview['attempt_number']})")
+            date = date_prefix(interview.get('created_at') or interview.get('scheduled_at'))
+            context_parts.append(
+                f"- {interview.get('job_title') or 'Untitled role'} on {date} "
+                f"(Status: {interview.get('status', 'unknown')}, Attempt: {interview.get('attempt_number', 1)})"
+            )
         if len(interviews) > 5:
             context_parts.append(f"- ... and {len(interviews) - 5} more interviews")
     else:
@@ -294,8 +311,8 @@ def format_user_context(user_data):
     if resumes:
         context_parts.append(f"\nUPLOADED RESUMES ({len(resumes)} resumes):")
         for resume in resumes[:3]:  # Show last 3 resumes
-            date = resume['uploaded_at'][:10] if resume['uploaded_at'] else 'Unknown date'
-            context_parts.append(f"- {resume['file_name']} (uploaded {date})")
+            date = date_prefix(resume.get('uploaded_at'))
+            context_parts.append(f"- {resume.get('file_name') or 'Resume'} (uploaded {date})")
     else:
         context_parts.append(f"\nUPLOADED RESUMES: No resumes found")
     
@@ -304,8 +321,8 @@ def format_user_context(user_data):
     if job_descriptions:
         context_parts.append(f"\nJOB APPLICATIONS ({len(job_descriptions)} jobs):")
         for jd in job_descriptions[:3]:  # Show last 3 job descriptions
-            date = jd['created_at'][:10] if jd['created_at'] else 'Unknown date'
-            context_parts.append(f"- {jd['title']} (applied {date})")
+            date = date_prefix(jd.get('created_at'))
+            context_parts.append(f"- {jd.get('title') or 'Untitled role'} (applied {date})")
     else:
         context_parts.append(f"\nJOB APPLICATIONS: No job applications found")
     
