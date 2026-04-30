@@ -47,6 +47,35 @@ def log(func_name):
     print(f"{color_code}[Debug] called {func_name}{RESET}")
 
 
+def _is_non_answer(text):
+    normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").strip().lower()).strip()
+    if not normalized:
+        return True
+    if normalized in {
+        "idk", "i dont know", "i do not know", "dont know", "not sure",
+        "no idea", "nothing", "whatever", "skip", "pass", "na", "n a"
+    }:
+        return True
+    return len(normalized.split()) <= 2 and normalized in {"no", "yes", "ok", "okay"}
+
+
+def _is_substantive_response(text):
+    normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").strip().lower()).strip()
+    if _is_non_answer(normalized):
+        return False
+    words = normalized.split()
+    if len(words) >= 6:
+        return True
+    return any(
+        keyword in normalized
+        for keyword in (
+            "engineer", "developer", "experience", "project", "worked",
+            "built", "managed", "designed", "debug", "deploy", "python",
+            "react", "aws", "database", "api", "hobby", "enjoy", "like"
+        )
+    )
+
+
 # ===== BEGINING OF - INTRO & EXPLAINING JOB DESCRIPTION IF NECESSARY FUNCTIONS USED =====
 
 
@@ -93,6 +122,19 @@ def generate_contextual_intro_reply(job_title, job_description, conversation_his
 
     except Exception as e:
         print(f"[ERROR] contextual_intro_reply failed: {e}")
+        lowered = (user_input or "").lower()
+        asks_about_role = any(
+            phrase in lowered
+            for phrase in ("about the role", "about this role", "job role", "responsibilities", "what does", "what is the job")
+        )
+        if asks_about_role and job_description:
+            summary = " ".join(job_description.split())[:320]
+            return {
+                "message": f"This role focuses on {summary}.",
+                "job_explained": True,
+            }
+        if _is_substantive_response(user_input):
+            return {"message": "Thanks for sharing that.", "job_explained": False}
         return {"message": "Could you tell me a bit about yourself?", "job_explained": False}
 
 
@@ -124,7 +166,17 @@ def assess_intro_progress(conversation_history):
 
     except Exception as e:
         print(f"[ERROR] assess_intro_progress failed: {e}")
-        return "retry"
+        user_messages = [
+            (item.get("content") or "")
+            for item in conversation_history
+            if item.get("role") == "user"
+        ]
+        meaningful_intro = any(_is_substantive_response(message) for message in user_messages)
+        if meaningful_intro:
+            return "continue"
+        if user_messages and _is_non_answer(user_messages[-1]):
+            return "retry"
+        return "wait"
     
 
 
@@ -168,7 +220,7 @@ def assess_icebreaker_response(user_response, question):
         return raw.strip().lower().replace('"', '').replace("'", "")
     except Exception as e:
         print(f"[ERROR] Icebreaker assessment failed: {e}")
-        return "retry"
+        return "valid" if _is_substantive_response(user_response) else "retry"
 
 
 def generate_icebreaker_question(job_title):
@@ -281,7 +333,7 @@ def evaluate_resume_response(question, response):
 
     except Exception as e:
         print(f"[ERROR] evaluate_resume_response failed: {e}")
-        return "confused"
+        return "weak" if _is_substantive_response(response) else "confused"
 
 def generate_followup_question(original_question, weak_response):
     log("generate_followup_question")
@@ -333,7 +385,7 @@ def evaluate_custom_response(question, response):
 
     except Exception as e:
         print(f"[ERROR] evaluate_custom_response failed: {e}")
-        return "confused"
+        return "clear" if _is_substantive_response(response) else "confused"
 
 def generate_custom_followup(question, last_response):
     log("generate_custom_followup")
