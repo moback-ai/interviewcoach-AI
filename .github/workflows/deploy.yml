@@ -560,6 +560,14 @@ jobs:
           if [ -z "$APP_DOMAIN" ]; then
             APP_DOMAIN="ugaanlabs.ai"
           fi
+          APP_DOMAIN="${APP_DOMAIN#http://}"
+          APP_DOMAIN="${APP_DOMAIN#https://}"
+          APP_DOMAIN="${APP_DOMAIN%%/*}"
+          has_ssl_cert() {
+            [ -n "$APP_DOMAIN" ] &&
+              sudo test -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" &&
+              sudo test -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem"
+          }
           SERVER_NAMES="$APP_DOMAIN"
           case "$APP_DOMAIN" in
             www.*) ;;
@@ -596,7 +604,7 @@ jobs:
           export APP_DOMAIN
           export SERVER_NAMES
           export BACKEND_PROXY_HOST
-          if [ -n "$APP_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]; then
+          if has_ssl_cert; then
             {
               echo "server {"
               echo "    listen 80;"
@@ -781,7 +789,7 @@ jobs:
           sudo nginx -t
           sudo systemctl reload nginx
           frontend_check() {
-            if [ -n "$APP_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]; then
+            if has_ssl_cert; then
               curl -kfsS --max-time 10 \
                 --resolve "$APP_DOMAIN:443:127.0.0.1" \
                 "https://$APP_DOMAIN/index.html" >/dev/null
@@ -805,6 +813,9 @@ jobs:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
         run: |
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#http://}"
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#https://}"
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN%%/*}"
           if [ -n "$FRONTEND_DOMAIN" ]; then
             FRONTEND_ORIGIN="https://$FRONTEND_DOMAIN"
           else
