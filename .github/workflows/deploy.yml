@@ -557,6 +557,14 @@ jobs:
           PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
           NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
+          if [ -z "$APP_DOMAIN" ]; then
+            APP_DOMAIN="ugaanlabs.ai"
+          fi
+          SERVER_NAMES="$APP_DOMAIN"
+          case "$APP_DOMAIN" in
+            www.*) ;;
+            *) SERVER_NAMES="$APP_DOMAIN www.$APP_DOMAIN" ;;
+          esac
           BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
           BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
           BACKEND_PROXY_HOST="127.0.0.1:5001"
@@ -586,18 +594,19 @@ jobs:
             sleep 2
           done
           export APP_DOMAIN
+          export SERVER_NAMES
           export BACKEND_PROXY_HOST
           if [ -n "$APP_DOMAIN" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem" ]; then
             {
               echo "server {"
               echo "    listen 80;"
-              echo "    server_name $APP_DOMAIN;"
+              echo "    server_name $SERVER_NAMES;"
               echo '    return 301 https://$host$request_uri;'
               echo "}"
               echo
               echo "server {"
               echo "    listen 443 ssl http2;"
-              echo "    server_name $APP_DOMAIN;"
+              echo "    server_name $SERVER_NAMES;"
               echo
               echo "    ssl_certificate /etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem;"
               echo "    ssl_certificate_key /etc/letsencrypt/live/$APP_DOMAIN/privkey.pem;"
@@ -793,7 +802,7 @@ jobs:
 
       - name: 4. Deploy and Verify - Report Deployment Status
         env:
-          FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN }}
+          FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
         run: |
           if [ -n "$FRONTEND_DOMAIN" ]; then
