@@ -2,6 +2,27 @@ import { getApiBaseUrl } from '../utils/apiConfig';
 
 const API_BASE = getApiBaseUrl();
 
+const decodeJwtPayload = (token) => {
+  if (!token) return null;
+  try {
+    const [, payload] = token.split('.');
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+};
+
+export const isTokenExpired = (token, clockSkewSeconds = 30) => {
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) {
+    return false;
+  }
+  return payload.exp * 1000 <= Date.now() + clockSkewSeconds * 1000;
+};
+
 const normalizeUser = (user) => {
   if (!user) return null;
   return {
@@ -13,7 +34,15 @@ const normalizeUser = (user) => {
   };
 };
 
-export const getAccessToken = () => localStorage.getItem('ic_token');
+export const getAccessToken = () => {
+  const token = localStorage.getItem('ic_token');
+  if (!token) return null;
+  if (isTokenExpired(token)) {
+    clearStoredAuth();
+    return null;
+  }
+  return token;
+};
 
 export const getStoredUser = () => {
   try {

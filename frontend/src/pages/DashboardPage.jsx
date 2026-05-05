@@ -86,7 +86,8 @@ function DashboardPage() {
 
       const session = await getSession();
       if (!session) {
-        throw new Error('No active session');
+        navigate('/login', { replace: true });
+        return;
       }
 
       const backendOrigin = getBackendOrigin();
@@ -103,6 +104,10 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
+      if ((error.message || '').toLowerCase().includes('token expired')) {
+        navigate('/login', { replace: true });
+        return;
+      }
       setError(error.message);
     } finally {
       setLoading(false);
