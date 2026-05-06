@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiEye, FiEyeOff } from 'react-icons/fi';
+import { FiEye, FiEyeOff, FiCheck, FiX, FiLoader } from 'react-icons/fi';
+import { useEffect } from 'react';
 import Navbar from '../components/Navbar';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail, isValidUsername } from '../lib/authClient';
 import { performSmartRedirect } from '../utils/smartRouting';
 import { trackEvents } from '../services/mixpanel';
-import { checkEmailAvailability } from '../utils/emailAvailability';
+import { checkEmailAvailability, checkUsernameAvailability } from '../utils/emailAvailability';
 
 function Login() {
   const navigate = useNavigate();
@@ -23,6 +24,52 @@ function Login() {
   const normalizedIdentifier = identifier.toLowerCase().trim();
   const looksLikeEmail = normalizedIdentifier.includes('@');
   const identifierIsValid = looksLikeEmail ? isValidEmail(normalizedIdentifier) : isValidUsername(normalizedIdentifier);
+
+  const [idStatus, setIdStatus] = useState('idle');
+  const [idChecked, setIdChecked] = useState(false);
+  const [identifierBlurred, setIdentifierBlurred] = useState(false);
+  const [idInvalidated, setIdInvalidated] = useState(false);
+  // Tracks if user has ever gotten a confirmed result — never resets
+  const hadConfirmedCheck = useRef(false);
+  const lastConfirmedId = useRef('');
+
+  const handleIdentifierBlur = async () => {
+    if (!identifier || identifier.length < 3 || !identifierIsValid) {
+      setIdStatus('idle');
+      setIdChecked(false);
+      setIdInvalidated(false);
+      return;
+    }
+    // Same as last confirmed value — restore green instantly, no API call needed
+    if (hadConfirmedCheck.current && normalizedIdentifier === lastConfirmedId.current) {
+      setIdStatus('exists');
+      setIdChecked(true);
+      setIdInvalidated(false);
+      return;
+    }
+    // Different from what was confirmed — show red immediately while API checks
+    if (hadConfirmedCheck.current) {
+      setIdInvalidated(true);
+    }
+    setIdStatus('checking');
+    setIdChecked(false);
+    try {
+      let res;
+      if (looksLikeEmail) {
+        res = await checkEmailAvailability(normalizedIdentifier);
+      } else {
+        res = await checkUsernameAvailability(normalizedIdentifier);
+      }
+      setIdStatus(res.exists ? 'exists' : 'missing');
+      setIdChecked(true);
+      hadConfirmedCheck.current = true;
+      if (res.exists) lastConfirmedId.current = normalizedIdentifier;
+      setIdInvalidated(false);
+    } catch {
+      setIdStatus('idle');
+      setIdChecked(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -110,18 +157,42 @@ function Login() {
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
               <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Email or Username</label>
-              <input
-                type="text"
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
-                required
-                disabled={loading}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
-                placeholder="you@example.com or your.username"
-              />
-              {identifier && !identifierIsValid && (
-                <p className="text-xs text-red-500 mt-1">Enter a valid email or a username with at least 3 valid characters.</p>
-              )}
+              <div className="relative">
+                <input
+                  type="text"
+                  value={identifier}
+                  onChange={(e) => {
+                    setIdentifier(e.target.value);
+                    setIdStatus('idle');
+                    setIdChecked(false);
+                  }}
+                  onFocus={() => setIdentifierBlurred(false)}
+                  onBlur={() => { setIdentifierBlurred(true); handleIdentifierBlur(); }}
+                  required
+                  disabled={loading}
+                  className={`w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border focus:outline-none focus:ring-2 transition pr-10 ${idChecked && idStatus === 'exists' ? 'border-green-500 focus:ring-green-500' :
+                    (idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length > 0 && !identifierIsValid) || (idInvalidated && identifierBlurred) ? 'border-red-500 focus:ring-red-500' :
+                      'border-[var(--color-border)] focus:ring-[var(--color-primary)]'
+                    }`}
+                  placeholder="you@example.com or your.username"
+                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center">
+                  {idStatus === 'checking' && <FiLoader className="animate-spin text-blue-500" />}
+                  {idChecked && idStatus === 'exists' && <FiCheck className="text-green-500" strokeWidth={3} size={20} title="Account exists" />}
+                  {((idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length > 0 && !identifierIsValid) || (idInvalidated && identifierBlurred)) && <FiX className="text-red-500" strokeWidth={3} size={20} title="Invalid or not found" />}
+                </div>
+              </div>
+              {identifierBlurred && identifier.length > 0 && identifier.length < 3 ? (
+                <p className="mt-2 flex items-center gap-1.5 text-sm text-red-500">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs shrink-0">!</span>
+                  Enter a valid email or a username with at least 3 valid characters..
+                </p>
+              ) : (idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length >= 3 && !identifierIsValid) || (idInvalidated && identifierBlurred) ? (
+                <p className="mt-2 flex items-center gap-1.5 text-sm text-red-500">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs shrink-0">!</span>
+                  Don't have an account? Create one.
+                </p>
+              ) : null}
             </div>
 
             <div>
@@ -130,19 +201,26 @@ function Login() {
                 <input
                   type={passwordVisible ? 'text' : 'password'}
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (errorMsg.toLowerCase().includes('password')) setErrorMsg('');
+                  }}
                   required
                   disabled={loading}
-                  className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition pr-10"
+                  className={`w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border focus:outline-none focus:ring-2 transition pr-20 ${errorMsg.toLowerCase().includes('password') && password.length > 0 ? 'border-red-500 focus:ring-red-500' : 'border-[var(--color-border)] focus:ring-[var(--color-primary)]'
+                    }`}
                   placeholder="Enter your password"
                 />
-                <button
-                  type="button"
-                  onClick={() => setPasswordVisible((prev) => !prev)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]"
-                >
-                  {passwordVisible ? <FiEyeOff /> : <FiEye />}
-                </button>
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center gap-2">
+                  {errorMsg.toLowerCase().includes('password') && password.length > 0 && <FiX className="text-red-500" strokeWidth={3} size={20} title="Invalid password" />}
+                  <button
+                    type="button"
+                    onClick={() => setPasswordVisible((prev) => !prev)}
+                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] transition"
+                  >
+                    {passwordVisible ? <FiEyeOff size={20} /> : <FiEye size={20} />}
+                  </button>
+                </div>
               </div>
               <div className="mt-2 flex items-center justify-between text-sm">
                 <Link to="/forgot-password" className="text-[var(--color-primary)] hover:underline">
