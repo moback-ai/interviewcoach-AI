@@ -12,24 +12,14 @@ const metrics = [
 function Hero() {
   const { isDark } = useTheme();
   const [imageLoaded, setImageLoaded] = useState(false);
-  const [currentImage, setCurrentImage] = useState('');
 
   const heroImage = isDark
-    ? '/assets/landing/hero/hero-dark.png'
-    : '/assets/landing/hero/hero-light.png';
+    ? '/assets/landing/hero/hero-dark.jpg'
+    : '/assets/landing/hero/hero-light.jpg';
 
-  // Smooth theme transition with crossfade effect
   useEffect(() => {
-    if (heroImage !== currentImage) {
-      setImageLoaded(false);
-      const img = new Image();
-      img.onload = () => {
-        setCurrentImage(heroImage);
-        setImageLoaded(true);
-      };
-      img.src = heroImage;
-    }
-  }, [heroImage, currentImage]);
+    setImageLoaded(false);
+  }, [heroImage]);
 
   return (
     <section className="relative pt-20 sm:pt-24 md:pt-32 lg:pt-36 pb-16 sm:pb-20 md:pb-28 lg:pb-32 text-[var(--color-text-primary)] overflow-hidden">
@@ -122,20 +112,24 @@ function Hero() {
               </div>
             </motion.div>
 
-            {currentImage && (
-              <motion.img
-                key={currentImage}
-                src={currentImage}
-                alt="Interview Coach Preview"
-                className="w-full drop-shadow-xl rounded-[2rem] border border-[var(--color-border)]/70 bg-[var(--color-card)]/80 p-2 shadow-[0_40px_120px_rgba(15,23,42,0.18)] backdrop-blur-xl"
-                initial={{ opacity: 0, y: 18, scale: 0.98 }}
-                animate={{ opacity: imageLoaded ? 1 : 0, y: imageLoaded ? 0 : 18, scale: imageLoaded ? 1 : 0.98 }}
-                transition={{ 
-                  duration: 0.45, 
-                  ease: [0.4, 0, 0.2, 1]
-                }}
-              />
-            )}
+            <motion.img
+              key={heroImage}
+              src={heroImage}
+              alt="Interview Coach Preview"
+              width="1536"
+              height="1024"
+              loading="eager"
+              fetchPriority="high"
+              decoding="async"
+              onLoad={() => setImageLoaded(true)}
+              className="w-full drop-shadow-xl rounded-[2rem] border border-[var(--color-border)]/70 bg-[var(--color-card)]/80 p-2 shadow-[0_40px_120px_rgba(15,23,42,0.18)] backdrop-blur-xl"
+              initial={{ opacity: 0, y: 18, scale: 0.98 }}
+              animate={{ opacity: imageLoaded ? 1 : 0, y: imageLoaded ? 0 : 18, scale: imageLoaded ? 1 : 0.98 }}
+              transition={{
+                duration: 0.45,
+                ease: [0.4, 0, 0.2, 1]
+              }}
+            />
             
             {!imageLoaded && (
               <motion.div

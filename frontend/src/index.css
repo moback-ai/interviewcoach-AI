@@ -89,6 +89,11 @@ body::after {
   min-height: 100vh;
 }
 
+.landing-section {
+  content-visibility: auto;
+  contain-intrinsic-size: 960px;
+}
+
 .glass-panel {
   background: color-mix(in srgb, var(--color-card) 72%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
@@ -256,6 +261,21 @@ body::after {
   50% {
     transform: rotate(45deg) scale(1.08);
     opacity: 0.88;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

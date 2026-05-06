@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { FiUser, FiMenu, FiX, FiLogIn, FiLogOut } from 'react-icons/fi';
 import ThemeToggle from './ThemeToggle';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,6 +28,8 @@ const BrandLogo = ({ disabled = false }) => {
 
 function Navbar({ disableNavigation = false }) {
   const { user, logout } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -59,6 +61,24 @@ function Navbar({ disableNavigation = false }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const navigateToSection = (sectionId) => {
+    if (disableNavigation) return;
+
+    setMenuOpen(false);
+    setDropdownOpen(false);
+
+    const target = document.getElementById(sectionId);
+
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const basePath = location.pathname === '/' ? '/' : location.pathname;
+      window.history.replaceState(null, '', `${basePath}#${sectionId}`);
+      return;
+    }
+
+    navigate(`/#${sectionId}`);
+  };
+
   // Helper function to render navigation links
   const renderNavLink = (to, children, onClick = null) => {
     if (disableNavigation) {
@@ -81,6 +101,26 @@ function Navbar({ disableNavigation = false }) {
       <Link to={to} className="hover:text-[var(--color-accent)]">
         {children}
       </Link>
+    );
+  };
+
+  const renderNavButton = (children, onClick) => {
+    if (disableNavigation) {
+      return (
+        <span className="text-[var(--color-text-secondary)] cursor-not-allowed opacity-60">
+          {children}
+        </span>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="cursor-pointer text-[var(--color-text-primary)] transition-colors duration-200 hover:text-[var(--color-accent)]"
+      >
+        {children}
+      </button>
     );
   };
 
@@ -107,7 +147,7 @@ function Navbar({ disableNavigation = false }) {
           {user && renderNavLink("/dashboard", "Dashboard")}
           {renderNavLink("/upload", "Upload")}
           {renderNavLink("/faq", "Help & FAQ")}
-          <span className="text-[var(--color-text-primary)] cursor-not-allowed">Contact</span>
+          {renderNavButton("Contact", () => navigateToSection('contact'))}
         </nav>
 
         {/* Right side icons */}
@@ -198,7 +238,7 @@ function Navbar({ disableNavigation = false }) {
             {user && renderNavLink("/dashboard", "Dashboard", () => setMenuOpen(false))}
             {renderNavLink("/upload", "Upload", () => setMenuOpen(false))}
             {renderNavLink("/faq", "Help & FAQ", () => setMenuOpen(false))}
-            <span className="text-[var(--color-text-primary)] cursor-not-allowed">Contact</span>
+            {renderNavButton("Contact", () => navigateToSection('contact'))}
 
             {/* User Info (mobile only) */}
             {user ? (
