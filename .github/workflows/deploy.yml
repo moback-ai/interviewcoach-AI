@@ -557,6 +557,18 @@ jobs:
           PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
           NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
+          BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
+          BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
+          BACKEND_PROXY_HOST="127.0.0.1:5001"
+          sudo mkdir -p "$RELEASES_DIR"
+          sudo rsync -av --delete /tmp/frontend-dist/ "$NEW_RELEASE/"
+          if [ -z "$APP_DOMAIN" ]; then
+            DETECTED_CERT_DIR="$(find /etc/letsencrypt/live -mindepth 1 -maxdepth 1 -type d ! -name 'README' | head -n 1 || true)"
+            if [ -n "$DETECTED_CERT_DIR" ]; then
+              APP_DOMAIN="$(basename "$DETECTED_CERT_DIR")"
+              echo "FRONTEND_DOMAIN secret missing, auto-detected HTTPS domain: $APP_DOMAIN"
+            fi
+          fi
           if [ -z "$APP_DOMAIN" ]; then
             APP_DOMAIN="ugaanlabs.ai"
           fi
@@ -573,11 +585,6 @@ jobs:
             www.*) ;;
             *) SERVER_NAMES="$APP_DOMAIN www.$APP_DOMAIN" ;;
           esac
-          BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
-          BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
-          BACKEND_PROXY_HOST="127.0.0.1:5001"
-          sudo mkdir -p "$RELEASES_DIR"
-          sudo rsync -av --delete /tmp/frontend-dist/ "$NEW_RELEASE/"
           cat > "$BACKEND_TUNNEL_KEY" <<'KEYEOF'
           ${{ secrets.EC2_SSH_KEY }}
           KEYEOF
