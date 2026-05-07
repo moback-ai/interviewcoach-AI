@@ -39,6 +39,19 @@ const SupportBot = () => {
     }
   }, [isOpen, startNewChat]);
 
+  useEffect(() => {
+    const handleOpenSupportChat = () => {
+      setIsOpen(true);
+      setIsMinimized(false);
+      if (error) {
+        clearError();
+      }
+    };
+
+    window.addEventListener('support-chat:open', handleOpenSupportChat);
+    return () => window.removeEventListener('support-chat:open', handleOpenSupportChat);
+  }, [clearError, error]);
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!inputMessage.trim() || isLoading) return;

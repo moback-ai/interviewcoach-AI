@@ -4,6 +4,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
   AWS_REGION: ap-south-1
+  NODE_VERSION_SPEC: latest
+  NPM_VERSION_SPEC: latest
 
 on:
   workflow_dispatch:
@@ -214,15 +216,25 @@ jobs:
           {
             echo "### Upgrade Policy"
             echo "- Ubuntu, database engine, and app dependency upgrades are reported here for review."
+            echo "- This workflow auto-updates Node.js and npm during deployment."
             echo "- This workflow does not auto-upgrade production OS packages, RDS/PostgreSQL, or app dependencies."
             echo "- Apply infrastructure upgrades in a separate approved maintenance window."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 2. Build and Audit - Setup Node
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: current
+          node-version: ${{ env.NODE_VERSION_SPEC }}
+
+      - name: 2. Build and Audit - Update npm
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+        run: |
+          npm install --global npm@${{ env.NPM_VERSION_SPEC }}
+          {
+            echo "- Build runner Node.js: \`$(node --version)\`"
+            echo "- Build runner npm: \`$(npm --version)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 2. Build and Audit - Build Frontend
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
@@ -309,12 +321,54 @@ jobs:
         run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
+      - name: 4. Deploy and Verify - Update Node.js and npm on Target Hosts
+        run: |
+          update_node_host() {
+            host="$1"
+            label="$2"
+
+            if [ -z "$host" ]; then
+              return
+            fi
+
+            {
+              echo "### $label Toolchain Update"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$host" '
+              set -e
+              export DEBIAN_FRONTEND=noninteractive
+              sudo apt-get update
+              sudo apt-get install -y ca-certificates curl gnupg
+              curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+              sudo npm install -g npm@latest
+              if command -v pm2 >/dev/null 2>&1; then
+                sudo npm install -g pm2@latest
+              fi
+              echo "Node.js $(node --version)"
+              echo "npm $(npm --version)"
+              if command -v pm2 >/dev/null 2>&1; then
+                echo "pm2 $(pm2 --version)"
+              fi
+            ' | tee -a "$GITHUB_STEP_SUMMARY"
+
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          update_node_host "${{ secrets.BACKEND_HOST }}" "Backend Host"
+          if [ "${{ secrets.FRONTEND_HOST }}" != "${{ secrets.BACKEND_HOST }}" ]; then
+            update_node_host "${{ secrets.FRONTEND_HOST }}" "Frontend Host"
+          fi
+
       - name: 4. Deploy and Verify - Audit Target Versions
         if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           {
             echo "### Target Environment Version Audit"
-            echo "- This is advisory only; no upgrades are applied automatically."
+            echo "- Node.js and npm are auto-updated before this audit runs."
+            echo "- The rest of this audit is advisory only."
             echo ""
             echo "#### Backend Host"
             echo '```'
