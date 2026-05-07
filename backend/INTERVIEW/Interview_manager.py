@@ -80,7 +80,7 @@ class InterviewManager:
         self.asked_question_texts = []
         self.last_resume_response = ""
         self.resume_followup_retry_count = 0
-        self.max_resume_followup_retries = 3
+        self.max_resume_followup_retries = 2
 
         # Custom Questions
         self.custom_qna_done = True
@@ -470,7 +470,7 @@ class InterviewManager:
         print(f"[DEBUG] Resume Q evaluation: {result}")
 
         # 3. Evaluate response
-        if result == "strong":
+        if result in {"strong", "weak"}:
             self.current_resume_question = ""
 
             # Ask the next question immediately if available

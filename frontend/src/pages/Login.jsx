@@ -41,19 +41,6 @@ function Login() {
       ? stateRedirectPath
       : '';
 
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get('expired') !== 'true') {
-      return;
-    }
-
-    setInfoMsg('Your session has expired. Please log in again.');
-    params.delete('expired');
-    const next = params.toString();
-    const nextUrl = `${location.pathname}${next ? `?${next}` : ''}`;
-    window.history.replaceState({}, document.title, nextUrl);
-  }, [location.pathname, location.search]);
-
   const handleIdentifierBlur = async () => {
     if (!identifier || identifier.length < 3 || !identifierIsValid) {
       setIdStatus('idle');
