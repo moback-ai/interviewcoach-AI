@@ -54,6 +54,7 @@ from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
+from INTERVIEW.Resumeparser import parse_job_description_file, classify_if_technical_role
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -1730,10 +1731,32 @@ def parse_job_description():
             file.save(tf.name)
             temp_path = tf.name
         try:
-            result = summarize_job_description_text(extract_text_from_uploaded_document(temp_path, ext))
-            job_title = result.get('job_title', '')
-            job_description = result.get('job_description', '')
-            is_technical = classify_job_description_is_technical(job_title, job_description)
+            job_title = ""
+            job_description = ""
+            is_technical = False
+
+            try:
+                if not ollama_ready():
+                    raise RuntimeError("Ollama is unavailable")
+                llm_result = parse_job_description_file(temp_path, model="llama3")
+                job_title = (llm_result.get("job_title") or "").strip()
+                job_description = (llm_result.get("job_description") or "").strip()
+                if job_title and job_description:
+                    try:
+                        is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
+                    except Exception as classify_error:
+                        print(f"[WARN] LLM technical classification failed, using heuristic fallback: {classify_error}")
+                        is_technical = classify_job_description_is_technical(job_title, job_description)
+                else:
+                    raise RuntimeError("LLM parser returned empty title/description")
+            except Exception as llm_error:
+                print(f"[WARN] LLM JD parsing failed; falling back to local summarizer: {llm_error}")
+                fallback_result = summarize_job_description_text(
+                    extract_text_from_uploaded_document(temp_path, ext)
+                )
+                job_title = (fallback_result.get("job_title") or "").strip()
+                job_description = (fallback_result.get("job_description") or "").strip()
+                is_technical = classify_job_description_is_technical(job_title, job_description)
             return jsonify({"success": True, "data": {
                 "job_title": job_title,
                 "job_description": job_description,
