@@ -1110,6 +1110,26 @@ def summarize_job_description_text(raw_text):
     }
 
 
+def validate_job_description_text(job_description, min_chars=30, min_words=6, min_alpha_ratio=0.45):
+    text = (job_description or "").strip()
+    if not text:
+        return False, "Job description cannot be empty."
+    if len(text) < min_chars:
+        return False, f"Job description must be at least {min_chars} characters."
+
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    if len(words) < min_words:
+        return False, "Job description appears too short. Please provide more details."
+
+    alpha_count = sum(1 for ch in text if ch.isalpha())
+    symbol_count = sum(1 for ch in text if not ch.isspace())
+    alpha_ratio = (alpha_count / symbol_count) if symbol_count else 0.0
+    if alpha_ratio < min_alpha_ratio:
+        return False, "Job description appears invalid or random. Please share readable role details."
+
+    return True, ""
+
+
 def classify_job_description_is_technical(job_title, job_description):
     haystack = f"{job_title} {job_description}".lower()
     technical_keywords = [
@@ -1485,9 +1505,13 @@ def create_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     data = request.get_json() or {}
+    jd_description = (data.get('description') or "").strip()
+    is_valid_jd, jd_validation_error = validate_job_description_text(jd_description)
+    if not is_valid_jd:
+        return jsonify({"success": False, "message": jd_validation_error}), 400
     jd = execute(
         "INSERT INTO job_descriptions (user_id, title, description, technical) VALUES (%s,%s,%s,%s) RETURNING *",
-        (request.user['id'], data.get('title'), data.get('description'), data.get('technical', True))
+        (request.user['id'], data.get('title'), jd_description, data.get('technical', True))
     )
     return jsonify({"success": True, "data": dict(jd)}), 201
 
@@ -1731,6 +1755,11 @@ def parse_job_description():
             file.save(tf.name)
             temp_path = tf.name
         try:
+            extracted_text = extract_text_from_uploaded_document(temp_path, ext)
+            is_valid_jd, jd_validation_error = validate_job_description_text(extracted_text)
+            if not is_valid_jd:
+                return jsonify({"success": False, "message": jd_validation_error}), 400
+
             job_title = ""
             job_description = ""
             is_technical = False
@@ -1753,7 +1782,7 @@ def parse_job_description():
             except Exception as llm_error:
                 print(f"[WARN] LLM JD parsing failed; falling back to local summarizer: {llm_error}")
                 fallback_result = summarize_job_description_text(
-                    extract_text_from_uploaded_document(temp_path, ext)
+                    extracted_text
                 )
                 job_title = (fallback_result.get("job_title") or "").strip()
                 job_description = (fallback_result.get("job_description") or "").strip()
@@ -1781,6 +1810,9 @@ def classify_technical_role():
     job_description = data.get('job_description', '').strip()
     if not job_title or not job_description:
         return jsonify({"success": False, "message": "job_title and job_description required"}), 400
+    is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
+    if not is_valid_jd:
+        return jsonify({"success": False, "message": jd_validation_error}), 400
     try:
         is_technical = classify_job_description_is_technical(job_title, job_description)
         return jsonify({"success": True, "is_technical": is_technical})
@@ -1800,10 +1832,13 @@ def generate_questions():
     try:
         data = request.get_json() or {}
         resume_url = data.get('resume_url')
-        job_description = data.get('job_description')
+        job_description = (data.get('job_description') or "").strip()
         job_title = data.get('job_title')
         if not all([resume_url, job_description, job_title]):
             return jsonify({"success": False, "message": "resume_url, job_description, job_title required"}), 400
+        is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
+        if not is_valid_jd:
+            return jsonify({"success": False, "message": jd_validation_error}), 400
 
         # Download resume from local storage or URL
         public_storage_url = require_env("PUBLIC_STORAGE_URL")
