@@ -21,6 +21,21 @@ function AuthenticatedShell() {
     logout();
   };
 
+  useEffect(() => {
+    const verifySession = async () => {
+      try {
+        const { apiGet } = await import('../api');
+        await apiGet('/api/me');
+      } catch {
+        // Unauthorized redirects are handled centrally.
+      }
+    };
+
+    if (!isOnInterviewPage) {
+      verifySession();
+    }
+  }, [location.pathname, isOnInterviewPage]);
+
   return (
     <ProtectedRoute>
       <>
