@@ -13,7 +13,6 @@ import PerformanceGraph from '../components/PerformanceGraph';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
-import { redirectToLogin } from '../utils/authInterceptor';
 
 const parseApiJson = async (response, fallbackMessage) => {
   const contentType = response.headers.get('content-type') || '';
@@ -105,9 +104,8 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
-      const message = (error.message || '').toLowerCase();
-      if (message.includes('token') || message.includes('authorization') || message.includes('unauthorized')) {
-        redirectToLogin({ expired: true, nextPath: '/dashboard' });
+      if ((error.message || '').toLowerCase().includes('token expired')) {
+        navigate('/login', { replace: true });
         return;
       }
       setError(error.message);

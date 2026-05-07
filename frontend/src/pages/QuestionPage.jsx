@@ -11,7 +11,6 @@ import { useSearchParams } from 'react-router-dom';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
-import { redirectToLogin } from '../utils/authInterceptor';
 
 
 const getLevelColor = (level) => {
@@ -558,14 +557,6 @@ export default function QuestionsPage() {
 
       } catch (error) {
         console.error('Error fetching questions:', error);
-        const message = (error.message || '').toLowerCase();
-        if (message.includes('token') || message.includes('authorization') || message.includes('unauthorized')) {
-          redirectToLogin({
-            expired: true,
-            nextPath: `${window.location.pathname}${window.location.search}${window.location.hash}`,
-          });
-          return;
-        }
         setError(error.message);
       } finally {
         setLoading(false);

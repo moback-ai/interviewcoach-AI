@@ -1321,15 +1321,7 @@ def parse_job_description_file(file_path, model="llama3"):
         raise FileNotFoundError(f"File not found: {file_path}")
 
     try:
-        full_text = extract_text_from_resume(file_path)
-        if not full_text or not full_text.strip():
-            raise RuntimeError(
-                "No text could be extracted from the job description file. "
-                "It may be image-only (scanned PDF). Use a file with selectable text, "
-                "or install Tesseract-OCR and add it to PATH."
-            )
-    except (ValueError, FileNotFoundError):
-        raise
+        full_text = process(file_path).decode("utf-8", errors="ignore")
     except Exception as e:
         raise RuntimeError(f"Text extraction failed: {e}")
 

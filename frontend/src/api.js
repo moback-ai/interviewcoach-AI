@@ -1,6 +1,5 @@
 import { getAccessToken, setAccessToken } from './lib/authClient';
 import { getApiBaseUrl } from './utils/apiConfig';
-import { redirectToLogin } from './utils/authInterceptor';
 
 const API_BASE = getApiBaseUrl();
 
@@ -37,39 +36,28 @@ export async function apiCall(endpoint, options = {}) {
   try {
     const isFileUpload = options.body instanceof FormData;
     const headers = { ...getHeaders(isFileUpload), ...options.headers };
-    const config = { method: options.method || 'GET', headers, authRedirectHandled: true, ...options };
+    const config = { method: options.method || 'GET', headers, ...options };
     if (options.body && !isFileUpload) {
       config.body = JSON.stringify(options.body);
     }
     const response = await fetch(buildUrl(endpoint), config);
 
     // Auto-refresh token on 401
-    if (response.status === 401) {
-      if (!options._retried) {
-        try {
-          const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
-            method: 'POST',
-            headers: getHeaders(),
-            authRedirectHandled: true,
-          });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            if (refreshData.token) {
-              setAccessToken(refreshData.token);
-              return apiCall(endpoint, { ...options, _retried: true });
-            }
-          }
-        } catch (error) {
-          console.error('Token refresh failed:', error);
-        }
-      }
-
-      if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-        redirectToLogin({
-          expired: true,
-          nextPath: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+    if (response.status === 401 && !options._retried) {
+      try {
+        const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
+          method: 'POST',
+          headers: getHeaders(),
         });
-      }
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          if (refreshData.token) {
+            setAccessToken(refreshData.token);
+            return apiCall(endpoint, { ...options, _retried: true });
+          }
+        }
+      } catch {}
+      // Refresh failed — let original 401 bubble up
     }
 
     if (response.status === 429) {
