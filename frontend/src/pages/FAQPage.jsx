@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
 import {
@@ -16,6 +16,9 @@ import {
   MessageSquare
 } from 'lucide-react';
 import Navbar from '../components/Navbar';
+import { useAuth } from '../contexts/AuthContext';
+
+const SupportBot = lazy(() => import('../components/SupportBot'));
 
 // FAQ Data extracted from support_bot.md
 const faqData = [
@@ -144,9 +147,12 @@ const faqData = [
 
 function FAQPage() {
   const location = useLocation();
+  const { isAuthenticated } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [expandedItems, setExpandedItems] = useState({});
+  const supportQueryOpen = new URLSearchParams(location.search).get('support') === 'open';
+  const supportLoginPath = `/login?next=${encodeURIComponent('/faq?support=open#contact')}`;
 
   useEffect(() => {
     if (!location.hash) {
@@ -175,6 +181,18 @@ function FAQPage() {
       }
     };
   }, [location.hash]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !supportQueryOpen) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('support-chat:open'));
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
+  }, [isAuthenticated, supportQueryOpen]);
 
   // Filter FAQs based on search term and category
   const filteredFAQs = useMemo(() => {
@@ -205,6 +223,10 @@ function FAQPage() {
       ...prev,
       [key]: !prev[key]
     }));
+  };
+
+  const handleOpenSupportChat = () => {
+    window.dispatchEvent(new CustomEvent('support-chat:open'));
   };
 
   const categories = ['All', ...faqData.map(cat => cat.category)];
@@ -404,15 +426,25 @@ function FAQPage() {
                 Still need help?
               </h2>
               <p className="text-xs sm:text-sm md:text-base text-[var(--color-text-secondary)] mb-4 sm:mb-6 max-w-2xl mx-auto leading-relaxed px-2">
-                Can't find the answer you're looking for? Use the help center, sign in for AI support chat, or email billing support for payment-related issues.
+                Can't find the answer you're looking for? Use the help center, {isAuthenticated ? 'open the AI support chat' : 'sign in for AI support chat'}, or email billing support for payment-related issues.
               </p>
               <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center">
-                <Link
-                  to="/login"
-                  className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium bg-[var(--color-primary)] text-white rounded-lg sm:rounded-xl hover:opacity-90 transition-all duration-200 shadow-md hover:shadow-lg"
-                >
-                  Sign In for Support Chat
-                </Link>
+                {isAuthenticated ? (
+                  <button
+                    type="button"
+                    onClick={handleOpenSupportChat}
+                    className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium bg-[var(--color-primary)] text-white rounded-lg sm:rounded-xl hover:opacity-90 transition-all duration-200 shadow-md hover:shadow-lg"
+                  >
+                    Open Support Chat
+                  </button>
+                ) : (
+                  <Link
+                    to={supportLoginPath}
+                    className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium bg-[var(--color-primary)] text-white rounded-lg sm:rounded-xl hover:opacity-90 transition-all duration-200 shadow-md hover:shadow-lg"
+                  >
+                    Sign In for Support Chat
+                  </Link>
+                )}
                 <a
                   href="mailto:support@dodopayments.com?subject=Interview%20Coach%20Billing%20Support"
                   className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium border border-[var(--color-border)] text-[var(--color-text-primary)] rounded-lg sm:rounded-xl hover:bg-[var(--color-input-bg)] transition-all duration-200 shadow-md hover:shadow-lg"
@@ -424,6 +456,11 @@ function FAQPage() {
           </motion.div>
         </div>
       </div>
+      {isAuthenticated && (
+        <Suspense fallback={null}>
+          <SupportBot />
+        </Suspense>
+      )}
     </>
   );
 }

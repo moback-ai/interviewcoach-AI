@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { FiEye, FiEyeOff, FiCheck, FiX, FiLoader } from 'react-icons/fi';
 import { useEffect } from 'react';
 import Navbar from '../components/Navbar';
@@ -12,6 +12,7 @@ import { checkEmailAvailability, checkUsernameAvailability } from '../utils/emai
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   useTheme();
   const { login, resendVerificationEmail } = useAuth();
   const [identifier, setIdentifier] = useState('');
@@ -32,6 +33,13 @@ function Login() {
   // Tracks if user has ever gotten a confirmed result — never resets
   const hadConfirmedCheck = useRef(false);
   const lastConfirmedId = useRef('');
+  const requestedNextPath = new URLSearchParams(location.search).get('next');
+  const stateRedirectPath = typeof location.state?.from === 'string' ? location.state.from : '';
+  const nextPath = (requestedNextPath && requestedNextPath.startsWith('/'))
+    ? requestedNextPath
+    : (stateRedirectPath && stateRedirectPath.startsWith('/'))
+      ? stateRedirectPath
+      : '';
 
   const handleIdentifierBlur = async () => {
     if (!identifier || identifier.length < 3 || !identifierIsValid) {
@@ -86,7 +94,11 @@ function Login() {
         login_timestamp: new Date().toISOString(),
       });
 
-      performSmartRedirect(data.user, navigate);
+      if (nextPath) {
+        navigate(nextPath, { replace: true });
+      } else {
+        performSmartRedirect(data.user, navigate);
+      }
     } catch (error) {
       const message = (error.message || '').toLowerCase();
       if (message.includes('verify your email')) {
