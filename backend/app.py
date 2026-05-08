@@ -928,7 +928,7 @@ def initialize_whisper():
     global whisper_model
     if whisper_model is not None:
         return
-    model_size = optional_env("WHISPER_MODEL", "base")
+    model_size = optional_env("WHISPER_MODEL", "large")
     whisper_device = "cpu" if device == "mps" else device
     print(f"[INFO] Loading Whisper {model_size} on {whisper_device}...")
     try:
