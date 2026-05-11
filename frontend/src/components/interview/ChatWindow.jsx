@@ -102,16 +102,17 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     console.log('🔄 Loading state changed to:', isLoading);
   }, [isLoading]);
 
-  // Notify parent component of state changes for head tracking toggle
+  // Notify parent component of state changes for head tracking toggle & voice controls
   useEffect(() => {
     if (onStateChange) {
       onStateChange({
         isRecording,
         isResponseInProgress,
-        canEndInterview
+        canEndInterview,
+        isSpeakCooldown: isButtonDisabled,
       });
     }
-  }, [isRecording, isResponseInProgress, canEndInterview, onStateChange]);
+  }, [isRecording, isResponseInProgress, canEndInterview, isButtonDisabled, onStateChange]);
 
   const deleteGeneratedAudio = useCallback(async (audioUrl, shouldDeleteAudio) => {
     if (!audioUrl || !shouldDeleteAudio) return;

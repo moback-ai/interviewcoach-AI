@@ -31,7 +31,8 @@ function InterviewPage() {
   const [chatStates, setChatStates] = useState({
     isRecording: false,
     isResponseInProgress: false,
-    canEndInterview: true
+    canEndInterview: true,
+    isSpeakCooldown: false,
   });
   const [selectedVoiceId, setSelectedVoiceId] = useState(() => {
     if (typeof window === 'undefined') return 'server_default';
@@ -40,7 +41,7 @@ function InterviewPage() {
 
   // ✅ ADD: Callback to receive state changes from ChatWindow
   const handleChatStateChange = useCallback((newStates) => {
-    setChatStates(newStates);
+    setChatStates((prev) => ({ ...prev, ...newStates }));
   }, []);
   
   // ✅ ADD: Track if validation has been attempted
@@ -77,6 +78,13 @@ function InterviewPage() {
   
   const streamRef = useRef(null);
   const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
+  /** Aligns with Speak button + Head tracking: lock UI during audio, recording, API work, response pipeline, or mic cooldown */
+  const interviewInteractionLocked =
+    isAudioPlaying ||
+    isChatLoading ||
+    chatStates.isResponseInProgress ||
+    chatStates.isRecording ||
+    !!chatStates.isSpeakCooldown;
   const [cameraError, setCameraError] = useState(null);
   const [isCameraLoading, setIsCameraLoading] = useState(true);
   const cameraRetryCountRef = useRef(0);
@@ -790,23 +798,34 @@ function InterviewPage() {
                       <button
                         key={preset.id}
                         type="button"
-                        onClick={() => setSelectedVoiceId(preset.id)}
+                        disabled={interviewInteractionLocked}
+                        onClick={() => {
+                          if (interviewInteractionLocked) return;
+                          setSelectedVoiceId(preset.id);
+                        }}
+                        title={
+                          interviewInteractionLocked
+                            ? 'Available when the interviewer is idle'
+                            : undefined
+                        }
                         className={`rounded-2xl border px-3 py-2 text-left transition-all duration-300 ${
-                          active
-                            ? 'border-transparent text-white shadow-lg'
-                            : 'border-[var(--color-border)] text-[var(--color-text-primary)] hover:-translate-y-0.5 hover:border-[var(--color-primary)]/45'
+                          interviewInteractionLocked
+                            ? 'cursor-not-allowed opacity-50'
+                            : active
+                              ? 'border-transparent text-white shadow-lg'
+                              : 'border-[var(--color-border)] text-[var(--color-text-primary)] hover:-translate-y-0.5 hover:border-[var(--color-primary)]/45'
                         }`}
                         style={{
-                          background: active
+                          background: active && !interviewInteractionLocked
                             ? `linear-gradient(135deg, ${preset.accentColor}, var(--color-primary))`
                             : 'color-mix(in srgb, var(--color-card) 88%, transparent)',
                         }}
                       >
                         <div className="text-sm font-semibold">{preset.label}</div>
-                        <div className={`text-[11px] ${active ? 'text-white/80' : 'text-[var(--color-text-secondary)]'}`}>
+                        <div className={`text-[11px] ${active && !interviewInteractionLocked ? 'text-white/80' : 'text-[var(--color-text-secondary)]'}`}>
                           {preset.subtitle}
                         </div>
-                        <div className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${active ? 'text-white/70' : 'text-[var(--color-text-secondary)]'}`}>
+                        <div className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${active && !interviewInteractionLocked ? 'text-white/70' : 'text-[var(--color-text-secondary)]'}`}>
                           {preset.voiceType}
                         </div>
                       </button>
@@ -815,19 +834,19 @@ function InterviewPage() {
                 </div>
               </div>
 
-              <label className={`flex items-center gap-2 sm:gap-3 ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress ? 'cursor-not-allowed opacity-60' : 'cursor-pointer group'} glass-panel rounded-full px-3 py-2`}>
+              <label className={`flex items-center gap-2 sm:gap-3 ${interviewInteractionLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer group'} glass-panel rounded-full px-3 py-2`}>
                 <div className="relative">
                   <input
                     type="checkbox"
                     checked={headTrackingEnabled}
                     onChange={(e) => setHeadTrackingEnabled(e.target.checked)}
-                    disabled={isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress}
+                    disabled={interviewInteractionLocked}
                     className="sr-only peer"
                   />
                   <div className={`
                     w-10 h-6 sm:w-12 sm:h-7 rounded-full transition-all duration-300 ease-in-out shadow-inner flex items-center
                     peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-offset-2
-                    ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress
+                    ${interviewInteractionLocked
                       ? 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed opacity-60'
                       : headTrackingEnabled 
                         ? 'bg-blue-500 peer-focus:ring-blue-500/20 shadow-lg' 
@@ -840,7 +859,7 @@ function InterviewPage() {
                     `}></div>
                   </div>
                 </div>
-                <span className={`text-xs sm:text-sm font-medium ${isAudioPlaying || chatStates.isRecording || isChatLoading || chatStates.isResponseInProgress ? 'opacity-60' : ''}`} style={{ color: 'var(--color-text-primary)' }}>
+                <span className={`text-xs sm:text-sm font-medium ${interviewInteractionLocked ? 'opacity-60' : ''}`} style={{ color: 'var(--color-text-primary)' }}>
                   Head Tracking
                 </span>
               </label>
