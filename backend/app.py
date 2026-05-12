@@ -1041,6 +1041,11 @@ def health_check():
     return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "version": "2.0.0"})
 
 
+EMPTY_UPLOAD_READABLE_MESSAGE = (
+    "The uploaded resume appears to be empty or missing enough relevant information. Please upload a valid resume."
+)
+
+
 def extract_text_from_uploaded_document(file_path, ext):
     ext = ext.lower()
     if ext == 'txt':
@@ -1048,11 +1053,15 @@ def extract_text_from_uploaded_document(file_path, ext):
             return handle.read()
     if ext == 'pdf':
         import PyPDF2
+        from PyPDF2.errors import EmptyFileError
         text = []
-        with open(file_path, 'rb') as handle:
-            reader = PyPDF2.PdfReader(handle)
-            for page in reader.pages:
-                text.append(page.extract_text() or "")
+        try:
+            with open(file_path, 'rb') as handle:
+                reader = PyPDF2.PdfReader(handle)
+                for page in reader.pages:
+                    text.append(page.extract_text() or "")
+        except EmptyFileError:
+            raise ValueError(EMPTY_UPLOAD_READABLE_MESSAGE) from None
         return "\n".join(text)
     if ext == 'docx':
         try:
@@ -1755,7 +1764,10 @@ def parse_job_description():
             file.save(tf.name)
             temp_path = tf.name
         try:
-            extracted_text = extract_text_from_uploaded_document(temp_path, ext)
+            try:
+                extracted_text = extract_text_from_uploaded_document(temp_path, ext)
+            except ValueError as ve:
+                return jsonify({"success": False, "message": str(ve)}), 400
             is_valid_jd, jd_validation_error = validate_job_description_text(extracted_text)
             if not is_valid_jd:
                 return jsonify({"success": False, "message": jd_validation_error}), 400
@@ -1858,7 +1870,10 @@ def generate_questions():
             temp_resume = tf.name
 
         try:
-            resume_text = extract_text_from_uploaded_document(temp_resume, ext)
+            try:
+                resume_text = extract_text_from_uploaded_document(temp_resume, ext)
+            except ValueError as ve:
+                return jsonify({"success": False, "message": str(ve)}), 400
             if not resume_text or not resume_text.strip():
                 return jsonify({
                     "success": False,
