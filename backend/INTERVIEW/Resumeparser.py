@@ -22,6 +22,8 @@ except ImportError:
     textract = None
 
 ENABLE_LOGGING = False
+# Retries per resume chunk when Ollama returns invalid JSON or an unusable empty object.
+RESUME_CHUNK_JSON_MAX_ATTEMPTS = 10
 try:
     import tiktoken
 except ImportError:
@@ -145,6 +147,45 @@ def split_resume_into_chunks(text, max_tokens=1500, overlap=200):
 
     return chunks
 
+
+def _strip_markdown_json_fence(text: str) -> str:
+    """Remove optional ``` / ```json wrappers so json.loads can succeed."""
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    lines = t.split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def parse_ollama_resume_json_response(content: str):
+    """
+    Parse model output into a dict. Returns None if content is not valid JSON
+    (after fence strip and clean_json_like_text fallback).
+    """
+    candidates = (_strip_markdown_json_fence(content), content.strip())
+    seen = set()
+    for raw in candidates:
+        if raw in seen:
+            continue
+        seen.add(raw)
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+        try:
+            cleaned = clean_json_like_text(raw)
+            match = re.search(r"(\{[\s\S]*\})", cleaned)
+            if match:
+                return json.loads(match.group(1))
+        except Exception:
+            pass
+    return None
+
+
 def ask_ollama_for_structured_data_chunked(resume_text, model="llama3"):
     chunks = split_resume_into_chunks(resume_text)
     merged_result = {
@@ -224,36 +265,44 @@ def ask_ollama_for_structured_data_chunked(resume_text, model="llama3"):
         \"\"\"
         """
 
-        response = try_ollama_chat(prompt, model=model)
-        content = response["message"]["content"]
-        if ENABLE_LOGGING:
-            chunk_log_path = f"logs/chunk_{idx+1}_response.json"
-            with open(chunk_log_path, "w", encoding="utf-8") as f:
-                f.write(content)
-        try:
-            partial = json.loads(content)
-            # Skip if the chunk returned almost empty JSON
+        partial = None
+        content = ""
+        for parse_attempt in range(RESUME_CHUNK_JSON_MAX_ATTEMPTS):
+            response = try_ollama_chat(prompt, model=model)
+            content = response["message"]["content"]
+            if ENABLE_LOGGING:
+                chunk_log_path = f"logs/chunk_{idx+1}_attempt_{parse_attempt + 1}.json"
+                with open(chunk_log_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+
+            partial = parse_ollama_resume_json_response(content)
+            if partial is None:
+                print(
+                    f"[WARNING] Chunk {idx + 1} invalid JSON "
+                    f"(attempt {parse_attempt + 1}/{RESUME_CHUNK_JSON_MAX_ATTEMPTS}). Retrying..."
+                )
+                continue
+
             missing_fields = [key for key in partial if not partial.get(key) and key != "summary"]
             if len(missing_fields) == len(partial) - 1:
-                print(f"[WARNING] Chunk {idx+1} returned mostly empty fields: {missing_fields}. Skipping.")
+                print(
+                    f"[WARNING] Chunk {idx + 1} returned mostly empty fields "
+                    f"(attempt {parse_attempt + 1}/{RESUME_CHUNK_JSON_MAX_ATTEMPTS}). Retrying..."
+                )
+                partial = None
                 continue
+            if parse_attempt > 0:
+                print(f"[INFO] Chunk {idx + 1} parsed successfully on attempt {parse_attempt + 1}.")
+            break
 
-        except Exception:
-            print(f"[WARNING] Chunk {idx+1} failed JSON parse. Trying manual fix.")
-            try:
-                cleaned = clean_json_like_text(content)
-                match = re.search(r'(\{[\s\S]*\})', cleaned)
-                if match:
-                    partial = json.loads(match.group(1))
-                else:
-                    continue
-            except Exception:
-                print(f"[ERROR] Still failed after manual fix. Skipping chunk {idx+1}.")
-                if ENABLE_LOGGING:
-                    with open("logs/failed_chunks.txt", "a", encoding="utf-8") as f:
-                        f.write(f"\n=== CHUNK {idx+1} ===\n{content}\n")
-                continue
-
+        if partial is None:
+            print(
+                f"[ERROR] Chunk {idx + 1}: no valid JSON after {RESUME_CHUNK_JSON_MAX_ATTEMPTS} attempts. Skipping."
+            )
+            if ENABLE_LOGGING:
+                with open("logs/failed_chunks.txt", "a", encoding="utf-8") as f:
+                    f.write(f"\n=== CHUNK {idx + 1} (exhausted retries) ===\n{content}\n")
+            continue
 
 
         # Merge logic (combine lists, fill blanks)

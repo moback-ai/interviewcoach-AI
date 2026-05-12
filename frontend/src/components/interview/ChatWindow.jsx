@@ -1157,30 +1157,30 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
   return (
     <div 
-      className="h-full flex flex-col p-3 sm:p-4 lg:p-6 min-h-0"
+      className="h-full flex flex-col p-4 lg:p-5 min-h-0"
       style={{ 
         backgroundColor: 'var(--color-card)',
-        borderLeft: '1px solid var(--color-border)'
       }}
     >
       {/* Header with Title and Buttons */}
-      <div className="flex flex-col gap-3 sm:gap-4 mb-3 sm:mb-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3">
+      <div className="flex flex-col gap-3 mb-4 shrink-0">
+        <div className="flex flex-row flex-wrap items-center justify-between gap-3">
           <h2 
-            className="text-lg sm:text-xl md:text-2xl font-bold tracking-tight"
+            className="text-base sm:text-lg md:text-xl font-bold tracking-tight min-w-0"
             style={{ color: 'var(--color-text-primary)' }}
           >
             Interview Conversation
           </h2>
           
-          {/* End Interview Button */}
+          {/* End Interview — secondary until hover (less distracting during session) */}
           <button
+            type="button"
             onClick={handleEndInterview}
             disabled={!canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress}
-            className={`w-full sm:w-auto px-3 sm:px-4 md:px-6 py-2 sm:py-2.5 text-xs sm:text-sm md:text-base font-semibold rounded-full transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 whitespace-nowrap ${
+            className={`shrink-0 px-3 py-1.5 sm:px-3.5 sm:py-2 text-xs sm:text-sm font-medium rounded-lg border transition-all duration-200 ${
               !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
-                ? 'bg-[var(--color-error)]/10 border-2 border-[var(--color-error)]/30 text-[var(--color-error)]/70 cursor-not-allowed'
-                : 'bg-[var(--color-error)]/10 border-2 border-[var(--color-error)] text-[var(--color-error)] hover:bg-[var(--color-error)] hover:text-white hover:border-[var(--color-error)]'
+                ? 'border-[var(--color-border)] text-[var(--color-text-secondary)]/70 bg-[var(--color-input-bg)]/50 cursor-not-allowed'
+                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] hover:border-red-500/60 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/5'
             }`}
             title={
               !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
@@ -1190,35 +1190,21 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                    isAudioPlaying ? "Wait for audio to finish" :
                    interviewStage === 'introduction' ? "Complete the introduction first" : 
                    interviewStage === 'resume_discussion' && !hasAnsweredResumeQuestion ? "Answer at least one resume & JD related question to end interview" : "Wait for resume questions to begin")
-                : "End Interview"
+                : "End interview and save progress"
             }
-            onMouseEnter={() => {
-              console.log('🔍 Button hover - Current state:', {
-                canEndInterview,
-                isAudioPlaying,
-                isRecording,
-                isLoading,
-                isResponseInProgress,
-                interviewStage,
-                hasAnsweredResumeQuestion
-              });
-            }}
           >
-            <span className="hidden sm:inline">
-              End Interview
-            </span>
-            <span className="sm:hidden">
-              End
-            </span>
+            <span className="hidden sm:inline">End interview</span>
+            <span className="sm:hidden">End</span>
           </button>
         </div>
         
-        {/* Pill-shaped Recording Button */}
-        <div className="flex items-center justify-center gap-3">
+        {/* Primary speak control */}
+        <div className="flex items-center justify-center">
           <button
+            type="button"
             onClick={toggleRecording}
             disabled={isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress} // ✅ NEW: Also disable during response process
-            className={`w-full px-4 sm:px-6 md:px-8 py-3 sm:py-4 rounded-full flex items-center justify-center gap-2 sm:gap-3 text-white font-semibold transition-all duration-300 shadow-xl hover:shadow-xl hover:scale-105 active:scale-95 ${
+            className={`w-full max-w-md px-5 sm:px-8 py-3.5 sm:py-4 rounded-2xl flex items-center justify-center gap-2 sm:gap-3 text-white font-semibold transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] ${
               isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
                 ? 'bg-gray-400 cursor-not-allowed opacity-60' // ✅ NEW: Disabled state for all conditions
                 : isRecording 
@@ -1234,7 +1220,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             } // ✅ NEW: Dynamic tooltip for all disabled states
           >
             {isRecording ? <MicOff size={18} className="sm:w-5 sm:h-5" /> : <Mic size={18} className="sm:w-5 sm:h-5" />}
-            <span className="text-xs sm:text-sm font-medium">
+            <span className="text-sm font-medium">
               {isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
                 ? (isAudioPlaying ? 'Audio Playing...' : 
                    isLoading ? 'Generating...' : 
@@ -1249,7 +1235,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       {/* Messages */}
       <div 
         ref={messagesContainerRef}  // ✅ NEW: Add ref to messages container
-        className="flex-1 overflow-y-auto space-y-3 sm:space-y-4 mb-4 sm:mb-6 pr-1 sm:pr-2 min-h-0"
+        className="flex-1 overflow-y-auto space-y-3 sm:space-y-4 mb-3 pr-1 sm:pr-2 min-h-0"
       >
         <AnimatePresence>
           {conversation.map((message) => (

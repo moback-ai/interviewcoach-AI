@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { FiCheckCircle, FiX } from 'react-icons/fi';
+import { FiCheckCircle } from 'react-icons/fi';
 
 const SuccessModal = ({ isOpen, onClose, title, message, details, customAction }) => {
   useEffect(() => {
@@ -34,25 +34,16 @@ const SuccessModal = ({ isOpen, onClose, title, message, details, customAction }
   if (!isOpen || typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-2 sm:p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-2 sm:p-4">
       <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl w-full max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg shadow-2xl transform transition-all duration-200 mx-2 max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-3 sm:p-4 md:p-6 border-b border-[var(--color-border)]">
-          <div className="flex items-center space-x-2 sm:space-x-3">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center">
-              <FiCheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 dark:text-green-400" />
-            </div>
-            <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)]">
-              {title || 'Success!'}
-            </h3>
+        <div className="flex items-center gap-2 sm:gap-3 p-3 sm:p-4 md:p-6 border-b border-[var(--color-border)]">
+          <div className="w-8 h-8 sm:w-10 sm:h-10 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center shrink-0">
+            <FiCheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 dark:text-green-400" />
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-200 p-1 rounded-lg hover:bg-[var(--color-input-bg)]"
-          >
-            <FiX size={18} className="sm:w-5 sm:h-5" />
-          </button>
+          <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)]">
+            {title || 'Success!'}
+          </h3>
         </div>
         
         {/* Content */}

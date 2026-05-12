@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Sparkles, Waves, Mic2 } from 'lucide-react';
-import { useTheme } from '@/hooks/useTheme';
+import { Sparkles, Waves, Crown } from 'lucide-react';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
 import ChatWindow from '@/components/interview/ChatWindow';
 import { trackEvents } from '../services/mixpanel';
@@ -14,8 +13,10 @@ import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
 import { INTERVIEWER_VOICE_PRESETS, getInterviewerVoicePreset } from '../utils/interviewerVoices';
 
+/** Header order: Classic → Ava → Mira → Noah (matches product layout). */
+const HEADER_VOICE_IDS = ['server_default', 'ava', 'mira', 'noah'];
+
 function InterviewPage() {
-  const { isDark } = useTheme();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [isValidated, setIsValidated] = useState(false);
@@ -78,6 +79,9 @@ function InterviewPage() {
   
   const streamRef = useRef(null);
   const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
+  const headerVoicePresets = HEADER_VOICE_IDS.map((id) =>
+    INTERVIEWER_VOICE_PRESETS.find((p) => p.id === id)
+  ).filter(Boolean);
   /** Aligns with Speak button + Head tracking: lock UI during audio, recording, API work, response pipeline, or mic cooldown */
   const interviewInteractionLocked =
     isAudioPlaying ||
@@ -745,127 +749,122 @@ function InterviewPage() {
       </AnimatePresence>
       
       <div className="min-h-screen interview-grid-bg" style={{ backgroundColor: 'var(--color-bg)' }}>
-        {/* Top Bar with End Interview Button */}
-        <div 
-          className="flex flex-col gap-4 px-4 sm:px-6 lg:px-8 py-4 sm:py-5 border-b backdrop-blur-xl"
-          style={{ 
-            backgroundColor: 'color-mix(in srgb, var(--color-card) 74%, transparent)',
-            borderColor: 'var(--color-border)' 
-          }}
+        {/* Session header — dark bar, voice pill center, premium + head tracking right */}
+        <header
+          className="sticky top-0 z-40 border-b border-white/10 bg-[#0a0b12] px-4 py-3 sm:px-6 sm:py-3.5 text-white shadow-[0_4px_24px_rgba(0,0,0,0.35)] backdrop-blur-md"
+          aria-label="Interview session controls"
         >
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 w-full">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 w-full sm:w-auto">
-              <div className="flex flex-col">
-                <h1 
-                  className="text-lg sm:text-xl lg:text-2xl font-bold tracking-tight leading-tight"
-                  style={{ color: 'var(--color-text-primary)' }}
-                >
-                  AI Interview Session
-                </h1>
-                <p className="mt-1 text-xs sm:text-sm text-[var(--color-text-secondary)]">
-                  Cinematic motion, faster transitions, and a selectable interviewer voice without leaving the flow.
-                </p>
-              </div>
-              
-              <div className="flex flex-wrap items-center gap-2">
-                <div
-                  className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)]/70 px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] shadow-md"
-                  style={{ backgroundColor: 'color-mix(in srgb, var(--color-card) 78%, transparent)' }}
-                >
-                  <Sparkles size={14} className="text-[var(--color-primary)]" />
-                  Premium Interview Mode
-                </div>
-                {headTrackingStarted && headTrackingEnabled && (
-                  <div className="flex items-center gap-1.5 bg-green-500/90 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-lg border border-green-400/30">
-                    <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                    <span className="tracking-wide text-xs hidden xs:inline">HEAD TRACKING</span>
-                    <span className="tracking-wide text-xs xs:hidden">HT</span>
-                  </div>
-                )}
+          <div className="mx-auto flex max-w-[1600px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
+            {/* Left: title */}
+            <div className="flex min-w-0 flex-shrink-0 items-center gap-2.5">
+              <Sparkles className="h-5 w-5 shrink-0 text-sky-400" aria-hidden />
+              <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">
+                AI Interview Session
+              </h1>
+            </div>
+
+            {/* Center: voice mode pill */}
+            <div className="flex min-w-0 flex-1 justify-center lg:px-4">
+              <div
+                className="inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full bg-white/[0.07] p-1 ring-1 ring-white/10"
+                role="tablist"
+                aria-label="Interviewer voice"
+              >
+                {headerVoicePresets.map((preset) => {
+                  const active = preset.id === selectedVoiceId;
+                  const waveIcon = preset.id === 'server_default' || preset.id === 'ava';
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      disabled={interviewInteractionLocked}
+                      onClick={() => {
+                        if (interviewInteractionLocked) return;
+                        setSelectedVoiceId(preset.id);
+                      }}
+                      title={
+                        interviewInteractionLocked
+                          ? 'Available when the interviewer is idle'
+                          : `${preset.label} — ${preset.subtitle}`
+                      }
+                      className={[
+                        'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium transition-all duration-200',
+                        interviewInteractionLocked && 'cursor-not-allowed opacity-45',
+                        !interviewInteractionLocked && active && 'bg-[#2563eb] text-white shadow-md ring-1 ring-sky-400/50',
+                        !interviewInteractionLocked &&
+                          !active &&
+                          'text-white/90 hover:bg-white/10',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    >
+                      {waveIcon ? (
+                        <Waves className="h-3.5 w-3.5 shrink-0 opacity-90" aria-hidden />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5 shrink-0 opacity-90" aria-hidden />
+                      )}
+                      <span>{preset.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4 w-full lg:w-auto lg:justify-end">
-              <div className="glass-panel rounded-2xl px-3 py-3 sm:px-4 w-full sm:w-auto">
-                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-[var(--color-text-secondary)]">
-                  <Mic2 size={14} className="text-[var(--color-primary)]" />
-                  Interviewer voice
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {INTERVIEWER_VOICE_PRESETS.map((preset) => {
-                    const active = preset.id === selectedVoiceId;
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        disabled={interviewInteractionLocked}
-                        onClick={() => {
-                          if (interviewInteractionLocked) return;
-                          setSelectedVoiceId(preset.id);
-                        }}
-                        title={
-                          interviewInteractionLocked
-                            ? 'Available when the interviewer is idle'
-                            : undefined
-                        }
-                        className={`rounded-2xl border px-3 py-2 text-left transition-all duration-300 ${
-                          interviewInteractionLocked
-                            ? 'cursor-not-allowed opacity-50'
-                            : active
-                              ? 'border-transparent text-white shadow-lg'
-                              : 'border-[var(--color-border)] text-[var(--color-text-primary)] hover:-translate-y-0.5 hover:border-[var(--color-primary)]/45'
-                        }`}
-                        style={{
-                          background: active && !interviewInteractionLocked
-                            ? `linear-gradient(135deg, ${preset.accentColor}, var(--color-primary))`
-                            : 'color-mix(in srgb, var(--color-card) 88%, transparent)',
-                        }}
-                      >
-                        <div className="text-sm font-semibold">{preset.label}</div>
-                        <div className={`text-[11px] ${active && !interviewInteractionLocked ? 'text-white/80' : 'text-[var(--color-text-secondary)]'}`}>
-                          {preset.subtitle}
-                        </div>
-                        <div className={`mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${active && !interviewInteractionLocked ? 'text-white/70' : 'text-[var(--color-text-secondary)]'}`}>
-                          {preset.voiceType}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+            {/* Right: premium + head tracking */}
+            <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-3 sm:gap-4">
+              <button
+                type="button"
+                className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-white/95 transition hover:bg-white/[0.08]"
+              >
+                <Crown className="h-4 w-4 shrink-0 text-amber-400" aria-hidden />
+                Premium Mode
+              </button>
 
-              <label className={`flex items-center gap-2 sm:gap-3 ${interviewInteractionLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer group'} glass-panel rounded-full px-3 py-2`}>
+              <div className="hidden h-6 w-px bg-white/15 sm:block" aria-hidden />
+
+              <label
+                className={`flex cursor-pointer items-center gap-2.5 ${interviewInteractionLocked ? 'cursor-not-allowed opacity-55' : ''}`}
+              >
                 <div className="relative">
                   <input
                     type="checkbox"
                     checked={headTrackingEnabled}
                     onChange={(e) => setHeadTrackingEnabled(e.target.checked)}
                     disabled={interviewInteractionLocked}
-                    className="sr-only peer"
+                    className="peer sr-only"
                   />
-                  <div className={`
-                    w-10 h-6 sm:w-12 sm:h-7 rounded-full transition-all duration-300 ease-in-out shadow-inner flex items-center
-                    peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-offset-2
-                    ${interviewInteractionLocked
-                      ? 'bg-gray-300 dark:bg-gray-600 cursor-not-allowed opacity-60'
-                      : headTrackingEnabled 
-                        ? 'bg-blue-500 peer-focus:ring-blue-500/20 shadow-lg' 
-                        : 'bg-gray-300 dark:bg-gray-600 peer-focus:ring-gray-500/20 shadow-inner'
-                    }
-                  `}>
-                    <div className={`
-                      w-4 h-4 sm:w-5 sm:h-5 bg-white rounded-full shadow-lg transition-all duration-300 ease-in-out mx-0.5 sm:mx-1
-                      ${headTrackingEnabled ? 'translate-x-4 sm:translate-x-5' : 'translate-x-0'}
-                    `}></div>
+                  <div
+                    className={[
+                      'flex h-7 w-11 items-center rounded-full px-0.5 transition-colors duration-200',
+                      interviewInteractionLocked
+                        ? 'bg-zinc-600'
+                        : headTrackingEnabled
+                          ? 'bg-[#2563eb]'
+                          : 'bg-zinc-600',
+                    ].join(' ')}
+                  >
+                    <span
+                      className={[
+                        'block h-5 w-5 rounded-full bg-white shadow-md transition-transform duration-200',
+                        headTrackingEnabled ? 'translate-x-5' : 'translate-x-0.5',
+                      ].join(' ')}
+                    />
                   </div>
                 </div>
-                <span className={`text-xs sm:text-sm font-medium ${interviewInteractionLocked ? 'opacity-60' : ''}`} style={{ color: 'var(--color-text-primary)' }}>
-                  Head Tracking
-                </span>
+                <span className="text-sm font-medium text-white/95">Head Tracking</span>
               </label>
+
+              {headTrackingStarted && headTrackingEnabled && (
+                <span className="hidden items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300 lg:inline-flex">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                  Live
+                </span>
+              )}
             </div>
           </div>
-        </div>
+        </header>
 
         <div className="flex flex-col xl:flex-row min-h-0 xl:h-[calc(100vh-80px)]">
           {/* Left - Interviewer Video */}

@@ -604,7 +604,7 @@ function UploadPage() {
     return null; // Button should be enabled
   };
 
-  // Handle navigation to questions page (used by both buttons)
+  // Close success modal and go to the new question set (View Questions only)
   const handleNavigateToQuestions = () => {
     setSuccessModal({ isOpen: false, title: '', message: '', details: null });
     
@@ -1110,7 +1110,7 @@ function UploadPage() {
       {/* Success Modal */}
       <SuccessModal
         isOpen={successModal.isOpen}
-        onClose={handleNavigateToQuestions}
+        onClose={() => setSuccessModal({ isOpen: false, title: '', message: '', details: null })}
         title={successModal.title}
         message={successModal.message}
         details={successModal.details}
