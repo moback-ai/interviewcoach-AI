@@ -120,6 +120,34 @@ function Login() {
     );
   }, [location.pathname, location.search, location.state, navigate]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('expired') !== 'true') {
+      return;
+    }
+
+    setCoachNotice(createAuthCoachNotice({
+      tone: 'warning',
+      title: 'Session expired',
+      message: 'Your session has expired. Please log in again.',
+    }));
+    setErrorMsg('');
+
+    params.delete('expired');
+    const search = params.toString();
+
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+      },
+      {
+        replace: true,
+        state: location.state ?? null,
+      }
+    );
+  }, [location.pathname, location.search, location.state, navigate]);
+
   const applyBackgroundMotion = (offsetX, offsetY) => {
     const shell = shellRef.current;
     if (!shell) {

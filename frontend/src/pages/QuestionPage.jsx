@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '../lib/authClient';
+import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 
@@ -557,6 +558,10 @@ export default function QuestionsPage() {
 
       } catch (error) {
         console.error('Error fetching questions:', error);
+        if (isAuthErrorMessage(error.message)) {
+          redirectToExpiredLogin();
+          return;
+        }
         setError(error.message);
       } finally {
         setLoading(false);

@@ -1,4 +1,5 @@
 import { getAccessToken, setAccessToken } from './lib/authClient';
+import { redirectToExpiredLogin } from './utils/authInterceptor';
 import { getApiBaseUrl } from './utils/apiConfig';
 
 const API_BASE = getApiBaseUrl();
@@ -43,21 +44,27 @@ export async function apiCall(endpoint, options = {}) {
     const response = await fetch(buildUrl(endpoint), config);
 
     // Auto-refresh token on 401
-    if (response.status === 401 && !options._retried) {
-      try {
-        const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
-          method: 'POST',
-          headers: getHeaders(),
-        });
-        if (refreshRes.ok) {
-          const refreshData = await refreshRes.json();
-          if (refreshData.token) {
-            setAccessToken(refreshData.token);
-            return apiCall(endpoint, { ...options, _retried: true });
+    if (response.status === 401) {
+      if (!options._retried) {
+        try {
+          const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
+            method: 'POST',
+            headers: getHeaders(),
+          });
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json();
+            if (refreshData.token) {
+              setAccessToken(refreshData.token);
+              return apiCall(endpoint, { ...options, _retried: true });
+            }
           }
+        } catch (refreshError) {
+          console.error('Token refresh failed:', refreshError);
         }
-      } catch {}
-      // Refresh failed — let original 401 bubble up
+      }
+
+      redirectToExpiredLogin();
+      throw new Error('Session expired. Please log in again.');
     }
 
     if (response.status === 429) {
