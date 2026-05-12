@@ -32,6 +32,21 @@ if ENABLE_LOGGING and not os.path.exists("logs"):
     os.makedirs("logs")
 
 
+def resolve_ollama_model_name(model=None):
+    configured_model = ""
+    try:
+        from common.runtime_config import optional_env as runtime_optional_env
+        configured_model = runtime_optional_env("OLLAMA_MODEL", "llama3")
+    except Exception:
+        configured_model = os.getenv("OLLAMA_MODEL", "llama3")
+
+    configured_model = (configured_model or "llama3").strip()
+    requested_model = (model or "").strip()
+    if not requested_model or requested_model == "llama3":
+        return configured_model
+    return requested_model
+
+
 # === CONFIGURATION ===
 RESUME_PATH = "C:\\Users\\neera\\Downloads\\iimjobs_srinivas.pdf"  # <-- Update this
 CONFIG_PATH = "E:\\many\\SEPERATE_RESUME\\RESUME\\interview_config.json"
@@ -1239,6 +1254,14 @@ OUTPUT: Pure JSON array of {count} items:
 def generate_answers_for_existing_questions(structured_resume, job_title, job_description, questions_csv_path, output_path, model="llama3"):
     if not os.path.exists(questions_csv_path):
         raise FileNotFoundError(f"[ERROR] CSV not found: {questions_csv_path}")
+    resolved_model = resolve_ollama_model_name(model)
+    stats = {
+        "requested": True,
+        "model": resolved_model,
+        "generated_count": 0,
+        "fallback_count": 0,
+        "fallback_examples": [],
+    }
 
     def fallback_answer(question, strength):
         labels = {
@@ -1266,7 +1289,7 @@ def generate_answers_for_existing_questions(structured_resume, job_title, job_de
     with open(questions_csv_path, "r", encoding="utf-8") as infile, open(output_path, "w", newline='', encoding="utf-8") as outfile:
         reader = csv.DictReader(infile)
         writer = csv.writer(outfile)
-        writer.writerow(["question_id", "question", "level", "strength", "answer", "requires_code"])
+        writer.writerow(["question_id", "question", "level", "strength", "answer", "requires_code", "answer_source"])
 
         for row in reader:
             if row.get("strength"):  # Skip rows that already have answers
@@ -1295,20 +1318,29 @@ Job Description:
 Only respond with the answer text, no formatting.
 """
                 try:
-                    response = try_ollama_chat(prompt.strip(), model=model)
+                    response = try_ollama_chat(prompt.strip(), model=resolved_model)
                     answer = response["message"]["content"].strip().replace('"', "'")
                     if not answer:
                         raise ValueError("Empty answer generated")
                     # Include requires_code when writing the row
-                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false"])
+                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false", "ai"])
+                    stats["generated_count"] += 1
                     print(f"[DEBUG] ↳ {strength.capitalize()} answer generated.")
                 except Exception as e:
                     print(f"[ERROR] Failed generating answer for {row['question_id']} [{strength}]: {e}")
                     answer = fallback_answer(row["question"], strength)
-                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false"])
+                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false", "fallback"])
+                    stats["fallback_count"] += 1
+                    if len(stats["fallback_examples"]) < 10:
+                        stats["fallback_examples"].append({
+                            "question_id": row["question_id"],
+                            "strength": strength,
+                            "error": str(e),
+                        })
                     print(f"[WARN] ↳ Wrote fallback {strength} answer for {row['question_id']}")
 
     print(f"[DONE] Answers written to: {output_path}")
+    return stats
 
 
 # === END OF CORE QUESTION GENERATION WITH ANSWERS INTEGRATED ===
@@ -1461,11 +1493,12 @@ Classification rules:
 def try_ollama_chat(prompt, model="llama3", max_retries=100000):
     if ollama is None:
         raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
+    resolved_model = resolve_ollama_model_name(model)
     for attempt in range(max_retries):
         try:
-            return ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])
+            return ollama.chat(model=resolved_model, messages=[{"role": "user", "content": prompt}])
         except Exception as e:
-            print(f"[WARNING] Ollama attempt {attempt+1} failed: {e}")
+            print(f"[WARNING] Ollama attempt {attempt+1} failed for model '{resolved_model}': {e}")
     raise RuntimeError("Ollama API failed after multiple attempts.")
 
 
@@ -1654,6 +1687,8 @@ def run_pipeline_from_api(
         max_retries: Number of retry attempts
     """
     
+    resolved_model = resolve_ollama_model_name()
+
     for attempt in range(max_retries):
         try:
             print(f"\n[INFO] API Attempt {attempt + 1} of {max_retries}")
@@ -1667,6 +1702,7 @@ def run_pipeline_from_api(
             print(f"[INFO] Processing resume for: {job_title}")
             print(f"[INFO] Question counts: {question_counts}")
             print(f"[INFO] Include answers: {include_answers}")
+            print(f"[INFO] Ollama model: {resolved_model}")
             print(f"[INFO] Split mode: {split} (Resume {resume_pct}% | JD {jd_pct}%)")
             
             # Extract resume text and parse into structured data
@@ -1784,16 +1820,31 @@ def run_pipeline_from_api(
             
             # Save questions to CSV
             save_questions_to_csv(core_questions, questions_path)
+
+            answer_generation = {
+                "requested": include_answers,
+                "model": resolved_model,
+                "generated_count": 0,
+                "fallback_count": 0,
+                "fallback_examples": [],
+            }
             
             # Generate answers if requested
             if include_answers:
-                generate_answers_for_existing_questions(
+                answer_generation = generate_answers_for_existing_questions(
                     structured_data,
                     job_title,
                     job_description,
                     questions_path,
-                    qa_path
+                    qa_path,
+                    model=resolved_model,
                 )
+                if answer_generation.get("fallback_count"):
+                    print(
+                        "[WARN] Sample answer generation used fallback content "
+                        f"for {answer_generation['fallback_count']} answers out of "
+                        f"{answer_generation['generated_count'] + answer_generation['fallback_count']}."
+                    )
                 final_csv_path = qa_path
             else:
                 print("[INFO] Skipping answer generation as requested.")
@@ -1807,6 +1858,9 @@ def run_pipeline_from_api(
                 "candidate": candidate_name,
                 "questions": questions,
                 "questions_count": len(questions),
+                "generator": "ollama_pipeline",
+                "ollama_model": resolved_model,
+                "answer_generation": answer_generation,
                 "parsed_resume": structured_data,
                 "temp_dir": temp_dir,
                 "qa_csv": final_csv_path
@@ -1875,6 +1929,7 @@ def read_questions_from_csv(csv_file_path):
                 
                 # Get requires_code from CSV (default to False if not present)
                 requires_code = row.get('requires_code', 'false').lower() == 'true'
+                answer_source = (row.get('answer_source') or '').strip().lower() or "unknown"
                 
                 # Debug logging
                 print(f"[DEBUG] Mapping CSV values: level='{row.get('level', '')}' -> difficulty_category='{difficulty_category}', strength='{row.get('strength', '')}' -> difficulty_experience='{difficulty_experience}', requires_code={requires_code}")
@@ -1889,6 +1944,7 @@ def read_questions_from_csv(csv_file_path):
                 # Include answer if available
                 if 'answer' in row and row['answer']:
                     question_data["expected_answer"] = row['answer']
+                    question_data["answer_source"] = answer_source
                 
                 questions.append(question_data)
         

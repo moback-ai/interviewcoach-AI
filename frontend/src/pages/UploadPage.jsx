@@ -367,6 +367,15 @@ function UploadPage() {
         throw new Error(`Failed to generate questions: ${questionsResult.message}`);
       }
 
+      const generationDebug = questionsResult.debug || {};
+      const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
+      const usedLocalFallback = generationDebug.generator === 'local_fallback';
+      const generationWarning = usedLocalFallback
+        ? 'The live backend fell back to template-based generation because Ollama was unavailable or the configured model was missing.'
+        : fallbackAnswerCount > 0
+          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+          : '';
+
       // Step 4: Save questions to database via edge function
       console.log('[DEBUG] Step 4: Saving questions to database...');
       const questionsSaveResult = await saveQuestionsToDatabase(
@@ -415,14 +424,18 @@ function UploadPage() {
       // Show success modal instead of alert
       setSuccessModal({
         isOpen: true,
-        title: 'Upload & Generation Complete!',
-        message: `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
+        title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
+        message: generationWarning
+          ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
+          : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
         details: [
           `Question Set: ${savedQuestionSet}`,
           `Total Questions: ${uniqueQuestions.size}`,
           `Resume: ${resume.name}`,
           `Job Title: ${jobTitle}`,
-          `Status: Ready for interview preparation`
+          generationWarning
+            ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
+            : 'Status: Ready for interview preparation'
         ]
       });
 
