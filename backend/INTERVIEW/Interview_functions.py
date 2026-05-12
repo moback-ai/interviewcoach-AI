@@ -1,9 +1,25 @@
 import json
+import os
 import re
 try:
     import ollama
 except Exception as ollama_import_error:
     ollama = None
+
+
+def resolve_ollama_model_name(model=None):
+    configured_model = ""
+    try:
+        from common.runtime_config import optional_env as runtime_optional_env
+        configured_model = runtime_optional_env("OLLAMA_MODEL", "llama3")
+    except Exception:
+        configured_model = os.getenv("OLLAMA_MODEL", "llama3")
+
+    configured_model = (configured_model or "llama3").strip()
+    requested_model = (model or "").strip()
+    if not requested_model or requested_model == "llama3":
+        return configured_model
+    return requested_model
 
 
 RED = "\033[31m"
@@ -17,7 +33,8 @@ RESET = "\033[0m"
 def ollama_chat(*, model, messages):
     if ollama is None:
         raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
-    return ollama.chat(model=model, messages=messages)
+    resolved_model = resolve_ollama_model_name(model)
+    return ollama.chat(model=resolved_model, messages=messages)
 
 
 def log(func_name):

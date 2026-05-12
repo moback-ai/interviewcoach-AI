@@ -744,6 +744,7 @@ def admin_logs():
         "backend-error": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
         "backend-out": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
         "database": _database_log_snapshot,
+        "ai-diagnostics": _ollama_diagnostic_snapshot,
     }
 
     resolver = sources.get(source)
@@ -1037,7 +1038,21 @@ def schedule_background_ai_warmup():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "version": "2.0.0"})
+    ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=2)
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "2.0.0",
+        "services": {
+            "ollama": {
+                "ready": ollama_diagnostics.get("ready", False),
+                "reachable": ollama_diagnostics.get("reachable", False),
+                "model": ollama_diagnostics.get("model"),
+                "model_available": ollama_diagnostics.get("model_available", False),
+                "error": ollama_diagnostics.get("error", ""),
+            }
+        }
+    })
 
 
 def extract_text_from_uploaded_document(file_path, ext):
@@ -1241,6 +1256,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
                 "difficulty_level": normalized_difficulty,
                 "difficulty_category": normalized_difficulty,
                 "difficulty_experience": experience,
+                "answer_source": "template_fallback",
                 "requires_code": requires_code,
             })
     normalized_counts = {
@@ -1263,18 +1279,101 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
         "candidate": candidate_name,
         "questions": questions,
         "questions_count": len(questions),
+        "generator": "local_fallback",
+        "answer_generation": {
+            "requested": True,
+            "model": None,
+            "generated_count": 0,
+            "fallback_count": len(questions),
+            "fallback_examples": [],
+        },
     }
 
 
-def ollama_ready(timeout_seconds=2):
+def get_ollama_model_name():
+    return (optional_env("OLLAMA_MODEL", "llama3") or "llama3").strip()
+
+
+def _normalize_model_aliases(name: str):
+    normalized = (name or "").strip().lower()
+    if not normalized:
+        return set()
+    base = normalized.split(":", 1)[0]
+    return {normalized, base}
+
+
+def get_ollama_diagnostics(timeout_seconds=2):
+    health_url = optional_env("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags")
+    configured_model = get_ollama_model_name()
+    diagnostics = {
+        "health_url": health_url,
+        "model": configured_model,
+        "reachable": False,
+        "status_code": None,
+        "model_available": False,
+        "ready": False,
+        "available_models": [],
+        "error": "",
+    }
+
     try:
-        response = http_requests.get(
-            optional_env("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags"),
-            timeout=timeout_seconds,
-        )
-        return response.ok
-    except Exception:
-        return False
+        response = http_requests.get(health_url, timeout=timeout_seconds)
+        diagnostics["status_code"] = response.status_code
+        diagnostics["reachable"] = response.ok
+        if not response.ok:
+            diagnostics["error"] = f"Health endpoint returned HTTP {response.status_code}"
+            return diagnostics
+
+        payload = response.json() if response.content else {}
+        models = payload.get("models") if isinstance(payload, dict) else []
+        names = []
+        if isinstance(models, list):
+            for item in models:
+                if not isinstance(item, dict):
+                    continue
+                name = (item.get("name") or "").strip()
+                if name:
+                    names.append(name)
+        diagnostics["available_models"] = names
+
+        configured_aliases = _normalize_model_aliases(configured_model)
+        available_aliases = set()
+        for name in names:
+            available_aliases.update(_normalize_model_aliases(name))
+        diagnostics["model_available"] = bool(configured_aliases & available_aliases)
+        diagnostics["ready"] = diagnostics["reachable"] and diagnostics["model_available"]
+        if diagnostics["reachable"] and not diagnostics["model_available"]:
+            diagnostics["error"] = f"Configured model '{configured_model}' is not installed in Ollama."
+        return diagnostics
+    except Exception as exc:
+        diagnostics["error"] = str(exc)
+        return diagnostics
+
+
+def ollama_ready(timeout_seconds=2):
+    return get_ollama_diagnostics(timeout_seconds=timeout_seconds).get("ready", False)
+
+
+def _ollama_diagnostic_snapshot():
+    diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+    lines = [
+        f"ready={diagnostics.get('ready')}",
+        f"reachable={diagnostics.get('reachable')}",
+        f"status_code={diagnostics.get('status_code')}",
+        f"model={diagnostics.get('model')}",
+        f"model_available={diagnostics.get('model_available')}",
+        f"health_url={diagnostics.get('health_url')}",
+    ]
+    if diagnostics.get("available_models"):
+        lines.append("available_models=" + ", ".join(diagnostics["available_models"]))
+    if diagnostics.get("error"):
+        lines.append(f"error={diagnostics['error']}")
+    return {
+        "available": True,
+        "path": "ollama diagnostics",
+        "lines": lines,
+        "summary": diagnostics,
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUTH  (replaces the legacy hosted auth layer)
@@ -1806,9 +1905,10 @@ def generate_questions():
                     "message": "Resume is empty. Please upload a resume with readable content before generating questions."
                 }), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
+            ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
             try:
-                if not ollama_ready():
-                    raise RuntimeError("Ollama is unavailable")
+                if not ollama_diagnostics.get("ready"):
+                    raise RuntimeError(ollama_diagnostics.get("error") or "Ollama is unavailable")
                 from INTERVIEW.Resumeparser import run_pipeline_from_api
                 result = run_pipeline_from_api(
                     resume_path=temp_resume,
@@ -1825,14 +1925,22 @@ def generate_questions():
                     max_retries=1,
                 )
             except Exception as pipeline_error:
-                print(f"[WARN] Falling back to local question generator: {pipeline_error}")
+                print(
+                    "[WARN] Falling back to local question generator: "
+                    f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+                )
                 result = build_local_question_set(job_title, job_description, resume_text, question_counts)
+                result["ollama_diagnostics"] = ollama_diagnostics
             if not result.get('success'):
                 return jsonify({"success": False, "message": result.get('error', 'Pipeline failed')}), 500
             return jsonify({"success": True, "data": {
                 "questions": result['questions'],
                 "questions_count": result['questions_count'],
                 "candidate_name": result['candidate']
+            }, "debug": {
+                "generator": result.get("generator", "unknown"),
+                "answer_generation": result.get("answer_generation", {}),
+                "ollama": result.get("ollama_diagnostics", ollama_diagnostics),
             }})
         finally:
             if os.path.exists(temp_resume):

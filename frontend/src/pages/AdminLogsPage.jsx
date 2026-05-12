@@ -7,6 +7,7 @@ const LOG_SOURCES = [
   { value: 'backend-error', label: 'Backend Errors' },
   { value: 'backend-out', label: 'Backend Output' },
   { value: 'database', label: 'Database Diagnostics' },
+  { value: 'ai-diagnostics', label: 'AI Diagnostics' },
 ];
 
 const formatError = (error) => {
