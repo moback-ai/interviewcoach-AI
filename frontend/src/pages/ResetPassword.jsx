@@ -1,18 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { FiArrowLeft, FiCheckCircle, FiLock } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
 import { resetPassword } from '../lib/authClient';
+import { buildLoginCoachState } from '../utils/authCoachNotice';
 
 function ResetPassword() {
   useTheme();
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const token = useMemo(() => params.get('token') || '', [params]);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [infoMsg, setInfoMsg] = useState('');
 
   const passwordIsValid = password.length >= 8;
   const passwordsMatch = password && password === confirmPassword;
@@ -21,13 +24,19 @@ function ResetPassword() {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
-    setInfoMsg('');
 
     try {
       const data = await resetPassword(token, password);
-      setInfoMsg(data.message || 'Password reset successful. You can log in now.');
-      setPassword('');
-      setConfirmPassword('');
+      navigate('/login', {
+        replace: true,
+        state: buildLoginCoachState({
+          notice: {
+            tone: 'success',
+            title: 'Password updated',
+            message: data.message || 'Your password reset is complete. Sign in now with your new password.',
+          },
+        }),
+      });
     } catch (error) {
       setErrorMsg(error.message || 'Unable to reset password.');
     } finally {
@@ -38,75 +47,91 @@ function ResetPassword() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4 py-8">
-        <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)]">
-          <h2 className="text-3xl font-bold text-center mb-3 text-[var(--color-primary)]">Reset Password</h2>
-          <p className="text-sm text-center text-[var(--color-text-secondary)] mb-6">
-            Choose a new password for your account.
+      <AuthSceneShell
+        variant="emerald"
+        badge="Secure reset"
+        icon={<FiLock size={18} />}
+        title="Create a fresh password"
+        description="Choose a password you’ll remember but others can’t guess. Once it’s updated, we’ll send you straight back to sign in."
+        footer={(
+          <p className="text-sm text-center text-[var(--color-text-secondary)]">
+            Back to{' '}
+            <Link to="/login" className="auth-scene-link-inline">
+              login
+            </Link>
           </p>
+        )}
+      >
+        {!token && (
+          <div className="auth-scene-alert auth-scene-alert-error">
+            Reset token is missing or invalid.
+          </div>
+        )}
 
-          {!token && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm text-center">
-              Reset token is missing or invalid.
-            </div>
-          )}
+        {errorMsg && (
+          <div className="auth-scene-alert auth-scene-alert-error">
+            {errorMsg}
+          </div>
+        )}
 
-          {errorMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm text-center">
-              {errorMsg}
-            </div>
-          )}
+        {!errorMsg && token && password.length > 0 && (
+          <div className="auth-scene-alert auth-scene-alert-soft">
+            <FiCheckCircle size={15} />
+            <span>{passwordsMatch ? 'Passwords match and are ready to submit.' : 'Use at least 8 characters and make both entries match.'}</span>
+          </div>
+        )}
 
-          {infoMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm text-center">
-              {infoMsg}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">New password</label>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label className="auth-scene-label">New password</label>
+            <div className="auth-scene-input-wrap">
+              <span className="auth-scene-input-icon">
+                <FiLock size={16} />
+              </span>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading || !token}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
+                className="auth-scene-input"
                 placeholder="At least 8 characters"
               />
             </div>
+          </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Confirm password</label>
+          <div>
+            <label className="auth-scene-label">Confirm password</label>
+            <div className="auth-scene-input-wrap">
+              <span className="auth-scene-input-icon">
+                <FiCheckCircle size={16} />
+              </span>
               <input
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
                 disabled={loading || !token}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
+                className="auth-scene-input"
                 placeholder="Re-enter your new password"
               />
             </div>
+          </div>
 
-            <button
-              type="submit"
-              disabled={loading || !token || !passwordIsValid || !passwordsMatch}
-              className="w-full py-2.5 rounded-lg bg-[var(--color-primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50"
-            >
-              {loading ? 'Resetting...' : 'Reset password'}
-            </button>
-          </form>
+          <button
+            type="submit"
+            disabled={loading || !token || !passwordIsValid || !passwordsMatch}
+            className="auth-scene-submit"
+          >
+            {loading ? 'Resetting...' : 'Reset password'}
+          </button>
+        </form>
 
-          <p className="text-sm text-center mt-6 text-[var(--color-text-secondary)]">
-            Back to{' '}
-            <Link to="/login" className="text-[var(--color-primary)] hover:underline">
-              login
-            </Link>
-          </p>
-        </div>
-      </div>
+        <Link to="/login" className="auth-scene-link-row">
+          <FiArrowLeft size={15} />
+          <span>Return to sign in</span>
+        </Link>
+      </AuthSceneShell>
     </>
   );
 }
