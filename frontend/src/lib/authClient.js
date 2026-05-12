@@ -217,6 +217,9 @@ export const forgotUsername = async (email) => {
     body: JSON.stringify({ email: email.toLowerCase().trim() }),
   });
   const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || data.message || 'Unable to recover username right now');
+  }
   return data;
 };
 

@@ -1,14 +1,42 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { FiEye, FiEyeOff, FiCheck, FiX, FiLoader } from 'react-icons/fi';
-import { useEffect } from 'react';
+import {
+  FiArrowRight,
+  FiCheckCircle,
+  FiEye,
+  FiEyeOff,
+  FiInfo,
+  FiMail,
+  FiX,
+} from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import loginReferenceEmpty from '../assets/auth/login-reference-empty.png';
+import loginReferenceFinal from '../assets/auth/login-reference-final.png';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail, isValidUsername } from '../lib/authClient';
 import { performSmartRedirect } from '../utils/smartRouting';
 import { trackEvents } from '../services/mixpanel';
 import { checkEmailAvailability, checkUsernameAvailability } from '../utils/emailAvailability';
+import { createAuthCoachNotice, getDefaultLoginCoachNotice } from '../utils/authCoachNotice';
+
+const NOTICE_META = {
+  success: {
+    label: 'Ready',
+    Icon: FiCheckCircle,
+    panelClass: 'auth-cinematic-note-success',
+  },
+  warning: {
+    label: 'Action needed',
+    Icon: FiMail,
+    panelClass: 'auth-cinematic-note-warning',
+  },
+  info: {
+    label: 'Secure access',
+    Icon: FiInfo,
+    panelClass: 'auth-cinematic-note-info',
+  },
+};
 
 function Login() {
   const navigate = useNavigate();
@@ -20,7 +48,7 @@ function Login() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [infoMsg, setInfoMsg] = useState('');
+  const [coachNotice, setCoachNotice] = useState(() => getDefaultLoginCoachNotice());
 
   const normalizedIdentifier = identifier.toLowerCase().trim();
   const looksLikeEmail = normalizedIdentifier.includes('@');
@@ -30,9 +58,12 @@ function Login() {
   const [idChecked, setIdChecked] = useState(false);
   const [identifierBlurred, setIdentifierBlurred] = useState(false);
   const [idInvalidated, setIdInvalidated] = useState(false);
-  // Tracks if user has ever gotten a confirmed result — never resets
   const hadConfirmedCheck = useRef(false);
   const lastConfirmedId = useRef('');
+  const shellRef = useRef(null);
+  const motionFrameRef = useRef(null);
+  const prefersReducedMotionRef = useRef(false);
+
   const requestedNextPath = new URLSearchParams(location.search).get('next');
   const stateRedirectPath = typeof location.state?.from === 'string' ? location.state.from : '';
   const nextPath = (requestedNextPath && requestedNextPath.startsWith('/'))
@@ -41,6 +72,102 @@ function Login() {
       ? stateRedirectPath
       : '';
 
+  const noticeMeta = NOTICE_META[coachNotice.tone] || NOTICE_META.info;
+  const NoticeIcon = noticeMeta.Icon;
+
+  useEffect(() => {
+    prefersReducedMotionRef.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    return () => {
+      if (motionFrameRef.current) {
+        window.cancelAnimationFrame(motionFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const incomingNotice = location.state?.authNotice;
+    const incomingIdentifier = typeof location.state?.prefillIdentifier === 'string'
+      ? location.state.prefillIdentifier
+      : '';
+
+    if (!incomingNotice?.message && !incomingIdentifier) {
+      return;
+    }
+
+    if (incomingIdentifier) {
+      setIdentifier((currentValue) => currentValue || incomingIdentifier);
+    }
+
+    if (incomingNotice?.message) {
+      setCoachNotice(incomingNotice);
+      setErrorMsg('');
+    }
+
+    const nextState = typeof location.state?.from === 'string'
+      ? { from: location.state.from }
+      : null;
+
+    navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+      },
+      {
+        replace: true,
+        state: nextState,
+      }
+    );
+  }, [location.pathname, location.search, location.state, navigate]);
+
+  const applyBackgroundMotion = (offsetX, offsetY) => {
+    const shell = shellRef.current;
+    if (!shell) {
+      return;
+    }
+
+    shell.style.setProperty('--auth-cinematic-shift-x', `${offsetX * 26}px`);
+    shell.style.setProperty('--auth-cinematic-shift-y', `${offsetY * 18}px`);
+    shell.style.setProperty('--auth-cinematic-frame-x', `${offsetX * -14}px`);
+    shell.style.setProperty('--auth-cinematic-frame-y', `${offsetY * 10}px`);
+    shell.style.setProperty('--auth-cinematic-rotate', `${offsetX * 4}deg`);
+  };
+
+  const queueBackgroundMotion = (offsetX, offsetY) => {
+    if (prefersReducedMotionRef.current) {
+      return;
+    }
+
+    if (motionFrameRef.current) {
+      window.cancelAnimationFrame(motionFrameRef.current);
+    }
+
+    motionFrameRef.current = window.requestAnimationFrame(() => {
+      applyBackgroundMotion(offsetX, offsetY);
+      motionFrameRef.current = null;
+    });
+  };
+
+  const handleBackgroundPointerMove = (event) => {
+    if (event.pointerType === 'touch' || prefersReducedMotionRef.current) {
+      return;
+    }
+
+    const shell = shellRef.current;
+    if (!shell) {
+      return;
+    }
+
+    const bounds = shell.getBoundingClientRect();
+    const relativeX = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
+    const relativeY = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
+    queueBackgroundMotion(relativeX, relativeY);
+  };
+
+  const handleBackgroundPointerLeave = () => {
+    queueBackgroundMotion(0, 0);
+  };
+
   const handleIdentifierBlur = async () => {
     if (!identifier || identifier.length < 3 || !identifierIsValid) {
       setIdStatus('idle');
@@ -48,30 +175,31 @@ function Login() {
       setIdInvalidated(false);
       return;
     }
-    // Same as last confirmed value — restore green instantly, no API call needed
+
     if (hadConfirmedCheck.current && normalizedIdentifier === lastConfirmedId.current) {
       setIdStatus('exists');
       setIdChecked(true);
       setIdInvalidated(false);
       return;
     }
-    // Different from what was confirmed — show red immediately while API checks
+
     if (hadConfirmedCheck.current) {
       setIdInvalidated(true);
     }
+
     setIdStatus('checking');
     setIdChecked(false);
     try {
-      let res;
-      if (looksLikeEmail) {
-        res = await checkEmailAvailability(normalizedIdentifier);
-      } else {
-        res = await checkUsernameAvailability(normalizedIdentifier);
-      }
-      setIdStatus(res.exists ? 'exists' : 'missing');
+      const result = looksLikeEmail
+        ? await checkEmailAvailability(normalizedIdentifier)
+        : await checkUsernameAvailability(normalizedIdentifier);
+
+      setIdStatus(result.exists ? 'exists' : 'missing');
       setIdChecked(true);
       hadConfirmedCheck.current = true;
-      if (res.exists) lastConfirmedId.current = normalizedIdentifier;
+      if (result.exists) {
+        lastConfirmedId.current = normalizedIdentifier;
+      }
       setIdInvalidated(false);
     } catch {
       setIdStatus('idle');
@@ -79,11 +207,11 @@ function Login() {
     }
   };
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const handleLogin = async (event) => {
+    event.preventDefault();
     setLoading(true);
     setErrorMsg('');
-    setInfoMsg('');
+    let redirecting = false;
 
     try {
       const data = await login(identifier, password);
@@ -92,6 +220,17 @@ function Login() {
         identifier,
         user_id: data.user?.id,
         login_timestamp: new Date().toISOString(),
+      });
+
+      redirecting = true;
+      setCoachNotice(createAuthCoachNotice({
+        tone: 'success',
+        title: 'Signing successful',
+        message: `Welcome back${data.user?.user_metadata?.full_name ? `, ${data.user.user_metadata.full_name.split(' ')[0]}` : ''}. Opening your interview workspace now.`,
+      }));
+
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 900);
       });
 
       if (nextPath) {
@@ -103,6 +242,11 @@ function Login() {
       const message = (error.message || '').toLowerCase();
       if (message.includes('verify your email')) {
         setErrorMsg('Your account is not verified yet. Check your inbox or resend the verification email below.');
+        setCoachNotice(createAuthCoachNotice({
+          tone: 'warning',
+          title: 'Verification required',
+          message: 'Your account needs a confirmed email before sign-in. Resend the verification email and then come right back here.',
+        }));
       } else if (message.includes('invalid credentials')) {
         try {
           if (!looksLikeEmail) {
@@ -122,7 +266,9 @@ function Login() {
         setErrorMsg(error.message || 'Unable to log in right now.');
       }
     } finally {
-      setLoading(false);
+      if (!redirecting) {
+        setLoading(false);
+      }
     }
   };
 
@@ -135,11 +281,15 @@ function Login() {
     setErrorMsg('');
     try {
       const data = await resendVerificationEmail(normalizedIdentifier);
-      setInfoMsg(
-        data.delivery === 'manual'
-          ? 'A new verification link was created. SMTP is not configured yet, so use the link returned by the backend response.'
-          : 'Verification email sent again. Please check your inbox.'
-      );
+      setCoachNotice(createAuthCoachNotice({
+        tone: 'success',
+        title: 'Confirmation mail sent',
+        message: data.delivery === 'manual'
+          ? 'A fresh confirmation link is ready. Email delivery is not configured yet, so use the direct link below to verify now.'
+          : `A fresh confirmation email was sent to ${normalizedIdentifier}. Check your inbox and spam folder, then sign in here.`,
+        actionLabel: data.verification_link ? 'Open confirmation link' : '',
+        actionHref: data.verification_link || '',
+      }));
     } catch (error) {
       setErrorMsg(error.message || 'Unable to resend verification email.');
     } finally {
@@ -150,27 +300,33 @@ function Login() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4 py-8">
-        <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)]">
-          <h2 className="text-3xl font-bold text-center mb-6 text-[var(--color-primary)]">Welcome Back</h2>
+      <div
+        ref={shellRef}
+        className="auth-cinematic-stage auth-cinematic-login auth-reference-page px-4 py-8"
+        onPointerMove={handleBackgroundPointerMove}
+        onPointerLeave={handleBackgroundPointerLeave}
+      >
+        <div className="auth-cinematic-grid" aria-hidden="true" />
+        <div className="auth-cinematic-glow auth-cinematic-glow-left" aria-hidden="true" />
+        <div className="auth-cinematic-glow auth-cinematic-glow-right" aria-hidden="true" />
+        <div className="auth-cinematic-beam auth-cinematic-beam-left" aria-hidden="true" />
+        <div className="auth-cinematic-beam auth-cinematic-beam-right" aria-hidden="true" />
+        <div className="auth-cinematic-frame-shell" aria-hidden="true">
+          <div className="auth-cinematic-frame" />
+        </div>
 
-          {errorMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm text-center">
-              {errorMsg}
-            </div>
-          )}
+        <div className="relative z-10 flex min-h-[calc(100vh-2rem)] items-center justify-center">
+          <div className="auth-reference-shell auth-reference-shell-login">
+            <span className="auth-reference-kicker auth-reference-kicker-login">Studio access</span>
 
-          {infoMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm text-center">
-              {infoMsg}
-            </div>
-          )}
+            <div className="auth-reference-stage auth-reference-stage-login">
+              <img src={loginReferenceEmpty} alt="" className="auth-reference-layer auth-reference-layer-base" />
+              <img src={loginReferenceFinal} alt="" className="auth-reference-layer auth-reference-layer-final" />
 
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Email or Username</label>
-              <div className="relative">
+              <form onSubmit={handleLogin} className="auth-reference-form auth-reference-form-login">
+                <label htmlFor="auth-login-identifier" className="sr-only">Email or Username</label>
                 <input
+                  id="auth-login-identifier"
                   type="text"
                   value={identifier}
                   onChange={(e) => {
@@ -179,95 +335,113 @@ function Login() {
                     setIdChecked(false);
                   }}
                   onFocus={() => setIdentifierBlurred(false)}
-                  onBlur={() => { setIdentifierBlurred(true); handleIdentifierBlur(); }}
-                  required
-                  disabled={loading}
-                  className={`w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border focus:outline-none focus:ring-2 transition pr-10 ${idChecked && idStatus === 'exists' ? 'border-green-500 focus:ring-green-500' :
-                    (idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length > 0 && !identifierIsValid) || (idInvalidated && identifierBlurred) ? 'border-red-500 focus:ring-red-500' :
-                      'border-[var(--color-border)] focus:ring-[var(--color-primary)]'
-                    }`}
-                  placeholder="you@example.com or your.username"
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center">
-                  {idStatus === 'checking' && <FiLoader className="animate-spin text-blue-500" />}
-                  {idChecked && idStatus === 'exists' && <FiCheck className="text-green-500" strokeWidth={3} size={20} title="Account exists" />}
-                  {((idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length > 0 && !identifierIsValid) || (idInvalidated && identifierBlurred)) && <FiX className="text-red-500" strokeWidth={3} size={20} title="Invalid or not found" />}
-                </div>
-              </div>
-              {identifierBlurred && identifier.length > 0 && identifier.length < 3 ? (
-                <p className="mt-2 flex items-center gap-1.5 text-sm text-red-500">
-                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs shrink-0">!</span>
-                  Enter a valid email or a username with at least 3 valid characters..
-                </p>
-              ) : (idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length >= 3 && !identifierIsValid) || (idInvalidated && identifierBlurred) ? (
-                <p className="mt-2 flex items-center gap-1.5 text-sm text-red-500">
-                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-white font-bold text-xs shrink-0">!</span>
-                  Don't have an account? Create one.
-                </p>
-              ) : null}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Password</label>
-              <div className="relative">
-                <input
-                  type={passwordVisible ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (errorMsg.toLowerCase().includes('password')) setErrorMsg('');
+                  onBlur={() => {
+                    setIdentifierBlurred(true);
+                    handleIdentifierBlur();
                   }}
                   required
                   disabled={loading}
-                  className={`w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border focus:outline-none focus:ring-2 transition pr-20 ${errorMsg.toLowerCase().includes('password') && password.length > 0 ? 'border-red-500 focus:ring-red-500' : 'border-[var(--color-border)] focus:ring-[var(--color-primary)]'
-                    }`}
-                  placeholder="Enter your password"
+                  autoComplete="username"
+                  className="auth-reference-input auth-reference-input-login"
+                  placeholder=""
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center justify-center gap-2">
-                  {errorMsg.toLowerCase().includes('password') && password.length > 0 && <FiX className="text-red-500" strokeWidth={3} size={20} title="Invalid password" />}
+
+                <div className="auth-reference-password-wrap auth-reference-password-wrap-login">
+                  <label htmlFor="auth-login-password" className="sr-only">Password</label>
+                  <input
+                    id="auth-login-password"
+                    type={passwordVisible ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (errorMsg.toLowerCase().includes('password')) {
+                        setErrorMsg('');
+                      }
+                    }}
+                    required
+                    disabled={loading}
+                    autoComplete="current-password"
+                    className="auth-reference-input auth-reference-input-login auth-reference-input-password"
+                    placeholder=""
+                  />
                   <button
                     type="button"
                     onClick={() => setPasswordVisible((prev) => !prev)}
-                    className="text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] transition"
+                    className="auth-reference-password-toggle"
+                    aria-label={passwordVisible ? 'Hide password' : 'Show password'}
                   >
-                    {passwordVisible ? <FiEyeOff size={20} /> : <FiEye size={20} />}
+                    {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
                   </button>
                 </div>
-              </div>
-              <div className="mt-2 flex items-center justify-between text-sm">
-                <Link to="/forgot-password" className="text-[var(--color-primary)] hover:underline">
+
+                <button
+                  type="submit"
+                  disabled={loading || !identifierIsValid || !password}
+                  className="auth-reference-submit auth-reference-submit-login"
+                >
+                  {loading ? 'Signing in...' : <span className="sr-only">Login</span>}
+                </button>
+              </form>
+            </div>
+
+            <div className="auth-reference-meta">
+              {errorMsg && <div className="auth-reference-banner auth-reference-banner-error">{errorMsg}</div>}
+
+              {!errorMsg && coachNotice.kind !== 'default' && (
+                <div className={`auth-reference-banner ${noticeMeta.panelClass}`}>
+                  <div className="auth-reference-banner-top">
+                    <span className="auth-reference-banner-chip">
+                      <NoticeIcon size={14} />
+                      {noticeMeta.label}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCoachNotice(getDefaultLoginCoachNotice())}
+                      className="auth-reference-banner-close"
+                      aria-label="Dismiss sign-in notice"
+                    >
+                      <FiX size={14} />
+                    </button>
+                  </div>
+                  {coachNotice.title && <p className="auth-reference-banner-title">{coachNotice.title}</p>}
+                  <p className="auth-reference-banner-body">{coachNotice.message}</p>
+                  {coachNotice.actionHref && coachNotice.actionLabel && (
+                    <a href={coachNotice.actionHref} className="auth-reference-banner-link">
+                      <span>{coachNotice.actionLabel}</span>
+                      <FiArrowRight size={15} />
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {identifierBlurred && identifier.length > 0 && identifier.length < 3 && (
+                <p className="auth-reference-help">Enter a valid email or a username with at least 3 characters.</p>
+              )}
+              {!errorMsg && ((idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length >= 3 && !identifierIsValid) || (idInvalidated && identifierBlurred)) && (
+                <p className="auth-reference-help">This account wasn&apos;t found. You can create one below.</p>
+              )}
+
+              <div className="auth-reference-link-row">
+                <Link to="/forgot-password" className="auth-reference-link auth-reference-link-dark">
                   Forgot password?
                 </Link>
-                <Link to="/forgot-username" className="text-[var(--color-primary)] hover:underline">
+                <Link to="/forgot-username" className="auth-reference-link auth-reference-link-dark">
                   Forgot username?
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={loading}
+                  className="auth-reference-link auth-reference-link-dark auth-reference-link-button"
+                >
+                  Resend verification
+                </button>
+                <Link to="/signup" className="auth-reference-link auth-reference-link-dark">
+                  Create account
                 </Link>
               </div>
             </div>
-
-            <button
-              type="submit"
-              disabled={loading || !identifierIsValid || !password}
-              className="w-full py-2.5 rounded-lg bg-[var(--color-primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50"
-            >
-              {loading ? 'Signing in...' : 'Login'}
-            </button>
-          </form>
-
-          <button
-            type="button"
-            onClick={handleResend}
-            disabled={loading}
-            className="w-full mt-4 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] font-medium hover:bg-[var(--color-input-bg)] transition disabled:opacity-50"
-          >
-            Resend verification email
-          </button>
-
-          <p className="text-sm text-center mt-6 text-[var(--color-text-secondary)]">
-            Don&apos;t have an account?{' '}
-            <Link to="/signup" className="text-[var(--color-primary)] hover:underline">
-              Create one
-            </Link>
-          </p>
+          </div>
         </div>
       </div>
     </>
