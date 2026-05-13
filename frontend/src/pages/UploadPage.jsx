@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
 import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
 import { useTheme } from '../hooks/useTheme';
@@ -669,7 +670,7 @@ function UploadPage() {
   return (
     <>
       <Navbar disableNavigation={isCriticalOperationInProgress} />
-      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center">
+      <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center">
         <div className="w-full max-w-4xl bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 md:p-10">
           <div className="text-center mb-10">
             <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-4">
@@ -1118,7 +1119,7 @@ function UploadPage() {
           </form>
           </motion.div>
         </div>
-      </div>
+      </PageWavesShell>
 
       {/* Success Modal */}
       <SuccessModal

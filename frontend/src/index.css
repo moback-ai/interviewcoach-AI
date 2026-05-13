@@ -89,6 +89,95 @@ body::after {
   min-height: 100vh;
 }
 
+.page-waves-shell {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.page-waves-shell__backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.page-waves-shell__backdrop-fill,
+.page-waves-shell__backdrop-vanta,
+.page-waves-shell__backdrop-grid,
+.page-waves-shell__backdrop-glow {
+  position: absolute;
+  inset: -4%;
+}
+
+.page-waves-shell__backdrop-fill {
+  background:
+    radial-gradient(circle at 20% 16%, rgba(255, 255, 255, 0.75), transparent 24%),
+    linear-gradient(180deg, rgba(240, 249, 255, 0.92) 0%, rgba(233, 245, 255, 0.9) 42%, rgba(226, 242, 255, 0.96) 100%);
+}
+
+.dark .page-waves-shell__backdrop-fill {
+  background:
+    radial-gradient(circle at 20% 16%, rgba(38, 117, 182, 0.28), transparent 24%),
+    linear-gradient(180deg, rgba(6, 20, 35, 0.94) 0%, rgba(7, 25, 44, 0.94) 44%, rgba(8, 32, 56, 0.96) 100%);
+}
+
+.page-waves-shell__backdrop-vanta {
+  inset: 0;
+  opacity: 0.55;
+}
+
+.dark .page-waves-shell__backdrop-vanta {
+  opacity: 0.5;
+}
+
+.page-waves-shell__backdrop-grid {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 42%),
+    linear-gradient(115deg, rgba(51, 102, 255, 0.08), transparent 40%),
+    linear-gradient(to right, rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+  background-size: auto, auto, 84px 84px, 84px 84px;
+  opacity: 0.32;
+}
+
+.dark .page-waves-shell__backdrop-grid {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 42%),
+    linear-gradient(115deg, rgba(96, 165, 250, 0.1), transparent 40%),
+    linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: auto, auto, 84px 84px, 84px 84px;
+}
+
+.page-waves-shell__backdrop-glow {
+  border-radius: 999px;
+  filter: blur(60px);
+  opacity: 0.24;
+}
+
+.page-waves-shell__backdrop-glow-a {
+  top: -7rem;
+  left: -4rem;
+  width: 22rem;
+  height: 22rem;
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.page-waves-shell__backdrop-glow-b {
+  right: -5rem;
+  bottom: -6rem;
+  width: 24rem;
+  height: 24rem;
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.page-waves-shell__content {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
 .auth-simple-page {
   position: relative;
   display: flex;
@@ -452,6 +541,58 @@ body::after {
   flex-wrap: wrap;
   gap: 0.9rem 1.2rem;
   margin-top: 0.25rem;
+}
+
+.auth-simple-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.auth-simple-divider::before,
+.auth-simple-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--color-border) 85%, transparent);
+}
+
+.auth-simple-provider {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  min-height: 3.2rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--color-card) 88%, transparent);
+  color: var(--color-text-primary);
+  font-size: 0.96rem;
+  font-weight: 600;
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.auth-simple-provider:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
+  background: color-mix(in srgb, var(--color-card) 96%, transparent);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+}
+
+.auth-simple-provider:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.auth-simple-provider-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
 }
 
 .auth-simple-link,
