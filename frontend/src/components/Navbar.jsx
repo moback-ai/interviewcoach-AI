@@ -6,21 +6,25 @@ import { useAuth } from '../contexts/AuthContext';
 import { trackEvents } from '../services/mixpanel';
 
 const BrandLogo = ({ disabled = false }) => {
-  const logoClass = disabled ? 'ai-brand-logo ai-brand-logo-disabled' : 'ai-brand-logo';
   const textClass = disabled
     ? 'text-[var(--color-text-secondary)] opacity-60'
     : 'text-[var(--color-primary)]';
 
   return (
-    <span className="inline-flex items-center gap-2.5">
-      <span className={logoClass} aria-hidden="true">
-        <span className="ai-brand-node ai-brand-node-a" />
-        <span className="ai-brand-node ai-brand-node-b" />
-        <span className="ai-brand-node ai-brand-node-c" />
-        <span className="ai-brand-mark">IC</span>
-      </span>
-      <span className={`text-lg sm:text-xl md:text-2xl font-bold tracking-tight ${textClass}`}>
-        Interview<span className={disabled ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-accent)]'}>Coach</span>
+    <span className="inline-flex items-center gap-2.5 sm:gap-3">
+      <img
+        src="/assets/brand/interviewcoach-mark.svg"
+        alt=""
+        aria-hidden="true"
+        className={`h-10 w-10 sm:h-11 sm:w-11 rounded-2xl object-contain ${disabled ? 'opacity-60 grayscale' : 'drop-shadow-[0_10px_24px_rgba(31,99,255,0.24)]'}`}
+      />
+      <span className="flex flex-col leading-none">
+        <span className={`text-lg sm:text-xl md:text-2xl font-bold tracking-tight ${textClass}`}>
+          Interview<span className={disabled ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-accent)]'}>Coach</span>
+        </span>
+        <span className={`hidden sm:block mt-1 text-[0.62rem] uppercase tracking-[0.26em] ${disabled ? 'text-[var(--color-text-secondary)] opacity-50' : 'text-[var(--color-text-secondary)]/80'}`}>
+          AI Interview Studio
+        </span>
       </span>
     </span>
   );

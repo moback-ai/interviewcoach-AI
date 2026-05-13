@@ -1,9 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FiEye, FiEyeOff } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
-import signupReferenceIntro from '../assets/auth/signup-reference-intro.png';
-import signupReferenceFinal from '../assets/auth/signup-reference-final.png';
+import AuthSimpleShell from '../components/auth/AuthSimpleShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { formatAuthError, isValidEmail, isValidUsername } from '../lib/authClient';
@@ -27,64 +26,6 @@ function Signup() {
   const [usernameStatus, setUsernameStatus] = useState('idle');
   const [emailStatus, setEmailStatus] = useState('idle');
   const [usernameBlurred, setUsernameBlurred] = useState(false);
-  const shellRef = useRef(null);
-  const motionFrameRef = useRef(null);
-  const prefersReducedMotionRef = useRef(false);
-
-  useEffect(() => {
-    prefersReducedMotionRef.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    return () => {
-      if (motionFrameRef.current) {
-        window.cancelAnimationFrame(motionFrameRef.current);
-      }
-    };
-  }, []);
-
-  const applyBackgroundMotion = (offsetX, offsetY) => {
-    const shell = shellRef.current;
-    if (!shell) {
-      return;
-    }
-
-    shell.style.setProperty('--auth-cinematic-shift-x', `${offsetX * 22}px`);
-    shell.style.setProperty('--auth-cinematic-shift-y', `${offsetY * 16}px`);
-  };
-
-  const queueBackgroundMotion = (offsetX, offsetY) => {
-    if (prefersReducedMotionRef.current) {
-      return;
-    }
-
-    if (motionFrameRef.current) {
-      window.cancelAnimationFrame(motionFrameRef.current);
-    }
-
-    motionFrameRef.current = window.requestAnimationFrame(() => {
-      applyBackgroundMotion(offsetX, offsetY);
-      motionFrameRef.current = null;
-    });
-  };
-
-  const handleBackgroundPointerMove = (event) => {
-    if (event.pointerType === 'touch' || prefersReducedMotionRef.current) {
-      return;
-    }
-
-    const shell = shellRef.current;
-    if (!shell) {
-      return;
-    }
-
-    const bounds = shell.getBoundingClientRect();
-    const relativeX = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
-    const relativeY = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
-    queueBackgroundMotion(relativeX, relativeY);
-  };
-
-  const handleBackgroundPointerLeave = () => {
-    queueBackgroundMotion(0, 0);
-  };
 
   const isRealEmail = (value) => {
     if (!isValidEmail(value)) {
@@ -206,160 +147,153 @@ function Signup() {
   return (
     <>
       <Navbar />
-      <div
-        ref={shellRef}
-        className="auth-cinematic-stage auth-cinematic-signup auth-reference-page px-4 py-8"
-        onPointerMove={handleBackgroundPointerMove}
-        onPointerLeave={handleBackgroundPointerLeave}
+      <AuthSimpleShell
+        eyebrow="Create account"
+        title="Start your practice account"
+        description="Create a simple account to upload your resume, tailor interview questions, and track your mock interview progress."
+        wide
+        footer={(
+          <p className="auth-simple-footer-copy">
+            Already have an account?{' '}
+            <Link to="/login" className="auth-simple-link">
+              Sign in
+            </Link>
+          </p>
+        )}
       >
-        <div className="auth-cinematic-grid auth-cinematic-grid-bright" aria-hidden="true" />
-        <div className="auth-cinematic-glow auth-cinematic-signup-glow-left" aria-hidden="true" />
-        <div className="auth-cinematic-glow auth-cinematic-signup-glow-right" aria-hidden="true" />
-        <div className="auth-cinematic-beam auth-cinematic-beam-left" aria-hidden="true" />
-        <div className="auth-cinematic-beam auth-cinematic-beam-right" aria-hidden="true" />
-        <div className="auth-cinematic-signup-bar" aria-hidden="true" />
-
-        <div className="relative z-10 flex min-h-[calc(100vh-2rem)] items-center justify-center">
-          <div className="auth-reference-shell auth-reference-shell-signup">
-            <span className="auth-reference-kicker auth-reference-kicker-signup">Register now</span>
-
-            <div className="auth-reference-stage auth-reference-stage-signup">
-              <img src={signupReferenceIntro} alt="" className="auth-reference-layer auth-reference-layer-base" />
-              <img src={signupReferenceFinal} alt="" className="auth-reference-layer auth-reference-layer-final" />
-
-              <form onSubmit={handleSignup} className="auth-reference-form auth-reference-form-signup">
-                <label htmlFor="auth-signup-username" className="sr-only">Username</label>
-                <input
-                  id="auth-signup-username"
-                  type="text"
-                  value={username}
-                  onChange={(e) => {
-                    setUsername(e.target.value);
-                    setUsernameStatus('idle');
-                  }}
-                  onFocus={() => setUsernameBlurred(false)}
-                  onBlur={() => {
-                    setUsernameBlurred(true);
-                    handleUsernameBlur();
-                  }}
-                  required
-                  disabled={loading}
-                  autoComplete="username"
-                  className="auth-reference-input auth-reference-input-signup"
-                  placeholder=""
-                />
-
-                <label htmlFor="auth-signup-fullname" className="sr-only">Full Name</label>
-                <input
-                  id="auth-signup-fullname"
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  required
-                  disabled={loading}
-                  autoComplete="name"
-                  className="auth-reference-input auth-reference-input-signup"
-                  placeholder=""
-                />
-
-                <label htmlFor="auth-signup-email" className="sr-only">Email</label>
-                <input
-                  id="auth-signup-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    setEmailStatus('idle');
-                  }}
-                  onBlur={handleEmailBlur}
-                  required
-                  disabled={loading}
-                  autoComplete="email"
-                  className="auth-reference-input auth-reference-input-signup auth-reference-input-signup-email"
-                  placeholder=""
-                />
-
-                <div className="auth-reference-password-wrap auth-reference-password-wrap-signup">
-                  <label htmlFor="auth-signup-password" className="sr-only">Password</label>
-                  <input
-                    id="auth-signup-password"
-                    type={passwordVisible ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    minLength={8}
-                    disabled={loading}
-                    autoComplete="new-password"
-                    className="auth-reference-input auth-reference-input-signup auth-reference-input-signup-password"
-                    placeholder="Create your password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setPasswordVisible((prev) => !prev)}
-                    className="auth-reference-password-toggle auth-reference-password-toggle-light"
-                    aria-label={passwordVisible ? 'Hide password' : 'Show password'}
-                  >
-                    {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
-                  </button>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading || !fullName.trim() || !isValidUsername(username) || !isValidEmail(email) || password.length < 8 || !acceptedTerms}
-                  className="auth-reference-submit auth-reference-submit-signup"
-                >
-                  {loading ? 'Creating account...' : 'Sign Up'}
-                </button>
-              </form>
-            </div>
-
-            <div className="auth-reference-meta auth-reference-meta-light">
-              {errorMsg && <div className="auth-reference-banner auth-reference-banner-light auth-reference-banner-error-light">{errorMsg}</div>}
-
-              {!errorMsg && usernameBlurred && username && !isValidUsername(username) && (
-                <p className="auth-reference-help auth-reference-help-light">
-                  Use at least 3 characters. Letters, numbers, dots, underscores, and hyphens are allowed.
-                </p>
-              )}
-              {!errorMsg && emailStatus === 'invalid' && (
-                <p className="auth-reference-help auth-reference-help-light">
-                  Enter a valid email address like `you@gmail.com`.
-                </p>
-              )}
-              {!errorMsg && emailStatus === 'taken' && (
-                <p className="auth-reference-help auth-reference-help-light">
-                  This email is already registered. Log in instead.
-                </p>
-              )}
-              {!errorMsg && usernameStatus === 'taken' && (
-                <p className="auth-reference-help auth-reference-help-light">
-                  That username is already taken. Please choose another one.
-                </p>
-              )}
-              {!errorMsg && password.length > 0 && password.length < 8 && (
-                <p className="auth-reference-help auth-reference-help-light">
-                  Password must be at least 8 characters.
-                </p>
-              )}
-
-              <label className="auth-reference-terms">
-                <input
-                  type="checkbox"
-                  checked={acceptedTerms}
-                  onChange={(e) => setAcceptedTerms(e.target.checked)}
-                />
-                <span>I agree to the Terms and Privacy Policy.</span>
-              </label>
-
-              <div className="auth-reference-link-row auth-reference-link-row-light">
-                <Link to="/login" className="auth-reference-link auth-reference-link-light">
-                  Already have an account? Login
-                </Link>
-              </div>
-            </div>
+        {errorMsg ? (
+          <div className="auth-simple-alert auth-simple-alert-error">
+            <p>{errorMsg}</p>
           </div>
-        </div>
-      </div>
+        ) : null}
+
+        <form onSubmit={handleSignup} className="auth-simple-form">
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-fullname" className="auth-simple-label">Full name</label>
+            <input
+              id="auth-signup-fullname"
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              required
+              disabled={loading}
+              autoComplete="name"
+              className="auth-simple-input"
+              placeholder="Your full name"
+            />
+          </div>
+
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-username" className="auth-simple-label">Username</label>
+            <input
+              id="auth-signup-username"
+              type="text"
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                setUsernameStatus('idle');
+              }}
+              onFocus={() => setUsernameBlurred(false)}
+              onBlur={() => {
+                setUsernameBlurred(true);
+                handleUsernameBlur();
+              }}
+              required
+              disabled={loading}
+              autoComplete="username"
+              className="auth-simple-input"
+              placeholder="your.username"
+            />
+            {!errorMsg && usernameBlurred && username && !isValidUsername(username) ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Use at least 3 characters. Letters, numbers, dots, underscores, and hyphens are allowed.
+              </p>
+            ) : null}
+            {!errorMsg && usernameStatus === 'taken' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                That username is already taken. Please choose another one.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-email" className="auth-simple-label">Email</label>
+            <input
+              id="auth-signup-email"
+              type="email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setEmailStatus('idle');
+              }}
+              onBlur={handleEmailBlur}
+              required
+              disabled={loading}
+              autoComplete="email"
+              className="auth-simple-input"
+              placeholder="you@example.com"
+            />
+            {!errorMsg && emailStatus === 'invalid' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Enter a valid email address like `you@gmail.com`.
+              </p>
+            ) : null}
+            {!errorMsg && emailStatus === 'taken' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                This email is already registered. Log in instead.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-password" className="auth-simple-label">Password</label>
+            <div className="auth-simple-input-wrap">
+              <input
+                id="auth-signup-password"
+                type={passwordVisible ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                disabled={loading}
+                autoComplete="new-password"
+                className="auth-simple-input auth-simple-input-with-button"
+                placeholder="At least 8 characters"
+              />
+              <button
+                type="button"
+                onClick={() => setPasswordVisible((prev) => !prev)}
+                className="auth-simple-password-toggle"
+                aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+              >
+                {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+              </button>
+            </div>
+            {!errorMsg && password.length > 0 && password.length < 8 ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Password must be at least 8 characters.
+              </p>
+            ) : null}
+          </div>
+
+          <label className="auth-simple-checkbox">
+            <input
+              type="checkbox"
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+            />
+            <span>I agree to the Terms and Privacy Policy.</span>
+          </label>
+
+          <button
+            type="submit"
+            disabled={loading || !fullName.trim() || !isValidUsername(username) || !isValidEmail(email) || password.length < 8 || !acceptedTerms}
+            className="auth-simple-submit"
+          >
+            {loading ? 'Creating account...' : 'Create account'}
+          </button>
+        </form>
+      </AuthSimpleShell>
     </>
   );
 }

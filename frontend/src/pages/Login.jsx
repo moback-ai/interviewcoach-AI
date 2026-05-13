@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   FiArrowRight,
@@ -10,31 +10,30 @@ import {
   FiX,
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
-import loginReferenceEmpty from '../assets/auth/login-reference-empty.png';
-import loginReferenceFinal from '../assets/auth/login-reference-final.png';
+import AuthSimpleShell from '../components/auth/AuthSimpleShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail, isValidUsername } from '../lib/authClient';
 import { performSmartRedirect } from '../utils/smartRouting';
 import { trackEvents } from '../services/mixpanel';
-import { checkEmailAvailability, checkUsernameAvailability } from '../utils/emailAvailability';
+import { checkEmailAvailability } from '../utils/emailAvailability';
 import { createAuthCoachNotice, getDefaultLoginCoachNotice } from '../utils/authCoachNotice';
 
 const NOTICE_META = {
   success: {
     label: 'Ready',
     Icon: FiCheckCircle,
-    panelClass: 'auth-cinematic-note-success',
+    panelClass: 'auth-simple-alert-success',
   },
   warning: {
     label: 'Action needed',
     Icon: FiMail,
-    panelClass: 'auth-cinematic-note-warning',
+    panelClass: 'auth-simple-alert-warning',
   },
   info: {
     label: 'Secure access',
     Icon: FiInfo,
-    panelClass: 'auth-cinematic-note-info',
+    panelClass: 'auth-simple-alert-info',
   },
 };
 
@@ -54,16 +53,6 @@ function Login() {
   const looksLikeEmail = normalizedIdentifier.includes('@');
   const identifierIsValid = looksLikeEmail ? isValidEmail(normalizedIdentifier) : isValidUsername(normalizedIdentifier);
 
-  const [idStatus, setIdStatus] = useState('idle');
-  const [idChecked, setIdChecked] = useState(false);
-  const [identifierBlurred, setIdentifierBlurred] = useState(false);
-  const [idInvalidated, setIdInvalidated] = useState(false);
-  const hadConfirmedCheck = useRef(false);
-  const lastConfirmedId = useRef('');
-  const shellRef = useRef(null);
-  const motionFrameRef = useRef(null);
-  const prefersReducedMotionRef = useRef(false);
-
   const requestedNextPath = new URLSearchParams(location.search).get('next');
   const stateRedirectPath = typeof location.state?.from === 'string' ? location.state.from : '';
   const nextPath = (requestedNextPath && requestedNextPath.startsWith('/'))
@@ -74,16 +63,6 @@ function Login() {
 
   const noticeMeta = NOTICE_META[coachNotice.tone] || NOTICE_META.info;
   const NoticeIcon = noticeMeta.Icon;
-
-  useEffect(() => {
-    prefersReducedMotionRef.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    return () => {
-      if (motionFrameRef.current) {
-        window.cancelAnimationFrame(motionFrameRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     const incomingNotice = location.state?.authNotice;
@@ -120,98 +99,38 @@ function Login() {
     );
   }, [location.pathname, location.search, location.state, navigate]);
 
-  const applyBackgroundMotion = (offsetX, offsetY) => {
-    const shell = shellRef.current;
-    if (!shell) {
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('expired') !== 'true') {
       return;
     }
 
-    shell.style.setProperty('--auth-cinematic-shift-x', `${offsetX * 26}px`);
-    shell.style.setProperty('--auth-cinematic-shift-y', `${offsetY * 18}px`);
-    shell.style.setProperty('--auth-cinematic-frame-x', `${offsetX * -14}px`);
-    shell.style.setProperty('--auth-cinematic-frame-y', `${offsetY * 10}px`);
-    shell.style.setProperty('--auth-cinematic-rotate', `${offsetX * 4}deg`);
-  };
+    setCoachNotice(createAuthCoachNotice({
+      tone: 'warning',
+      title: 'Session expired',
+      message: 'Your session has expired. Please log in again.',
+    }));
+    setErrorMsg('');
 
-  const queueBackgroundMotion = (offsetX, offsetY) => {
-    if (prefersReducedMotionRef.current) {
-      return;
-    }
+    params.delete('expired');
+    const search = params.toString();
 
-    if (motionFrameRef.current) {
-      window.cancelAnimationFrame(motionFrameRef.current);
-    }
-
-    motionFrameRef.current = window.requestAnimationFrame(() => {
-      applyBackgroundMotion(offsetX, offsetY);
-      motionFrameRef.current = null;
-    });
-  };
-
-  const handleBackgroundPointerMove = (event) => {
-    if (event.pointerType === 'touch' || prefersReducedMotionRef.current) {
-      return;
-    }
-
-    const shell = shellRef.current;
-    if (!shell) {
-      return;
-    }
-
-    const bounds = shell.getBoundingClientRect();
-    const relativeX = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
-    const relativeY = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
-    queueBackgroundMotion(relativeX, relativeY);
-  };
-
-  const handleBackgroundPointerLeave = () => {
-    queueBackgroundMotion(0, 0);
-  };
-
-  const handleIdentifierBlur = async () => {
-    if (!identifier || identifier.length < 3 || !identifierIsValid) {
-      setIdStatus('idle');
-      setIdChecked(false);
-      setIdInvalidated(false);
-      return;
-    }
-
-    if (hadConfirmedCheck.current && normalizedIdentifier === lastConfirmedId.current) {
-      setIdStatus('exists');
-      setIdChecked(true);
-      setIdInvalidated(false);
-      return;
-    }
-
-    if (hadConfirmedCheck.current) {
-      setIdInvalidated(true);
-    }
-
-    setIdStatus('checking');
-    setIdChecked(false);
-    try {
-      const result = looksLikeEmail
-        ? await checkEmailAvailability(normalizedIdentifier)
-        : await checkUsernameAvailability(normalizedIdentifier);
-
-      setIdStatus(result.exists ? 'exists' : 'missing');
-      setIdChecked(true);
-      hadConfirmedCheck.current = true;
-      if (result.exists) {
-        lastConfirmedId.current = normalizedIdentifier;
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+      },
+      {
+        replace: true,
+        state: location.state ?? null,
       }
-      setIdInvalidated(false);
-    } catch {
-      setIdStatus('idle');
-      setIdChecked(false);
-    }
-  };
+    );
+  }, [location.pathname, location.search, location.state, navigate]);
 
   const handleLogin = async (event) => {
     event.preventDefault();
     setLoading(true);
     setErrorMsg('');
-    let redirecting = false;
 
     try {
       const data = await login(identifier, password);
@@ -220,17 +139,6 @@ function Login() {
         identifier,
         user_id: data.user?.id,
         login_timestamp: new Date().toISOString(),
-      });
-
-      redirecting = true;
-      setCoachNotice(createAuthCoachNotice({
-        tone: 'success',
-        title: 'Signing successful',
-        message: `Welcome back${data.user?.user_metadata?.full_name ? `, ${data.user.user_metadata.full_name.split(' ')[0]}` : ''}. Opening your interview workspace now.`,
-      }));
-
-      await new Promise((resolve) => {
-        window.setTimeout(resolve, 900);
       });
 
       if (nextPath) {
@@ -266,9 +174,7 @@ function Login() {
         setErrorMsg(error.message || 'Unable to log in right now.');
       }
     } finally {
-      if (!redirecting) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   };
 
@@ -300,150 +206,124 @@ function Login() {
   return (
     <>
       <Navbar />
-      <div
-        ref={shellRef}
-        className="auth-cinematic-stage auth-cinematic-login auth-reference-page px-4 py-8"
-        onPointerMove={handleBackgroundPointerMove}
-        onPointerLeave={handleBackgroundPointerLeave}
+      <AuthSimpleShell
+        eyebrow="Sign in"
+        title="Welcome back"
+        description="Use your email or username and password to continue to your interview workspace."
+        footer={(
+          <p className="auth-simple-footer-copy">
+            Don&apos;t have an account?{' '}
+            <Link to="/signup" className="auth-simple-link">
+              Create one
+            </Link>
+          </p>
+        )}
       >
-        <div className="auth-cinematic-grid" aria-hidden="true" />
-        <div className="auth-cinematic-glow auth-cinematic-glow-left" aria-hidden="true" />
-        <div className="auth-cinematic-glow auth-cinematic-glow-right" aria-hidden="true" />
-        <div className="auth-cinematic-beam auth-cinematic-beam-left" aria-hidden="true" />
-        <div className="auth-cinematic-beam auth-cinematic-beam-right" aria-hidden="true" />
-        <div className="auth-cinematic-frame-shell" aria-hidden="true">
-          <div className="auth-cinematic-frame" />
-        </div>
+        {errorMsg ? (
+          <div className="auth-simple-alert auth-simple-alert-error">
+            <p>{errorMsg}</p>
+          </div>
+        ) : null}
 
-        <div className="relative z-10 flex min-h-[calc(100vh-2rem)] items-center justify-center">
-          <div className="auth-reference-shell auth-reference-shell-login">
-            <span className="auth-reference-kicker auth-reference-kicker-login">Studio access</span>
-
-            <div className="auth-reference-stage auth-reference-stage-login">
-              <img src={loginReferenceEmpty} alt="" className="auth-reference-layer auth-reference-layer-base" />
-              <img src={loginReferenceFinal} alt="" className="auth-reference-layer auth-reference-layer-final" />
-
-              <form onSubmit={handleLogin} className="auth-reference-form auth-reference-form-login">
-                <label htmlFor="auth-login-identifier" className="sr-only">Email or Username</label>
-                <input
-                  id="auth-login-identifier"
-                  type="text"
-                  value={identifier}
-                  onChange={(e) => {
-                    setIdentifier(e.target.value);
-                    setIdStatus('idle');
-                    setIdChecked(false);
-                  }}
-                  onFocus={() => setIdentifierBlurred(false)}
-                  onBlur={() => {
-                    setIdentifierBlurred(true);
-                    handleIdentifierBlur();
-                  }}
-                  required
-                  disabled={loading}
-                  autoComplete="username"
-                  className="auth-reference-input auth-reference-input-login"
-                  placeholder=""
-                />
-
-                <div className="auth-reference-password-wrap auth-reference-password-wrap-login">
-                  <label htmlFor="auth-login-password" className="sr-only">Password</label>
-                  <input
-                    id="auth-login-password"
-                    type={passwordVisible ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => {
-                      setPassword(e.target.value);
-                      if (errorMsg.toLowerCase().includes('password')) {
-                        setErrorMsg('');
-                      }
-                    }}
-                    required
-                    disabled={loading}
-                    autoComplete="current-password"
-                    className="auth-reference-input auth-reference-input-login auth-reference-input-password"
-                    placeholder=""
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setPasswordVisible((prev) => !prev)}
-                    className="auth-reference-password-toggle"
-                    aria-label={passwordVisible ? 'Hide password' : 'Show password'}
-                  >
-                    {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
-                  </button>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading || !identifierIsValid || !password}
-                  className="auth-reference-submit auth-reference-submit-login"
-                >
-                  {loading ? 'Signing in...' : <span className="sr-only">Login</span>}
-                </button>
-              </form>
+        {!errorMsg && coachNotice.kind !== 'default' ? (
+          <div className={`auth-simple-alert ${noticeMeta.panelClass}`}>
+            <div className="auth-simple-alert-top">
+              <span className="auth-simple-alert-chip">
+                <NoticeIcon size={14} />
+                {noticeMeta.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCoachNotice(getDefaultLoginCoachNotice())}
+                className="auth-simple-alert-close"
+                aria-label="Dismiss sign-in notice"
+              >
+                <FiX size={14} />
+              </button>
             </div>
+            {coachNotice.title ? <p className="auth-simple-alert-title">{coachNotice.title}</p> : null}
+            <p className="auth-simple-alert-body">{coachNotice.message}</p>
+            {coachNotice.actionHref && coachNotice.actionLabel ? (
+              <a href={coachNotice.actionHref} className="auth-simple-alert-link">
+                <span>{coachNotice.actionLabel}</span>
+                <FiArrowRight size={15} />
+              </a>
+            ) : null}
+          </div>
+        ) : null}
 
-            <div className="auth-reference-meta">
-              {errorMsg && <div className="auth-reference-banner auth-reference-banner-error">{errorMsg}</div>}
+        <form onSubmit={handleLogin} className="auth-simple-form">
+          <div className="auth-simple-field">
+            <label htmlFor="auth-login-identifier" className="auth-simple-label">Email or Username</label>
+            <input
+              id="auth-login-identifier"
+              type="text"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              required
+              disabled={loading}
+              autoComplete="username"
+              className="auth-simple-input"
+              placeholder="you@example.com or your.username"
+            />
+            {identifier && !identifierIsValid ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Enter a valid email or a username with at least 3 characters.
+              </p>
+            ) : null}
+          </div>
 
-              {!errorMsg && coachNotice.kind !== 'default' && (
-                <div className={`auth-reference-banner ${noticeMeta.panelClass}`}>
-                  <div className="auth-reference-banner-top">
-                    <span className="auth-reference-banner-chip">
-                      <NoticeIcon size={14} />
-                      {noticeMeta.label}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setCoachNotice(getDefaultLoginCoachNotice())}
-                      className="auth-reference-banner-close"
-                      aria-label="Dismiss sign-in notice"
-                    >
-                      <FiX size={14} />
-                    </button>
-                  </div>
-                  {coachNotice.title && <p className="auth-reference-banner-title">{coachNotice.title}</p>}
-                  <p className="auth-reference-banner-body">{coachNotice.message}</p>
-                  {coachNotice.actionHref && coachNotice.actionLabel && (
-                    <a href={coachNotice.actionHref} className="auth-reference-banner-link">
-                      <span>{coachNotice.actionLabel}</span>
-                      <FiArrowRight size={15} />
-                    </a>
-                  )}
-                </div>
-              )}
-
-              {identifierBlurred && identifier.length > 0 && identifier.length < 3 && (
-                <p className="auth-reference-help">Enter a valid email or a username with at least 3 characters.</p>
-              )}
-              {!errorMsg && ((idChecked && idStatus === 'missing') || (identifierBlurred && identifier.length >= 3 && !identifierIsValid) || (idInvalidated && identifierBlurred)) && (
-                <p className="auth-reference-help">This account wasn&apos;t found. You can create one below.</p>
-              )}
-
-              <div className="auth-reference-link-row">
-                <Link to="/forgot-password" className="auth-reference-link auth-reference-link-dark">
-                  Forgot password?
-                </Link>
-                <Link to="/forgot-username" className="auth-reference-link auth-reference-link-dark">
-                  Forgot username?
-                </Link>
-                <button
-                  type="button"
-                  onClick={handleResend}
-                  disabled={loading}
-                  className="auth-reference-link auth-reference-link-dark auth-reference-link-button"
-                >
-                  Resend verification
-                </button>
-                <Link to="/signup" className="auth-reference-link auth-reference-link-dark">
-                  Create account
-                </Link>
-              </div>
+          <div className="auth-simple-field">
+            <label htmlFor="auth-login-password" className="auth-simple-label">Password</label>
+            <div className="auth-simple-input-wrap">
+              <input
+                id="auth-login-password"
+                type={passwordVisible ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                disabled={loading}
+                autoComplete="current-password"
+                className="auth-simple-input auth-simple-input-with-button"
+                placeholder="Enter your password"
+              />
+              <button
+                type="button"
+                onClick={() => setPasswordVisible((prev) => !prev)}
+                className="auth-simple-password-toggle"
+                aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+              >
+                {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+              </button>
             </div>
           </div>
+
+          <button
+            type="submit"
+            disabled={loading || !identifierIsValid || !password}
+            className="auth-simple-submit"
+          >
+            {loading ? 'Signing in...' : 'Sign in'}
+          </button>
+        </form>
+
+        <div className="auth-simple-link-grid">
+          <Link to="/forgot-password" className="auth-simple-link">
+            Forgot password?
+          </Link>
+          <Link to="/forgot-username" className="auth-simple-link">
+            Forgot username?
+          </Link>
+          <button
+            type="button"
+            onClick={handleResend}
+            disabled={loading}
+            className="auth-simple-link auth-simple-link-button"
+          >
+            Resend verification
+          </button>
         </div>
-      </div>
+      </AuthSimpleShell>
     </>
   );
 }

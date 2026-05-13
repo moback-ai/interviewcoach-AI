@@ -17,6 +17,21 @@ function AuthenticatedShell() {
     30
   );
 
+  useEffect(() => {
+    const verifySession = async () => {
+      try {
+        const { apiGet } = await import('../api');
+        await apiGet('/api/me');
+      } catch {
+        // The auth interceptor handles redirecting on invalid sessions.
+      }
+    };
+
+    if (!isOnInterviewPage) {
+      verifySession();
+    }
+  }, [location.pathname, isOnInterviewPage]);
+
   const handleIdleLogout = () => {
     logout();
   };
