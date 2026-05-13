@@ -12,6 +12,7 @@ import { trackEvents } from '../services/mixpanel';
 import PerformanceGraph from '../components/PerformanceGraph';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSession } from '../lib/authClient';
+import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const parseApiJson = async (response, fallbackMessage) => {
@@ -104,8 +105,8 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
-      if ((error.message || '').toLowerCase().includes('token expired')) {
-        navigate('/login', { replace: true });
+      if (isAuthErrorMessage(error.message)) {
+        redirectToExpiredLogin();
         return;
       }
       setError(error.message);
