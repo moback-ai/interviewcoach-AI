@@ -123,6 +123,9 @@ def normalize_username(raw_username: str) -> str:
 
 def ensure_auth_schema():
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ")
     execute("""
@@ -145,6 +148,36 @@ def ensure_auth_schema():
 
 
 _ALLOWED_DIFFICULTY_EXPERIENCE = frozenset({"beginner", "intermediate", "expert"})
+_USER_PUBLIC_FIELDS = (
+    "id",
+    "username",
+    "email",
+    "full_name",
+    "nickname",
+    "avatar_url",
+    "date_of_birth",
+    "plan",
+    "created_at",
+    "email_verified_at",
+)
+_USER_AUTH_FIELDS = (
+    "id",
+    "email",
+    "username",
+    "password_hash",
+    "full_name",
+    "nickname",
+    "avatar_url",
+    "date_of_birth",
+    "plan",
+    "created_at",
+    "email_verified_at",
+)
+
+
+def build_user_columns(fields, alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return ", ".join(f"{prefix}{field}" for field in fields)
 
 
 def normalize_question_difficulty(value) -> str:
@@ -173,6 +206,26 @@ def normalize_difficulty_experience(value) -> str:
     if normalized in {"strong", "expert", "senior", "advanced", "hard"}:
         return "expert"
     return "beginner"
+
+
+def normalize_date_of_birth(value):
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    try:
+        return datetime.strptime(normalized, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("Date of birth must use the YYYY-MM-DD format.") from exc
+
+
+def serialize_date_value(value):
+    if not value:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 QUESTION_ORDER_SQL = """
@@ -243,8 +296,14 @@ def serialize_user(user):
     payload = dict(user)
     payload["id"] = str(payload["id"])
     payload["email_verified"] = bool(payload.get("email_verified_at"))
+    payload["nickname"] = payload.get("nickname") or ""
+    payload["avatar_url"] = payload.get("avatar_url") or ""
+    payload["date_of_birth"] = serialize_date_value(payload.get("date_of_birth"))
     payload.setdefault("user_metadata", {})
     payload["user_metadata"]["full_name"] = payload.get("full_name", "")
+    payload["user_metadata"]["nickname"] = payload["nickname"]
+    payload["user_metadata"]["avatar_url"] = payload["avatar_url"]
+    payload["user_metadata"]["date_of_birth"] = payload["date_of_birth"]
     return payload
 
 
@@ -301,10 +360,10 @@ def get_user_for_auth(identifier: str):
     normalized = (identifier or "").strip().lower()
     return query_one(
         """
-        SELECT id, email, username, password_hash, full_name, plan, created_at, email_verified_at
+        SELECT {columns}
         FROM users
         WHERE lower(email) = %s OR lower(coalesce(username, '')) = %s
-        """,
+        """.format(columns=build_user_columns(_USER_AUTH_FIELDS)),
         (normalized, normalized),
     )
 
@@ -1401,8 +1460,8 @@ def signup():
             """
             INSERT INTO users (username, email, password_hash, full_name)
             VALUES (%s, %s, %s, %s)
-            RETURNING id, username, email, full_name, plan, created_at, email_verified_at
-            """,
+            RETURNING {columns}
+            """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
             (username, email, hash_password(password), full_name)
         )
         verification_payload = issue_email_verification(user, allow_manual_fallback=True)
@@ -1479,9 +1538,9 @@ def resend_verification():
         return jsonify({"error": "Email is required"}), 400
     user = query_one(
         """
-        SELECT id, username, email, full_name, plan, created_at, email_verified_at
+        SELECT {columns}
         FROM users WHERE lower(email) = %s
-        """,
+        """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (email,),
     )
     if not user:
@@ -1504,11 +1563,11 @@ def verify_email():
     token_hash = hash_verification_token(token)
     record = query_one(
         """
-        SELECT evt.user_id, u.email, u.username, u.full_name, u.plan, u.created_at, u.email_verified_at
+        SELECT evt.user_id, {columns}
         FROM email_verification_tokens evt
         JOIN users u ON u.id = evt.user_id
         WHERE evt.token_hash = %s AND evt.consumed_at IS NULL AND evt.expires_at > now()
-        """,
+        """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS, "u")),
         (token_hash,),
     )
     if not record:
@@ -1519,8 +1578,8 @@ def verify_email():
         UPDATE users
         SET email_verified_at = COALESCE(email_verified_at, now())
         WHERE id = %s
-        RETURNING id, username, email, full_name, plan, created_at, email_verified_at
-        """,
+        RETURNING {columns}
+        """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (record['user_id'],),
     )
     token_value = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
@@ -1534,8 +1593,10 @@ def verify_email():
 @app.route('/api/me', methods=['GET'])
 @verify_auth_token
 def get_me():
-    user = query_one("SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id = %s",
-                     (request.user['id'],))
+    user = query_one(
+        "SELECT {columns} FROM users WHERE id = %s".format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
+        (request.user['id'],),
+    )
     if not user:
         return jsonify({"error": "User not found"}), 404
     return jsonify({"user": serialize_user(user)})
@@ -2793,28 +2854,48 @@ def update_me():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
     data = request.get_json() or {}
+    nested_data = data.get('data') or {}
+    missing = object()
     updates = []
     params = []
-    full_name = data.get('full_name') or (data.get('data') or {}).get('full_name')
+    full_name = data['full_name'] if 'full_name' in data else nested_data.get('full_name', missing)
     username = data.get('username')
+    nickname = data['nickname'] if 'nickname' in data else nested_data.get('nickname', missing)
+    avatar_url = data['avatar_url'] if 'avatar_url' in data else nested_data.get('avatar_url', missing)
+    date_of_birth = data['date_of_birth'] if 'date_of_birth' in data else nested_data.get('date_of_birth', missing)
     password = data.get('password')
-    if full_name is not None:
-        updates.append('full_name=%s')
-        params.append(full_name.strip())
-    if username is not None:
-        username = normalize_username(username)
-        updates.append('username=%s')
-        params.append(username)
+    try:
+        if full_name is not missing:
+            updates.append('full_name=%s')
+            params.append(str(full_name).strip())
+        if username is not None:
+            username = normalize_username(username)
+            updates.append('username=%s')
+            params.append(username)
+        if nickname is not missing:
+            updates.append('nickname=%s')
+            params.append(str(nickname).strip())
+        if avatar_url is not missing:
+            updates.append('avatar_url=%s')
+            params.append(str(avatar_url or '').strip())
+        if date_of_birth is not missing:
+            updates.append('date_of_birth=%s')
+            params.append(normalize_date_of_birth(date_of_birth))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     if password:
         updates.append('password_hash=%s')
         params.append(hash_password(password))
     if not updates:
-        user = query_one('SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s', (request.user['id'],))
+        user = query_one(
+            'SELECT {columns} FROM users WHERE id=%s'.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
+            (request.user['id'],),
+        )
         return jsonify({'success': True, 'user': serialize_user(user)})
     params.append(request.user['id'])
     try:
         user = execute(
-            f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING id, username, email, full_name, plan, created_at, email_verified_at",
+            f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING {build_user_columns(_USER_PUBLIC_FIELDS)}",
             tuple(params),
         )
     except Exception as exc:
@@ -3223,7 +3304,7 @@ def refresh_token():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
     user = query_one(
-        'SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s',
+        'SELECT {columns} FROM users WHERE id=%s'.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (request.user['id'],)
     )
     if not user:

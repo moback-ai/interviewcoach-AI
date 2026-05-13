@@ -11,6 +11,15 @@ import { trackEvents } from '../services/mixpanel';
 import { checkEmailAvailability, checkUsernameAvailability } from '../utils/emailAvailability';
 import { buildLoginCoachState } from '../utils/authCoachNotice';
 
+const GoogleMark = () => (
+  <svg viewBox="0 0 24 24" className="auth-simple-provider-icon" aria-hidden="true">
+    <path fill="#EA4335" d="M12 10.2v3.94h5.48c-.23 1.27-.96 2.35-2.04 3.08l3.3 2.56c1.92-1.77 3.03-4.38 3.03-7.48 0-.73-.07-1.44-.2-2.1H12z" />
+    <path fill="#34A853" d="M12 22c2.74 0 5.04-.9 6.72-2.44l-3.3-2.56c-.92.62-2.09.98-3.42.98-2.63 0-4.86-1.77-5.66-4.14H2.93v2.64A10 10 0 0012 22z" />
+    <path fill="#4A90E2" d="M6.34 13.84A5.98 5.98 0 016 12c0-.64.11-1.26.34-1.84V7.52H2.93A10 10 0 002 12c0 1.61.39 3.13 1.08 4.48l3.26-2.64z" />
+    <path fill="#FBBC05" d="M12 6.02c1.49 0 2.82.51 3.87 1.5l2.91-2.91C17.03 2.98 14.73 2 12 2A10 10 0 002.93 7.52l3.41 2.64C7.14 7.79 9.37 6.02 12 6.02z" />
+  </svg>
+);
+
 function Signup() {
   const navigate = useNavigate();
   useTheme();
@@ -26,6 +35,10 @@ function Signup() {
   const [usernameStatus, setUsernameStatus] = useState('idle');
   const [emailStatus, setEmailStatus] = useState('idle');
   const [usernameBlurred, setUsernameBlurred] = useState(false);
+
+  const handleContinueWithGoogle = () => {
+    setErrorMsg('Google signup is not configured yet. Please use email and password for now.');
+  };
 
   const isRealEmail = (value) => {
     if (!isValidEmail(value)) {
@@ -166,6 +179,18 @@ function Signup() {
             <p>{errorMsg}</p>
           </div>
         ) : null}
+
+        <button
+          type="button"
+          onClick={handleContinueWithGoogle}
+          disabled={loading}
+          className="auth-simple-provider"
+        >
+          <GoogleMark />
+          <span>Continue with Google</span>
+        </button>
+
+        <div className="auth-simple-divider">or</div>
 
         <form onSubmit={handleSignup} className="auth-simple-form">
           <div className="auth-simple-field">

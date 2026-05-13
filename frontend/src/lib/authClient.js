@@ -25,11 +25,22 @@ export const isTokenExpired = (token, clockSkewSeconds = 30) => {
 
 const normalizeUser = (user) => {
   if (!user) return null;
+  const full_name = user.full_name || user.user_metadata?.full_name || '';
+  const nickname = user.nickname || user.user_metadata?.nickname || '';
+  const avatar_url = user.avatar_url || user.user_metadata?.avatar_url || '';
+  const date_of_birth = user.date_of_birth || user.user_metadata?.date_of_birth || '';
   return {
     ...user,
+    full_name,
+    nickname,
+    avatar_url,
+    date_of_birth,
     user_metadata: {
-      full_name: user.full_name || user.user_metadata?.full_name || '',
-      avatar_url: user.avatar_url || user.user_metadata?.avatar_url || '',
+      ...user.user_metadata,
+      full_name,
+      nickname,
+      avatar_url,
+      date_of_birth,
     },
   };
 };

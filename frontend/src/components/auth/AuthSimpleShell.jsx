@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import AnimatedWavesLayer from '../common/AnimatedWavesLayer';
 
 export default function AuthSimpleShell({
   eyebrow,
@@ -10,8 +11,6 @@ export default function AuthSimpleShell({
 }) {
   const shellRef = useRef(null);
   const frameRef = useRef(null);
-  const vantaRef = useRef(null);
-  const vantaInstanceRef = useRef(null);
   const reducedMotionRef = useRef(false);
   const motionFrameRef = useRef(null);
 
@@ -21,60 +20,6 @@ export default function AuthSimpleShell({
     return () => {
       if (motionFrameRef.current) {
         window.cancelAnimationFrame(motionFrameRef.current);
-      }
-
-      if (vantaInstanceRef.current) {
-        vantaInstanceRef.current.destroy();
-        vantaInstanceRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const initVanta = async () => {
-      if (reducedMotionRef.current || !vantaRef.current || vantaInstanceRef.current) {
-        return;
-      }
-
-      const THREE = await import('three');
-      window.THREE = THREE;
-      const { default: WAVES } = await import('vanta/dist/vanta.waves.min');
-
-      if (cancelled || !vantaRef.current) {
-        return;
-      }
-
-      vantaInstanceRef.current = WAVES({
-        el: vantaRef.current,
-        THREE,
-        backgroundColor: 0x177fc9,
-        backgroundAlpha: 1,
-        mouseControls: true,
-        touchControls: true,
-        gyroControls: false,
-        minHeight: 200,
-        minWidth: 200,
-        scale: 1,
-        scaleMobile: 1,
-        color: 0x1a8fe2,
-        shininess: 38,
-        waveHeight: window.innerWidth < 768 ? 12 : 18,
-        waveSpeed: 0.85,
-        zoom: window.innerWidth < 768 ? 0.9 : 1.05,
-      });
-    };
-
-    initVanta().catch((error) => {
-      console.error('Unable to initialize auth background effect:', error);
-    });
-
-    return () => {
-      cancelled = true;
-      if (vantaInstanceRef.current) {
-        vantaInstanceRef.current.destroy();
-        vantaInstanceRef.current = null;
       }
     };
   }, []);
@@ -137,7 +82,7 @@ export default function AuthSimpleShell({
     >
       <div className="auth-simple-backdrop" aria-hidden="true">
         <div className="auth-simple-backdrop-image" />
-        <div ref={vantaRef} className="auth-simple-backdrop-vanta" />
+        <AnimatedWavesLayer className="auth-simple-backdrop-vanta" preset="auth" />
         <div className="auth-simple-backdrop-grid" />
         <div className="auth-simple-backdrop-glow auth-simple-backdrop-glow-a" />
         <div className="auth-simple-backdrop-glow auth-simple-backdrop-glow-b" />

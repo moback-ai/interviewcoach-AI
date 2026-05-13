@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { useLocation } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import Hero from '../components/landing/Hero';
 import FeatureHighlights from '../components/landing/FeatureHighlights';
 import HowItWorks  from '../components/landing/HowItWorks';
@@ -54,7 +55,7 @@ function Landing() {
   }, [location.hash]);
 
   return (
-    <div className="relative overflow-hidden">
+    <PageWavesShell preset="landing" contentClassName="relative overflow-hidden">
       <div className="ambient-orb h-72 w-72 left-[-4rem] top-20 opacity-80" />
       <div className="ambient-orb h-80 w-80 right-[-6rem] top-[28rem] opacity-70" />
       <Navbar />
@@ -115,7 +116,7 @@ function Landing() {
           <CallToAction />
         </motion.div>
       </motion.main>
-    </div>
+    </PageWavesShell>
   );
 }
 

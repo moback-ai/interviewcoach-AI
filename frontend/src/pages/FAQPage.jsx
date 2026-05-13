@@ -16,6 +16,7 @@ import {
   MessageSquare
 } from 'lucide-react';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import { useAuth } from '../contexts/AuthContext';
 
 const SupportBot = lazy(() => import('../components/SupportBot'));
@@ -234,7 +235,7 @@ function FAQPage() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen bg-[var(--color-bg)]">
+      <PageWavesShell>
         <div className="max-w-6xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
           {/* Header */}
           <motion.div
@@ -455,7 +456,7 @@ function FAQPage() {
             </div>
           </motion.div>
         </div>
-      </div>
+      </PageWavesShell>
       {isAuthenticated && (
         <Suspense fallback={null}>
           <SupportBot />
