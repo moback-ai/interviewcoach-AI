@@ -1,0 +1,45 @@
+name: Auto Deploy Main
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch deploy workflow after main merge
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger the existing deployment workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = context.payload.after;
+            const commitMessage = context.payload.head_commit?.message || 'Merged into main';
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'deploy.yml',
+              ref: 'main',
+              inputs: {
+                git_ref: sha,
+                branch_details: `Automatic deployment after merge to main for ${sha.slice(0, 7)}`,
+                code_review_notes: `Triggered automatically after merge to main. Head commit: ${commitMessage}`,
+                version_audit: 'true',
+                deploy_target: 'all',
+              },
+            });
+
+            await core.summary
+              .addHeading('Auto Deploy Dispatch')
+              .addRaw(`Triggered \`deploy.yml\` for commit \`${sha}\`.`)
+              .addBreak()
+              .addRaw(`Head commit: ${commitMessage}`)
+              .write();
