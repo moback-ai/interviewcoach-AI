@@ -1,22 +1,36 @@
-# Branch Governance Policy
+# Deployment and Branch Governance Policy
 
 ## Admin approvers
 
 - `@govardhanreddy66`
 - `@KFKishore23`
 
-## Merge rules
+## Pull request rules
 
 - All changes targeting `main` must go through a pull request.
-- Non-admin pull requests targeting `main` must be approved by Govardhan or Kishore before merge.
-- Admin-authored feature branches do not require a second admin approval, but they should still use a pull request into `main`.
-- The team must be notified before any pull request is merged.
-- Nobody should merge directly into `main` without following this flow.
+- Exactly one admin approval from Govardhan or Kishore is required before merge.
+- Direct pushes to `main` are not allowed.
+- Routine Teams notifications are not required for every merge or deployment.
 
 ## Deployment rules
 
-- A merge into `main` should trigger deployment automatically.
-- The deployment workflow continues to respect any protected-environment approvals configured in GitHub.
+- A merge into `main` deploys only after the merged pull request has at least one admin approval.
+- The deployment workflow deploys the latest approved commit on `main`.
+- The deployment workflow does not require a second protected-environment approval on top of the approved pull request.
+- If deployment fails, the app rolls back to the last stable release.
+- The last stable release is updated only after a full successful deployment.
+
+## Logs
+
+- Live deployment logs are published over HTTP at `/logs/live.html`.
+- Raw and archived log files are exposed at `/logs/files/`.
+- Recent logs stay available for debugging.
+
+## Log retention
+
+- Deployment logs are zipped before cleanup.
+- Log maintenance runs monthly.
+- If total log storage exceeds 2 GB, older logs are archived and cleaned while recent logs are retained.
 
 ## Branch cleanup
 
@@ -27,11 +41,8 @@
 
 ## Required GitHub settings
 
-Apply these repository settings in GitHub so the policy is enforced on `main`:
-
-1. Require a pull request before merging.
-2. Block direct pushes to `main`.
+1. Require a pull request before merging into `main`.
+2. Require 1 approving review on `main`.
 3. Require the `Enforce Policy` status check from the `PR Governance` workflow.
-4. Keep auto-delete branch enabled after merge if the repository setting is available.
-
-The repo files in this folder support those settings, but GitHub branch protection still has to be enabled in the repository settings UI.
+4. Block direct pushes to `main`.
+5. Keep auto-delete branch enabled after merge if available.

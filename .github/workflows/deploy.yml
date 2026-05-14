@@ -49,7 +49,7 @@ jobs:
       frontend: ${{ steps.targets.outputs.frontend }}
       backend: ${{ steps.targets.outputs.backend }}
       database: ${{ steps.targets.outputs.database }}
-      selected_ref: ${{ github.event.inputs.git_ref }}
+      requested_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
       version_audit: ${{ github.event.inputs.version_audit }}
 
@@ -62,6 +62,7 @@ jobs:
             echo "- Requested by: \`${{ github.actor }}\`"
             echo "- Triggering actor: \`${{ github.triggering_actor || github.actor }}\`"
             echo "- Deployment will continue only after protected environment approval."
+            echo "- The deployment will resolve the newest commit on the requested ref after approval, so the run always uses the latest approved code at start time."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 1. Authorize and Prepare - Checkout Selected Branch
@@ -73,7 +74,7 @@ jobs:
       - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
         run: |
           {
-            echo "- Selected ref: \`${{ github.event.inputs.git_ref }}\`"
+            echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
             echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
             echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
@@ -138,12 +139,12 @@ jobs:
   build_and_audit:
     name: 2. Build and Audit
     runs-on: ubuntu-latest
-    needs: authorize_and_prepare
+    needs: [authorize_and_prepare, deployment_approval, resolve_release]
     steps:
       - name: 2. Build and Audit - Checkout Selected Branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
 
       - name: 2. Build and Audit - Validate Tooling
         run: |
@@ -267,7 +268,7 @@ jobs:
   deployment_approval:
     name: 3. Approval
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, build_and_audit]
+    needs: authorize_and_prepare
     environment:
       name: production
     steps:
@@ -279,49 +280,121 @@ jobs:
             echo "- Requested by: \`${{ github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  deploy_and_verify:
-    name: 4. Deploy and Verify
+  resolve_release:
+    name: 4. Resolve Approved Release
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, build_and_audit, deployment_approval]
+    needs: [authorize_and_prepare, deployment_approval]
+    outputs:
+      release_sha: ${{ steps.resolve.outputs.release_sha }}
+      release_ref: ${{ steps.resolve.outputs.release_ref }}
+    steps:
+      - name: 4. Resolve Approved Release - Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 4. Resolve Approved Release - Select Latest Approved Commit
+        id: resolve
+        run: |
+          REQUESTED_REF="${{ needs.authorize_and_prepare.outputs.requested_ref }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+
+          if [ -n "$REQUESTED_REF" ]; then
+            git fetch --no-tags origin "$REQUESTED_REF" --depth=1 || true
+          fi
+          git fetch --no-tags origin "$DEFAULT_BRANCH" --depth=1 || true
+
+          if git rev-parse --verify --quiet "origin/$REQUESTED_REF" >/dev/null; then
+            RELEASE_REF="origin/$REQUESTED_REF"
+            RELEASE_SHA="$(git rev-parse "origin/$REQUESTED_REF")"
+          else
+            RELEASE_REF="$REQUESTED_REF"
+            RELEASE_SHA="$(git rev-parse "$REQUESTED_REF")"
+          fi
+
+          echo "release_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 4. Resolve Approved Release"
+            echo "- Requested ref: \`$REQUESTED_REF\`"
+            echo "- Resolved ref: \`$RELEASE_REF\`"
+            echo "- Resolved commit: \`$RELEASE_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy_and_verify:
+    name: 5. Deploy and Verify
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, build_and_audit, deployment_approval, resolve_release]
     concurrency:
       group: deploy-feature-test-code-db-production
       cancel-in-progress: false
 
     steps:
-      - name: 4. Deploy and Verify - Checkout Selected Branch
+      - name: 5. Deploy and Verify - Checkout Selected Branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.authorize_and_prepare.outputs.selected_ref }}
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
 
-      - name: 4. Deploy and Verify - Download Frontend Build Artifact
+      - name: 5. Deploy and Verify - Download Frontend Build Artifact
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
 
-      - name: 4. Deploy and Verify - Record Approved Deployment
+      - name: 5. Deploy and Verify - Record Approved Deployment
         run: |
           echo "Protected environment approval completed. Starting deployment."
 
-      - name: 4. Deploy and Verify - Setup SSH
+      - name: 5. Deploy and Verify - Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
           {
-            echo "## 4. Deploy and Verify"
-            echo "- Selected ref: \`${{ needs.authorize_and_prepare.outputs.selected_ref }}\`"
+            echo "## 5. Deploy and Verify"
+            echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
+            echo "- Selected release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
             echo "- Frontend host: \`${{ secrets.FRONTEND_HOST }}\`"
             echo "- Backend host: \`${{ secrets.BACKEND_HOST }}\`"
             echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 4. Deploy and Verify - Define SSH Options
+      - name: 5. Deploy and Verify - Define SSH Options
         run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
-      - name: 4. Deploy and Verify - Update Node.js and npm on Target Hosts
+      - name: 5. Deploy and Verify - Prepare Deployment Log Files
+        env:
+          FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
+          FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
+        run: |
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#http://}"
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#https://}"
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN%%/*}"
+
+          if [ -n "$FRONTEND_DOMAIN" ]; then
+            FRONTEND_ORIGIN="https://$FRONTEND_DOMAIN"
+          else
+            FRONTEND_ORIGIN="http://$FRONTEND_HOST"
+          fi
+
+          DEPLOY_LOG_FILE="/apps/logs/live/deploy-${{ github.run_id }}.log"
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "\
+            mkdir -p /apps/logs/live /apps/logs/archive /apps/logs/tmp /apps/deployments/runs /apps/deployments/stable /apps/database/backups && \
+            touch '$DEPLOY_LOG_FILE' && \
+            ln -sfn '$DEPLOY_LOG_FILE' /apps/logs/live/deploy-current.log"
+
+          echo "DEPLOY_LOG_FILE=$DEPLOY_LOG_FILE" >> "$GITHUB_ENV"
+          echo "FRONTEND_ORIGIN=$FRONTEND_ORIGIN" >> "$GITHUB_ENV"
+
+          {
+            echo "- Live logs URL: \`$FRONTEND_ORIGIN/admin/logs?view=live&source=deployment-live\`"
+            echo "- Log folder URL: \`$FRONTEND_ORIGIN/admin/logs?view=files\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 5. Deploy and Verify - Update Node.js and npm on Target Hosts
         run: |
           update_node_host() {
             host="$1"
@@ -362,7 +435,7 @@ jobs:
             update_node_host "${{ secrets.FRONTEND_HOST }}" "Frontend Host"
           fi
 
-      - name: 4. Deploy and Verify - Audit Target Versions
+      - name: 5. Deploy and Verify - Audit Target Versions
         if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           {
@@ -417,27 +490,39 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 4. Deploy and Verify - Sync Backend Source
+      - name: 5. Deploy and Verify - Sync Backend Source
         if: needs.authorize_and_prepare.outputs.backend == 'true'
         run: |
-          BACKEND_RELEASE="/apps/backend/releases/${{ github.sha }}"
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
-          rsync -avz --delete \
-            -e "ssh $SSH_OPTS" \
-            backend/ \
-            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Sync backend source ==="
+            BACKEND_RELEASE="/apps/backend/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              backend/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
+          } 2>&1 | tee >(log_to_remote)
 
-      - name: 4. Deploy and Verify - Configure Backend and Restart
+      - name: 5. Deploy and Verify - Configure Backend and Restart
         if: needs.authorize_and_prepare.outputs.backend == 'true'
         run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Configure backend and restart ==="
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
-          RELEASE_ID="${{ github.sha }}"
+          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
           APP_ROOT="/apps/backend"
           RELEASES_DIR="$APP_ROOT/releases"
           VENV_DIR="$APP_ROOT/venv"
+          STABLE_LINK="$APP_ROOT/stable"
           NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
-          PREVIOUS_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
+          STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || readlink -f "$APP_ROOT/current" || true)"
           mkdir -p "$RELEASES_DIR"
           if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
           . "$VENV_DIR/bin/activate"
@@ -452,9 +537,9 @@ jobs:
           if ! curl -f http://127.0.0.1:5000/api/health; then
             pm2 status
             pm2 logs backend --lines 200 --nostream || true
-            if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
-              echo "Rolling back backend to $PREVIOUS_RELEASE"
-              ln -sfn "$PREVIOUS_RELEASE" "$APP_ROOT/current"
+            if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+              echo "Rolling back backend to stable release $STABLE_RELEASE"
+              ln -sfn "$STABLE_RELEASE" "$APP_ROOT/current"
               pm2 delete backend >/dev/null 2>&1 || true
               AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
                 pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
@@ -465,23 +550,35 @@ jobs:
             exit 1
           fi
           EOFSSH
+          } 2>&1 | tee >(log_to_remote)
 
-      - name: 4. Deploy and Verify - Sync Database Source
+      - name: 5. Deploy and Verify - Sync Database Source
         if: needs.authorize_and_prepare.outputs.database == 'true'
         run: |
-          DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
-          rsync -avz --delete \
-            -e "ssh $SSH_OPTS" \
-            database/ \
-            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Sync database source ==="
+            DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              database/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
+          } 2>&1 | tee >(log_to_remote)
 
-      - name: 4. Deploy and Verify - Apply Database Migrations
+      - name: 5. Deploy and Verify - Apply Database Migrations
         if: needs.authorize_and_prepare.outputs.database == 'true'
         run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Apply database migrations ==="
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
-          DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
+          DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
           export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
           if ! command -v psql >/dev/null 2>&1; then
             sudo apt-get update
@@ -516,7 +613,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y "postgresql-client-$SERVER_MAJOR"
           fi
-          BACKUP_FILE="/tmp/interviewcoach-db-${{ github.sha }}.dump"
+          BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
           "$PG_BINDIR/pg_dump" \
             --host="${{ secrets.DB_HOST }}" \
             --port="${{ secrets.DB_PORT }}" \
@@ -588,27 +685,39 @@ jobs:
           else
             echo "No migrations directory found. Skipping database migration step."
           fi
-          rm -f "$BACKUP_FILE"
           EOFSSH
+          } 2>&1 | tee >(log_to_remote)
 
-      - name: 4. Deploy and Verify - Upload Frontend Build
+      - name: 5. Deploy and Verify - Upload Frontend Build
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
-          rsync -avz --delete \
-            -e "ssh $SSH_OPTS" \
-            frontend/dist/ \
-            ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Upload frontend build ==="
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              frontend/dist/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
+          } 2>&1 | tee >(log_to_remote)
 
-      - name: 4. Deploy and Verify - Publish Frontend
+      - name: 5. Deploy and Verify - Publish Frontend
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Publish frontend ==="
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
-          RELEASE_ID="${{ github.sha }}"
+          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
           FRONTEND_ROOT="/var/www/interview"
           RELEASES_DIR="$FRONTEND_ROOT/releases"
           CURRENT_LINK="$FRONTEND_ROOT/current"
-          PREVIOUS_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
+          STABLE_LINK="$FRONTEND_ROOT/stable"
+          STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || readlink -f "$CURRENT_LINK" || true)"
           NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
           BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
@@ -859,33 +968,26 @@ jobs:
             fi
           }
           if ! frontend_check || ! curl -fsS --max-time 10 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
-            if [ -n "$PREVIOUS_RELEASE" ] && [ -d "$PREVIOUS_RELEASE" ]; then
-              echo "Rolling back frontend to $PREVIOUS_RELEASE"
-              sudo ln -sfn "$PREVIOUS_RELEASE" "$CURRENT_LINK"
+            if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+              echo "Rolling back frontend to stable release $STABLE_RELEASE"
+              sudo ln -sfn "$STABLE_RELEASE" "$CURRENT_LINK"
               sudo nginx -t
               sudo systemctl reload nginx
             fi
             exit 1
           fi
           EOFSSH
+          } 2>&1 | tee >(log_to_remote)
 
-      - name: 4. Deploy and Verify - Report Deployment Status
+      - name: 5. Deploy and Verify - Report Deployment Status
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
         run: |
-          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#http://}"
-          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#https://}"
-          FRONTEND_DOMAIN="${FRONTEND_DOMAIN%%/*}"
-          if [ -n "$FRONTEND_DOMAIN" ]; then
-            FRONTEND_ORIGIN="https://$FRONTEND_DOMAIN"
-          else
-            FRONTEND_ORIGIN="http://$FRONTEND_HOST"
-          fi
-
           {
             echo "### Deployment Status"
-            echo "- Selected ref: \`${{ needs.authorize_and_prepare.outputs.selected_ref }}\`"
+            echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
+            echo "- Selected release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
             echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -902,3 +1004,152 @@ jobs:
           if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
             echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: 5. Deploy and Verify - Promote Stable Release
+        if: success()
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Promote stable release ==="
+
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+                set -e
+                APP_ROOT="/apps/backend"
+                CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
+                if [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                  ln -sfn "$CURRENT_RELEASE" "$APP_ROOT/stable"
+                fi
+              '
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+                set -e
+                FRONTEND_ROOT="/var/www/interview"
+                CURRENT_RELEASE="$(readlink -f "$FRONTEND_ROOT/current" || true)"
+                if [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                  sudo ln -sfn "$CURRENT_RELEASE" "$FRONTEND_ROOT/stable"
+                fi
+              '
+            fi
+
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+            set -e
+            mkdir -p /apps/deployments/stable
+            cat > /apps/deployments/stable/latest.json <<EOFJSON
+            {
+              "release_sha": "${{ needs.resolve_release.outputs.release_sha }}",
+              "requested_ref": "${{ needs.authorize_and_prepare.outputs.requested_ref }}",
+              "deploy_target": "${{ needs.authorize_and_prepare.outputs.deploy_target }}",
+              "frontend": "${{ needs.authorize_and_prepare.outputs.frontend }}",
+              "backend": "${{ needs.authorize_and_prepare.outputs.backend }}",
+              "database": "${{ needs.authorize_and_prepare.outputs.database }}",
+              "deployed_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }
+            EOFJSON
+            EOFSSH
+
+            if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+                "rm -f '/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump'"
+            fi
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Roll Back To Last Stable Release
+        if: failure()
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Roll back to last stable release ==="
+
+            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+                set -e
+                FRONTEND_ROOT="/var/www/interview"
+                STABLE_RELEASE="$(readlink -f "$FRONTEND_ROOT/stable" || true)"
+                if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+                  echo "Restoring frontend stable release $STABLE_RELEASE"
+                  sudo ln -sfn "$STABLE_RELEASE" "$FRONTEND_ROOT/current"
+                  sudo nginx -t
+                  sudo systemctl reload nginx
+                fi
+              '
+            fi
+
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+            set -e
+            APP_ROOT="/apps/backend"
+            CURRENT_LINK="$APP_ROOT/current"
+            STABLE_LINK="$APP_ROOT/stable"
+            VENV_DIR="$APP_ROOT/venv"
+            BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
+
+            find_pg_bindir() {
+              export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+              SERVER_MAJOR="$(
+                psql \
+                  --host="${{ secrets.DB_HOST }}" \
+                  --port="${{ secrets.DB_PORT }}" \
+                  --username="${{ secrets.DB_USER }}" \
+                  --dbname="${{ secrets.DB_NAME }}" \
+                  --tuples-only \
+                  --no-align \
+                  --command="SHOW server_version;" | cut -d. -f1 | tr -d "[:space:]"
+              )"
+              echo "/usr/lib/postgresql/$SERVER_MAJOR/bin"
+            }
+
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ]; then
+              STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || true)"
+              if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+                echo "Restoring backend stable release $STABLE_RELEASE"
+                ln -sfn "$STABLE_RELEASE" "$CURRENT_LINK"
+              fi
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ] && [ -f "$BACKUP_FILE" ]; then
+              PG_BINDIR="$(find_pg_bindir)"
+              pm2 delete backend >/dev/null 2>&1 || true
+              "$PG_BINDIR/pg_restore" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --clean \
+                --if-exists \
+                --no-owner \
+                --no-privileges \
+                "$BACKUP_FILE"
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ] || [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
+              TARGET_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
+              if [ -n "$TARGET_RELEASE" ] && [ -d "$TARGET_RELEASE" ]; then
+                pm2 delete backend >/dev/null 2>&1 || true
+                AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+                  pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+                pm2 save
+                sleep 5
+                curl -f http://127.0.0.1:5000/api/health
+              fi
+            fi
+            EOFSSH
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Maintain Log Archives
+        if: always()
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Maintain log archives ==="
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+              "LOG_ROOT=/apps/logs FORCE_ARCHIVE=0 KEEP_DEPLOY_LOGS=8 KEEP_PM2_LINES=5000 bash -s" \
+              < scripts/log-maintenance.sh
+          } 2>&1 | tee >(log_to_remote)
