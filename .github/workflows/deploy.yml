@@ -430,7 +430,7 @@ jobs:
       - name: 4. Deploy and Verify - Configure Backend and Restart
         if: needs.authorize_and_prepare.outputs.backend == 'true'
         run: |
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<-'EOFSSH'
           set -e
           RELEASE_ID="${{ github.sha }}"
           APP_ROOT="/apps/backend"
@@ -464,7 +464,7 @@ jobs:
             fi
             exit 1
           fi
-          EOFSSH
+	EOFSSH
 
       - name: 4. Deploy and Verify - Sync Database Source
         if: needs.authorize_and_prepare.outputs.database == 'true'
@@ -479,7 +479,7 @@ jobs:
       - name: 4. Deploy and Verify - Apply Database Migrations
         if: needs.authorize_and_prepare.outputs.database == 'true'
         run: |
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<-'EOFSSH'
           set -e
           DATABASE_RELEASE="/apps/database/releases/${{ github.sha }}"
           export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
@@ -589,7 +589,7 @@ jobs:
             echo "No migrations directory found. Skipping database migration step."
           fi
           rm -f "$BACKUP_FILE"
-          EOFSSH
+	EOFSSH
 
       - name: 4. Deploy and Verify - Upload Frontend Build
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
@@ -602,7 +602,7 @@ jobs:
       - name: 4. Deploy and Verify - Publish Frontend
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<-'EOFSSH'
           set -e
           RELEASE_ID="${{ github.sha }}"
           FRONTEND_ROOT="/var/www/interview"
@@ -639,9 +639,9 @@ jobs:
             www.*) ;;
             *) SERVER_NAMES="$APP_DOMAIN www.$APP_DOMAIN" ;;
           esac
-          cat > "$BACKEND_TUNNEL_KEY" <<'KEYEOF'
+          cat > "$BACKEND_TUNNEL_KEY" <<-'KEYEOF'
           ${{ secrets.EC2_SSH_KEY }}
-          KEYEOF
+	KEYEOF
           chmod 600 "$BACKEND_TUNNEL_KEY"
           EXISTING_TUNNEL_PID="$(ss -ltnp 2>/dev/null | awk '/127.0.0.1:5001/ && /ssh/ { if (match($0, /pid=([0-9]+)/, pid)) print pid[1] }' | head -n 1)"
           if [ -n "$EXISTING_TUNNEL_PID" ]; then
@@ -867,7 +867,7 @@ jobs:
             fi
             exit 1
           fi
-          EOFSSH
+	EOFSSH
 
       - name: 4. Deploy and Verify - Report Deployment Status
         env:
