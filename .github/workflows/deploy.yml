@@ -31,6 +31,15 @@ on:
         required: false
         default: ""
         type: string
+      environment:
+        description: Deployment environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
       version_audit:
         description: Check version upgrades before deploy (advisory only)
         required: true
@@ -46,6 +55,11 @@ on:
           - frontend
           - backend
           - database
+      approval_confirmation:
+        description: Type APPROVED to confirm manual deployment of only the selected ref
+        required: true
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -61,6 +75,7 @@ jobs:
       requested_ref: ${{ github.event.inputs.git_ref }}
       resolved_sha: ${{ steps.resolve.outputs.sha }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
+      environment: ${{ github.event.inputs.environment }}
       version_audit: ${{ github.event.inputs.version_audit }}
       approved_by: ${{ steps.approval.outputs.approved_by }}
     steps:
@@ -77,6 +92,12 @@ jobs:
 
           actor="${{ github.actor }}"
           approved_by="${{ github.event.inputs.approved_by }}"
+          confirmation="${{ github.event.inputs.approval_confirmation }}"
+
+          if [ "$confirmation" != "APPROVED" ]; then
+            echo "approval_confirmation must be exactly APPROVED."
+            exit 1
+          fi
 
           case "$approved_by" in
             ""|govardhanreddy66|KFKishore23) ;;
@@ -152,6 +173,7 @@ jobs:
             echo "- Approved by: \`${{ steps.approval.outputs.approved_by }}\`"
             echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
             echo "- Resolved commit: \`${{ steps.resolve.outputs.sha }}\`"
+            echo "- Environment: \`${{ github.event.inputs.environment }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
             echo "- Frontend selected: \`${{ steps.targets.outputs.frontend }}\`"
             echo "- Backend selected: \`${{ steps.targets.outputs.backend }}\`"
@@ -222,8 +244,10 @@ jobs:
     name: 3. Deploy and Verify
     runs-on: ubuntu-latest
     needs: [authorize_and_prepare, build_and_audit]
+    environment:
+      name: ${{ needs.authorize_and_prepare.outputs.environment }}
     concurrency:
-      group: deploy-production
+      group: deploy-${{ needs.authorize_and_prepare.outputs.environment }}
       cancel-in-progress: false
     steps:
       - name: Checkout release commit
@@ -321,6 +345,7 @@ jobs:
             echo "Approved by: ${{ needs.authorize_and_prepare.outputs.approved_by }}"
             echo "Requested ref: ${{ needs.authorize_and_prepare.outputs.requested_ref }}"
             echo "Resolved commit: ${{ needs.authorize_and_prepare.outputs.resolved_sha }}"
+            echo "Environment: ${{ needs.authorize_and_prepare.outputs.environment }}"
             echo "Deploy target: ${{ needs.authorize_and_prepare.outputs.deploy_target }}"
             echo
           } > "$runner_log"
@@ -332,6 +357,7 @@ jobs:
             echo "- Approved by: \`${{ needs.authorize_and_prepare.outputs.approved_by }}\`"
             echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
             echo "- Selected release SHA: \`${{ needs.authorize_and_prepare.outputs.resolved_sha }}\`"
+            echo "- Environment: \`${{ needs.authorize_and_prepare.outputs.environment }}\`"
             echo "- Live logs URL: \`$origin/logs/live.html\`"
             echo "- Log folder URL: \`$origin/logs/files/\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -977,6 +1003,7 @@ jobs:
             echo "- Approved by: \`${{ needs.authorize_and_prepare.outputs.approved_by }}\`"
             echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
             echo "- Selected release SHA: \`${{ needs.authorize_and_prepare.outputs.resolved_sha }}\`"
+            echo "- Environment: \`${{ needs.authorize_and_prepare.outputs.environment }}\`"
             echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
             echo "- Live logs URL: \`${LOG_LIVE_URL}\`"
             echo "- Log folder URL: \`${LOG_FOLDER_URL}\`"
@@ -1023,7 +1050,7 @@ jobs:
           set -euo pipefail
           remote_log="${{ env.LOG_ROOT }}/live/deploy-${{ github.run_id }}-${{ needs.authorize_and_prepare.outputs.resolved_sha }}.log"
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} \
-            "RELEASE_ID='${{ needs.authorize_and_prepare.outputs.resolved_sha }}' LOG_ROOT='${{ env.LOG_ROOT }}' DEPLOY_TARGET='${{ needs.authorize_and_prepare.outputs.deploy_target }}' APPROVED_BY='${{ needs.authorize_and_prepare.outputs.approved_by }}' REMOTE_DEPLOY_LOG='$remote_log' bash -s" <<'EOFSSH'
+            "RELEASE_ID='${{ needs.authorize_and_prepare.outputs.resolved_sha }}' LOG_ROOT='${{ env.LOG_ROOT }}' DEPLOY_TARGET='${{ needs.authorize_and_prepare.outputs.deploy_target }}' DEPLOY_ENVIRONMENT='${{ needs.authorize_and_prepare.outputs.environment }}' APPROVED_BY='${{ needs.authorize_and_prepare.outputs.approved_by }}' REMOTE_DEPLOY_LOG='$remote_log' bash -s" <<'EOFSSH'
           set -euo pipefail
           FRONTEND_ROOT="/var/www/interview"
           CURRENT_TARGET="$(readlink -f "$FRONTEND_ROOT/current" || true)"
@@ -1036,6 +1063,7 @@ jobs:
           {
             "release_sha": "$RELEASE_ID",
             "approved_by": "$APPROVED_BY",
+            "environment": "$DEPLOY_ENVIRONMENT",
             "deploy_target": "$DEPLOY_TARGET",
             "recorded_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           }
@@ -1049,6 +1077,7 @@ jobs:
           {
             echo "## 4. Mark Latest Stable"
             echo "- Stable release SHA: \`${{ needs.authorize_and_prepare.outputs.resolved_sha }}\`"
+            echo "- Environment: \`${{ needs.authorize_and_prepare.outputs.environment }}\`"
             echo "- Approved by: \`${{ needs.authorize_and_prepare.outputs.approved_by }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
