@@ -40,6 +40,11 @@ on:
           - frontend
           - backend
           - database
+      approval_confirmation:
+        description: Type APPROVED to confirm manual deployment of only the selected ref
+        required: true
+        default: ""
+        type: string
 
 jobs:
   authorize_and_prepare:
@@ -69,6 +74,21 @@ jobs:
         with:
           ref: ${{ github.event.inputs.git_ref }}
           fetch-depth: 20
+
+      - name: 1. Authorize and Prepare - Require Explicit Manual Approval Confirmation
+        run: |
+          if [ "${{ github.event.inputs.approval_confirmation }}" != "APPROVED" ]; then
+            echo "approval_confirmation must be exactly APPROVED."
+            exit 1
+          fi
+
+      - name: 1. Authorize and Prepare - Validate Selected Ref Exists
+        run: |
+          if ! git rev-parse --verify --quiet "origin/${{ github.event.inputs.git_ref }}" >/dev/null && \
+             ! git rev-parse --verify --quiet "${{ github.event.inputs.git_ref }}" >/dev/null; then
+            echo "Selected ref '${{ github.event.inputs.git_ref }}' was not found."
+            exit 1
+          fi
 
       - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
         run: |
