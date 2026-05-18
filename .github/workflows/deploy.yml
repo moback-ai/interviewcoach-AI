@@ -30,6 +30,15 @@ on:
         required: true
         default: true
         type: boolean
+      environment:
+        description: Deployment environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - uat
+          - prod
       deploy_target:
         description: Which part should be deployed?
         required: true
@@ -56,6 +65,7 @@ jobs:
       database: ${{ steps.targets.outputs.database }}
       selected_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
+      environment: ${{ github.event.inputs.environment }}
       version_audit: ${{ github.event.inputs.version_audit }}
 
     steps:
@@ -94,6 +104,7 @@ jobs:
         run: |
           {
             echo "- Selected ref: \`${{ github.event.inputs.git_ref }}\`"
+            echo "- Environment: \`${{ github.event.inputs.environment }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
             echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
             echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
@@ -289,13 +300,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [authorize_and_prepare, build_and_audit]
     environment:
-      name: production
+      name: ${{ needs.authorize_and_prepare.outputs.environment }}
     steps:
       - name: 3. Approval - Record Protected Approval
         run: |
           {
             echo "## 3. Approval"
-            echo "- Deployment request approved through the protected \`production\` environment."
+            echo "- Deployment request approved through the protected \`${{ needs.authorize_and_prepare.outputs.environment }}\` environment."
             echo "- Requested by: \`${{ github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -304,7 +315,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [authorize_and_prepare, build_and_audit, deployment_approval]
     concurrency:
-      group: deploy-feature-test-code-db-production
+      group: deploy-${{ needs.authorize_and_prepare.outputs.environment }}
       cancel-in-progress: false
 
     steps:
