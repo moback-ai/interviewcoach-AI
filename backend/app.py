@@ -24,7 +24,7 @@ except Exception as mediapipe_import_error:
     mp = None
     print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
 
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
@@ -84,6 +84,12 @@ app.config['MAX_CONTENT_LENGTH'] = int(optional_env("MAX_CONTENT_MB", "200")) * 
 
 DOMAIN = require_env("DOMAIN")
 EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", "24"))
+ADMIN_LOG_ROOT = os.path.abspath(optional_env("ADMIN_LOG_ROOT", "/apps/logs"))
+ADMIN_LIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_LIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "live")))
+ADMIN_ARCHIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_ARCHIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "archive")))
+DEPLOYMENT_LIVE_LOG_FILE = os.path.abspath(
+    optional_env("DEPLOYMENT_LIVE_LOG_FILE", os.path.join(ADMIN_LIVE_LOG_DIR, "deploy-current.log"))
+)
 
 CORS(app,
      supports_credentials=True,
@@ -787,39 +793,237 @@ def _database_log_snapshot():
     }
 
 
+def _admin_log_sources(line_count: int):
+    return {
+        "backend-error": {
+            "resolver": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
+            "path": "/home/ubuntu/.pm2/logs/backend-error.log",
+            "live_supported": True,
+        },
+        "backend-out": {
+            "resolver": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
+            "path": "/home/ubuntu/.pm2/logs/backend-out.log",
+            "live_supported": True,
+        },
+        "deployment-live": {
+            "resolver": lambda: _tail_text_file(DEPLOYMENT_LIVE_LOG_FILE, line_count),
+            "path": DEPLOYMENT_LIVE_LOG_FILE,
+            "live_supported": True,
+        },
+        "database": {
+            "resolver": _database_log_snapshot,
+            "path": "database diagnostics",
+            "live_supported": False,
+        },
+        "ai-diagnostics": {
+            "resolver": _ollama_diagnostic_snapshot,
+            "path": "AI diagnostics",
+            "live_supported": False,
+        },
+    }
+
+
+def _admin_log_http_urls(source: str):
+    return {
+        "live_url": build_public_url("/admin/logs", view="live", source=source),
+        "folder_url": build_public_url("/admin/logs", view="files"),
+        "files_api_url": build_public_url("/api/admin/logs/files"),
+    }
+
+
+def _verify_admin_log_access():
+    client_ip = _extract_request_ip()
+    if not _is_allowed_ip(client_ip):
+        return None, (jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403)
+    if not _can_view_admin_logs(request.user):
+        return None, (jsonify({"error": "Admin access required"}), 403)
+    return client_ip, None
+
+
+def _stream_text_file(path: str):
+    if not os.path.exists(path):
+        return None
+
+    def generate():
+        keepalive_started_at = time.time()
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(0, os.SEEK_END)
+            yield json.dumps({
+                "type": "meta",
+                "path": path,
+                "timestamp": datetime.utcnow().isoformat(),
+            }) + "\n"
+
+            while True:
+                line = handle.readline()
+                if line:
+                    keepalive_started_at = time.time()
+                    yield json.dumps({
+                        "type": "line",
+                        "line": _redact_log_text(line.rstrip("\n")),
+                    }) + "\n"
+                    continue
+
+                try:
+                    if os.path.getsize(path) < handle.tell():
+                        handle.seek(0)
+                except OSError:
+                    pass
+
+                if time.time() - keepalive_started_at >= 10:
+                    keepalive_started_at = time.time()
+                    yield json.dumps({
+                        "type": "keepalive",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }) + "\n"
+
+                time.sleep(1)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _relative_log_path(root_path: str, absolute_path: str):
+    root_real = os.path.realpath(root_path)
+    absolute_real = os.path.realpath(absolute_path)
+    if absolute_real == root_real:
+        return "."
+    if not absolute_real.startswith(f"{root_real}{os.sep}"):
+        raise ValueError("Path is outside the allowed log root.")
+    return os.path.relpath(absolute_real, root_real)
+
+
+def _safe_log_file_path(relative_path: str):
+    candidate = os.path.realpath(os.path.join(ADMIN_LOG_ROOT, relative_path))
+    root_real = os.path.realpath(ADMIN_LOG_ROOT)
+    if candidate == root_real or not candidate.startswith(f"{root_real}{os.sep}"):
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
+def _list_admin_log_files(limit: int = 200):
+    entries = []
+    if not os.path.isdir(ADMIN_LOG_ROOT):
+        return entries
+
+    for root, _, files in os.walk(ADMIN_LOG_ROOT):
+        for filename in files:
+            absolute_path = os.path.join(root, filename)
+            try:
+                stat_result = os.stat(absolute_path)
+                relative_path = _relative_log_path(ADMIN_LOG_ROOT, absolute_path)
+            except (OSError, ValueError):
+                continue
+
+            category = "archive" if absolute_path.startswith(ADMIN_ARCHIVE_LOG_DIR) else "live"
+            entries.append({
+                "name": filename,
+                "relative_path": relative_path,
+                "category": category,
+                "size_bytes": stat_result.st_size,
+                "modified_at": datetime.utcfromtimestamp(stat_result.st_mtime).isoformat() + "Z",
+                "download_url": build_public_url(f"/api/admin/logs/files/{relative_path}"),
+            })
+
+    entries.sort(key=lambda item: item["modified_at"], reverse=True)
+    return entries[:limit]
+
+
 @app.route('/api/admin/logs', methods=['GET'])
 @verify_auth_token
 def admin_logs():
-    client_ip = _extract_request_ip()
-    if not _is_allowed_ip(client_ip):
-        return jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403
-    if not _can_view_admin_logs(request.user):
-        return jsonify({"error": "Admin access required"}), 403
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
 
     source = (request.args.get("source") or "backend-error").strip().lower()
     line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
-
-    sources = {
-        "backend-error": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
-        "backend-out": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
-        "database": _database_log_snapshot,
-        "ai-diagnostics": _ollama_diagnostic_snapshot,
-    }
-
-    resolver = sources.get(source)
-    if not resolver:
+    sources = _admin_log_sources(line_count)
+    source_config = sources.get(source)
+    if not source_config:
         return jsonify({
             "error": "Unknown log source",
             "available_sources": sorted(sources.keys()),
         }), 400
 
-    payload = resolver()
+    payload = source_config["resolver"]()
     payload.update({
         "source": source,
+        "live_supported": source_config.get("live_supported", False),
         "requested_by": request.user.get("email"),
         "client_ip": client_ip,
+        **_admin_log_http_urls(source),
     })
     return jsonify({"success": True, "data": payload})
+
+
+@app.route('/api/admin/logs/stream', methods=['GET'])
+@verify_auth_token
+def admin_logs_stream():
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    source = (request.args.get("source") or "backend-error").strip().lower()
+    sources = _admin_log_sources(200)
+    source_config = sources.get(source)
+    if not source_config:
+        return jsonify({
+            "error": "Unknown log source",
+            "available_sources": sorted(sources.keys()),
+        }), 400
+
+    if not source_config.get("live_supported"):
+        return jsonify({"error": "Selected log source does not support live streaming."}), 400
+
+    response = _stream_text_file(source_config["path"])
+    if response is None:
+        return jsonify({
+            "error": "Log file is not available yet.",
+            "source": source,
+            "client_ip": client_ip,
+        }), 404
+    return response
+
+
+@app.route('/api/admin/logs/files', methods=['GET'])
+@verify_auth_token
+def admin_log_files():
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "root_path": ADMIN_LOG_ROOT,
+            "requested_by": request.user.get("email"),
+            "client_ip": client_ip,
+            "folder_url": build_public_url("/admin/logs", view="files"),
+            "files": _list_admin_log_files(),
+        },
+    })
+
+
+@app.route('/api/admin/logs/files/<path:relative_path>', methods=['GET'])
+@verify_auth_token
+def admin_log_file_download(relative_path):
+    _, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    file_path = _safe_log_file_path(relative_path)
+    if not file_path:
+        return jsonify({"error": "Log file not found."}), 404
+
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    return send_from_directory(directory, filename, as_attachment=False)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
