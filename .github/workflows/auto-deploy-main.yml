@@ -25,15 +25,37 @@ jobs:
             const sha = context.payload.after;
             const commitMessage = context.payload.head_commit?.message || 'Merged into main';
 
-            const associatedPullRequests = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner,
-              repo,
-              commit_sha: sha,
-            });
+            const findMergedPullRequest = async () => {
+              const mergeMatch = commitMessage.match(/Merge pull request #(\d+)/i);
+              if (mergeMatch) {
+                const pullNumber = Number(mergeMatch[1]);
+                const { data: pullRequest } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: pullNumber,
+                });
+                if (pullRequest.base.ref === 'main' && pullRequest.merged_at) {
+                  return pullRequest;
+                }
+              }
 
-            const mergedPullRequest = associatedPullRequests.data
-              .filter((pr) => pr.base.ref === 'main' && pr.merged_at)
-              .sort((left, right) => new Date(right.merged_at) - new Date(left.merged_at))[0];
+              const associatedPullRequests = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: sha,
+              });
+
+              return associatedPullRequests.data
+                .filter((pr) => pr.base.ref === 'main' && pr.merged_at)
+                .sort((left, right) => new Date(right.merged_at) - new Date(left.merged_at))[0];
+            };
+
+            let mergedPullRequest = await findMergedPullRequest();
+            if (!mergedPullRequest) {
+              core.info('Merged pull request not indexed yet. Retrying in 15 seconds...');
+              await new Promise((resolve) => setTimeout(resolve, 15000));
+              mergedPullRequest = await findMergedPullRequest();
+            }
 
             if (!mergedPullRequest) {
               core.setFailed(`No merged pull request was found for commit ${sha}. Deployment only runs for approved pull request merges.`);
@@ -83,7 +105,6 @@ jobs:
                 code_review_notes: `Merged PR #${mergedPullRequest.number} approved by ${approvedBy}. Head commit: ${commitMessage}`,
                 version_audit: 'true',
                 deploy_target: 'all',
-                approved_by: approvedBy,
               },
             });
 
