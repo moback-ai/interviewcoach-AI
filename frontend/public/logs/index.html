@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>InterviewCoach Logs</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
+      a { color: #93c5fd; }
+      .card { background: #1e293b; border-radius: 12px; padding: 1.25rem; margin: 1rem 0; max-width: 720px; }
+      h1 { margin-top: 0; }
+      code { background: #334155; padding: 0.15rem 0.4rem; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>InterviewCoach Logs</h1>
+    <p>HTTP log hub for deployment, backend, frontend, and database diagnostics.</p>
+
+    <div class="card">
+      <h2>Deployment (public)</h2>
+      <ul>
+        <li><a href="/logs/live.html">Live deployment log</a></li>
+        <li><a href="/logs/files/live/deploy-current.log">Raw deploy log file</a></li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Runtime (admin login required)</h2>
+      <p>Use the admin UI or API with your session token:</p>
+      <ul>
+        <li><a href="/admin/logs?view=live&amp;source=backend-error">Backend errors</a></li>
+        <li><a href="/admin/logs?view=live&amp;source=backend-out">Backend output</a></li>
+        <li><a href="/admin/logs?view=live&amp;source=frontend-access">Frontend (nginx)</a></li>
+        <li><a href="/admin/logs?view=live&amp;source=database">Database snapshot</a></li>
+        <li><a href="/admin/logs?view=files">Archived log files</a></li>
+      </ul>
+      <p>API: <code>/logs/api/&lt;source&gt;</code> with <code>Authorization: Bearer …</code></p>
+    </div>
+
+    <p><a href="/">Back to app</a></p>
+  </body>
+</html>

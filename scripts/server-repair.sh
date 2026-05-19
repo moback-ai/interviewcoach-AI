@@ -18,19 +18,28 @@ else
 fi
 
 echo "[3/5] Ollama service"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3}"
 if command -v ollama >/dev/null 2>&1; then
-  if systemctl list-unit-files ollama.service >/dev/null 2>&1; then
-    sudo systemctl enable ollama
-    sudo systemctl restart ollama || sudo systemctl start ollama
-    sleep 5
-    systemctl is-active ollama || true
-  else
-    echo "Starting ollama serve in background (no systemd unit)"
-    nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
+  if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    if systemctl list-unit-files ollama.service >/dev/null 2>&1; then
+      sudo systemctl enable ollama
+      sudo systemctl restart ollama || sudo systemctl start ollama
+    else
+      echo "Starting ollama serve in background (no systemd unit)"
+      nohup ollama serve >/tmp/ollama-serve.log 2>&1 &
+    fi
     sleep 5
   fi
-  curl -fsS http://127.0.0.1:11434/api/tags && echo "Ollama is reachable"
-  ollama pull "${OLLAMA_MODEL:-llama3}" || true
+  if systemctl list-unit-files ollama.service >/dev/null 2>&1; then
+    systemctl is-active ollama || true
+  fi
+  curl -fsS http://127.0.0.1:11434/api/tags && echo "" && echo "Ollama is reachable"
+  if curl -fsS http://127.0.0.1:11434/api/tags | grep -q "\"name\":\"${OLLAMA_MODEL}"; then
+    echo "Model ${OLLAMA_MODEL} already present — skipping pull"
+  else
+    echo "Pulling ${OLLAMA_MODEL}..."
+    ollama pull "$OLLAMA_MODEL" || true
+  fi
 else
   echo "Ollama not installed. Install with: curl -fsSL https://ollama.com/install.sh | sh"
 fi
