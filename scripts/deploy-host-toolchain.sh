@@ -3,9 +3,14 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-NODE_MAJOR="${NODE_MAJOR:-22}"
+NODE_MAJOR="${NODE_MAJOR:-24}"
 
-echo "=== apt update / upgrade ==="
+echo "=== apt update / upgrade (targets Ubuntu 24.04 LTS) ==="
+if [ -r /etc/os-release ]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  echo "Host OS: ${PRETTY_NAME:-unknown}"
+fi
 sudo apt-get update -qq
 sudo apt-get upgrade -y -qq
 sudo apt-get install -y -qq \
