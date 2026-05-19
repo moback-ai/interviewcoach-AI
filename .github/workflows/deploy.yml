@@ -4,9 +4,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
   AWS_REGION: ap-south-1
-  NODE_VERSION_SPEC: 22
+  NODE_VERSION_SPEC: 24
   NPM_VERSION_SPEC: latest
-  NODE_MAJOR: 22
+  NODE_MAJOR: 24
 
 on:
   workflow_dispatch:
