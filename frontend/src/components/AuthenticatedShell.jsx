@@ -1,5 +1,5 @@
 import { Outlet, useLocation } from 'react-router-dom';
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import ProtectedRoute from './ProtectedRoute';
 import IdleTimeoutModal from './IdleTimeoutModal';
 import { useAuth } from '../contexts/AuthContext';
