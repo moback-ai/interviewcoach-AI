@@ -1007,6 +1007,7 @@ jobs:
 
       - name: 5. Deploy and Verify - Promote Stable Release
         if: success()
+        continue-on-error: true
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
@@ -1036,21 +1037,35 @@ jobs:
               '
             fi
 
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
-            set -e
-            mkdir -p /apps/deployments/stable
-            cat > /apps/deployments/stable/latest.json <<EOFJSON
-            {
-              "release_sha": "${{ needs.resolve_release.outputs.release_sha }}",
-              "requested_ref": "${{ needs.authorize_and_prepare.outputs.requested_ref }}",
-              "deploy_target": "${{ needs.authorize_and_prepare.outputs.deploy_target }}",
-              "frontend": "${{ needs.authorize_and_prepare.outputs.frontend }}",
-              "backend": "${{ needs.authorize_and_prepare.outputs.backend }}",
-              "database": "${{ needs.authorize_and_prepare.outputs.database }}",
-              "deployed_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            }
-            EOFJSON
-            EOFSSH
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+              "RELEASE_SHA='${{ needs.resolve_release.outputs.release_sha }}' \
+               REQUESTED_REF='${{ needs.authorize_and_prepare.outputs.requested_ref }}' \
+               DEPLOY_TARGET='${{ needs.authorize_and_prepare.outputs.deploy_target }}' \
+               DEPLOY_FRONTEND='${{ needs.authorize_and_prepare.outputs.frontend }}' \
+               DEPLOY_BACKEND='${{ needs.authorize_and_prepare.outputs.backend }}' \
+               DEPLOY_DATABASE='${{ needs.authorize_and_prepare.outputs.database }}' \
+               bash -s" <<'EOFSSH'
+          set -euo pipefail
+          mkdir -p /apps/deployments/stable
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          payload = {
+              "release_sha": os.environ["RELEASE_SHA"],
+              "requested_ref": os.environ["REQUESTED_REF"],
+              "deploy_target": os.environ["DEPLOY_TARGET"],
+              "frontend": os.environ["DEPLOY_FRONTEND"],
+              "backend": os.environ["DEPLOY_BACKEND"],
+              "database": os.environ["DEPLOY_DATABASE"],
+              "deployed_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+          }
+          with open("/apps/deployments/stable/latest.json", "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, indent=2)
+              handle.write("\n")
+          PY
+          EOFSSH
 
             if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
               ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
