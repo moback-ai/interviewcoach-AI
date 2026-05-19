@@ -4,56 +4,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
   AWS_REGION: ap-south-1
-
-  # Use stable versions instead of latest
-  NODE_VERSION_SPEC: 22
-  NPM_VERSION_SPEC: 10
-
-  LOG_ROOT: /var/www/interview-logs
+  NODE_VERSION_SPEC: latest
+  NPM_VERSION_SPEC: latest
 
 on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: Branch, tag, or commit to deploy
+        description: Branch or tag to deploy
         required: true
         default: main
         type: string
-
       branch_details:
         description: Branch details or release notes
         required: false
         default: ""
         type: string
-
       code_review_notes:
         description: Code review status or notes
         required: false
         default: ""
         type: string
-
-      approved_by:
-        description: Admin approver for automated deploy dispatches
-        required: false
-        default: ""
-        type: string
-
-      environment:
-        description: Deployment environment
-        required: true
-        default: dev
-        type: choice
-        options:
-          - dev
-          - uat
-          - prod
-
       version_audit:
         description: Check version upgrades before deploy (advisory only)
         required: true
         default: true
         type: boolean
-
       deploy_target:
         description: Which part should be deployed?
         required: true
@@ -65,94 +41,64 @@ on:
           - backend
           - database
 
-      approval_confirmation:
-        description: Type APPROVED to confirm manual deployment of only the selected ref
-        required: true
-        default: ""
-        type: string
-
-permissions:
-  contents: read
-
 jobs:
-
   authorize_and_prepare:
     name: 1. Authorize and Prepare
     runs-on: ubuntu-latest
-
     outputs:
       frontend: ${{ steps.targets.outputs.frontend }}
       backend: ${{ steps.targets.outputs.backend }}
       database: ${{ steps.targets.outputs.database }}
       requested_ref: ${{ github.event.inputs.git_ref }}
-      resolved_sha: ${{ steps.resolve.outputs.sha }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
-      environment: ${{ github.event.inputs.environment }}
       version_audit: ${{ github.event.inputs.version_audit }}
-      approved_by: ${{ steps.approval.outputs.approved_by }}
 
     steps:
+      - name: 1. Authorize and Prepare - Record Request
+        run: |
+          {
+            echo "## 1. Authorize and Prepare"
+            echo "### Deployment Request"
+            echo "- Requested by: \`${{ github.actor }}\`"
+            echo "- Triggering actor: \`${{ github.triggering_actor || github.actor }}\`"
+            echo "- Deployment will continue only after protected environment approval."
+            echo "- The deployment will resolve the newest commit on the requested ref after approval, so the run always uses the latest approved code at start time."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Checkout requested ref
+      - name: 1. Authorize and Prepare - Checkout Selected Branch
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.git_ref }}
           fetch-depth: 20
 
-      - name: Validate deployment approval source
-        id: approval
+      - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
         run: |
-          set -euo pipefail
+          {
+            echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
+            echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
+            echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
+            echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
+            echo "- Requested by: \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          actor="${{ github.actor }}"
-          approved_by="${{ github.event.inputs.approved_by }}"
-          confirmation="${{ github.event.inputs.approval_confirmation }}"
+      - name: 1. Authorize and Prepare - Detect Changed Areas
+        id: changes
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ github.event.repository.default_branch }}
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'backend/**'
+            database:
+              - 'database/**'
 
-          if [ "$confirmation" != "APPROVED" ]; then
-            echo "approval_confirmation must be exactly APPROVED."
-            exit 1
-          fi
-
-          case "$approved_by" in
-            ""|govardhanreddy66|KFKishore23) ;;
-            *)
-              echo "Invalid approved_by value: $approved_by"
-              exit 1
-              ;;
-          esac
-
-          case "$actor" in
-            govardhanreddy66|KFKishore23)
-              if [ -z "$approved_by" ]; then
-                approved_by="$actor"
-              fi
-              ;;
-            github-actions[bot])
-              if [ -z "$approved_by" ]; then
-                echo "approved_by is required for automated deployment dispatches."
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Only Govardhan, Kishore, or approved automation can deploy."
-              exit 1
-              ;;
-          esac
-
-          echo "approved_by=$approved_by" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve release commit
-        id: resolve
-        run: |
-          set -euo pipefail
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve deployment targets
+      - name: 1. Authorize and Prepare - Resolve Deployment Targets
         id: targets
         run: |
-          set -euo pipefail
-
-          case "${{ github.event.inputs.deploy_target }}" in
+          target="${{ github.event.inputs.deploy_target }}"
+          case "$target" in
             all)
               frontend=true
               backend=true
@@ -178,41 +124,132 @@ jobs:
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
           echo "database=$database" >> "$GITHUB_OUTPUT"
+          echo "Detected targets -> frontend=$frontend backend=$backend database=$database"
+          {
+            echo "### Selected Components"
+            echo "- Frontend: \`$frontend\`"
+            echo "- Backend: \`$backend\`"
+            echo "- Database: \`$database\`"
+            echo "### Changed Areas On Selected Ref"
+            echo "- Frontend files changed: \`${{ steps.changes.outputs.frontend }}\`"
+            echo "- Backend files changed: \`${{ steps.changes.outputs.backend }}\`"
+            echo "- Database files changed: \`${{ steps.changes.outputs.database }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build_and_audit:
     name: 2. Build and Audit
     runs-on: ubuntu-latest
-    needs: authorize_and_prepare
-
+    needs: [authorize_and_prepare, deployment_approval, resolve_release]
     steps:
-
-      - name: Checkout release commit
+      - name: 2. Build and Audit - Checkout Selected Branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.authorize_and_prepare.outputs.resolved_sha }}
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
 
-      - name: Setup Node
+      - name: 2. Build and Audit - Validate Tooling
+        run: |
+          python3 --version
+          node --version
+          npm --version
+          {
+            echo "## 2. Build and Audit"
+            echo "- Python, Node, and npm are available on the runner."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Build and Audit - Audit Frontend Dependency Versions
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
+        working-directory: frontend
+        run: |
+          {
+            echo "### Frontend Version Audit"
+            echo "- package manager: npm"
+            echo "- package file: \`frontend/package.json\`"
+            echo ""
+            echo '```'
+            npm outdated --long || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Build and Audit - Audit Backend Dependency Versions
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
+        run: |
+          python3 <<'PY'
+          import json
+          import re
+          import urllib.request
+          from pathlib import Path
+
+          requirements = []
+          for raw_line in Path("backend/requirements.txt").read_text().splitlines():
+              line = raw_line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              match = re.match(r"([A-Za-z0-9_.-]+)(==|>=)(.+)", line)
+              if not match:
+                  continue
+              requirements.append((match.group(1), match.group(2), match.group(3).strip()))
+
+          rows = []
+          for package, operator, current in requirements:
+              latest = "unknown"
+              try:
+                  with urllib.request.urlopen(f"https://pypi.org/pypi/{package}/json", timeout=10) as response:
+                      payload = json.load(response)
+                  latest = payload.get("info", {}).get("version", "unknown")
+              except Exception as exc:
+                  latest = f"lookup failed: {exc}"
+              rows.append((package, operator, current, latest))
+
+          with open(Path.home() / "backend_version_audit.md", "w", encoding="utf-8") as handle:
+              handle.write("### Backend Version Audit\n")
+              handle.write("- package manager: pip requirements\n")
+              handle.write("- package file: `backend/requirements.txt`\n\n")
+              handle.write("| Package | Current constraint | Latest on PyPI |\n")
+              handle.write("| --- | --- | --- |\n")
+              for package, operator, current, latest in rows:
+                  handle.write(f"| {package} | {operator}{current} | {latest} |\n")
+          PY
+          cat "$HOME/backend_version_audit.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Build and Audit - Note Upgrade Policy
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
+        run: |
+          {
+            echo "### Upgrade Policy"
+            echo "- Ubuntu, database engine, and app dependency upgrades are reported here for review."
+            echo "- This workflow auto-updates Node.js and npm during deployment."
+            echo "- This workflow does not auto-upgrade production OS packages, RDS/PostgreSQL, or app dependencies."
+            echo "- Apply infrastructure upgrades in a separate approved maintenance window."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 2. Build and Audit - Setup Node
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION_SPEC }}
 
-      - name: Update npm
+      - name: 2. Build and Audit - Update npm
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
           npm install --global npm@${{ env.NPM_VERSION_SPEC }}
+          {
+            echo "- Build runner Node.js: \`$(node --version)\`"
+            echo "- Build runner npm: \`$(npm --version)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Build frontend
+      - name: 2. Build and Audit - Build Frontend
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         working-directory: frontend
         run: |
           echo "VITE_API_BASE_URL=/api" > .env
           echo "VITE_STORAGE_URL=/storage" >> .env
-
           npm install --legacy-peer-deps
           npm run build
+          {
+            echo "- Frontend build completed successfully."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload frontend artifact
+      - name: 2. Build and Audit - Upload Frontend Artifact
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -220,198 +257,899 @@ jobs:
           path: frontend/dist
           if-no-files-found: error
 
-  deploy_and_verify:
-    name: 3. Deploy and Verify
+      - name: 2. Build and Audit - Skip Frontend Build When Not Requested
+        if: needs.authorize_and_prepare.outputs.frontend != 'true'
+        run: |
+          echo "Frontend build skipped because deploy target does not include frontend."
+          {
+            echo "- Frontend build skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deployment_approval:
+    name: 3. Approval
     runs-on: ubuntu-latest
-
-    needs:
-      - authorize_and_prepare
-      - build_and_audit
-
+    needs: authorize_and_prepare
     environment:
-      name: ${{ needs.authorize_and_prepare.outputs.environment }}
+      name: production
+    steps:
+      - name: 3. Approval - Record Protected Approval
+        run: |
+          {
+            echo "## 3. Approval"
+            echo "- Deployment request approved through the protected \`production\` environment."
+            echo "- Requested by: \`${{ github.actor }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
+  resolve_release:
+    name: 4. Resolve Approved Release
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, deployment_approval]
+    outputs:
+      release_sha: ${{ steps.resolve.outputs.release_sha }}
+      release_ref: ${{ steps.resolve.outputs.release_ref }}
+    steps:
+      - name: 4. Resolve Approved Release - Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 4. Resolve Approved Release - Select Latest Approved Commit
+        id: resolve
+        run: |
+          REQUESTED_REF="${{ needs.authorize_and_prepare.outputs.requested_ref }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+
+          if [ -n "$REQUESTED_REF" ]; then
+            git fetch --no-tags origin "$REQUESTED_REF" --depth=1 || true
+          fi
+          git fetch --no-tags origin "$DEFAULT_BRANCH" --depth=1 || true
+
+          if git rev-parse --verify --quiet "origin/$REQUESTED_REF" >/dev/null; then
+            RELEASE_REF="origin/$REQUESTED_REF"
+            RELEASE_SHA="$(git rev-parse "origin/$REQUESTED_REF")"
+          else
+            RELEASE_REF="$REQUESTED_REF"
+            RELEASE_SHA="$(git rev-parse "$REQUESTED_REF")"
+          fi
+
+          echo "release_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 4. Resolve Approved Release"
+            echo "- Requested ref: \`$REQUESTED_REF\`"
+            echo "- Resolved ref: \`$RELEASE_REF\`"
+            echo "- Resolved commit: \`$RELEASE_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy_and_verify:
+    name: 5. Deploy and Verify
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, build_and_audit, deployment_approval, resolve_release]
     concurrency:
-      group: deploy-${{ needs.authorize_and_prepare.outputs.environment }}
+      group: deploy-feature-test-code-db-production
       cancel-in-progress: false
 
     steps:
-
-      - name: Checkout release commit
+      - name: 5. Deploy and Verify - Checkout Selected Branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.authorize_and_prepare.outputs.resolved_sha }}
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
 
-      - name: Download frontend build artifact
+      - name: 5. Deploy and Verify - Download Frontend Build Artifact
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
 
-      - name: Setup SSH
+      - name: 5. Deploy and Verify - Record Approved Deployment
         run: |
-          set -euo pipefail
+          echo "Protected environment approval completed. Starting deployment."
 
+      - name: 5. Deploy and Verify - Setup SSH
+        run: |
           mkdir -p ~/.ssh
-
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
-
           chmod 400 ~/.ssh/deploy_key.pem
+          {
+            echo "## 5. Deploy and Verify"
+            echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
+            echo "- Selected release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
+            echo "- Frontend host: \`${{ secrets.FRONTEND_HOST }}\`"
+            echo "- Backend host: \`${{ secrets.BACKEND_HOST }}\`"
+            echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 5. Deploy and Verify - Define SSH Options
+        run: |
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
-      ####################################################################
-      # FIXED RUNTIME UPDATE SECTION
-      ####################################################################
-
-      - name: Update target runtimes
-        if: needs.authorize_and_prepare.outputs.frontend == 'true' || needs.authorize_and_prepare.outputs.backend == 'true'
+      - name: 5. Deploy and Verify - Prepare Deployment Log Files
+        env:
+          FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
+          FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
         run: |
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#http://}"
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN#https://}"
+          FRONTEND_DOMAIN="${FRONTEND_DOMAIN%%/*}"
 
-          set -euo pipefail
+          if [ -n "$FRONTEND_DOMAIN" ]; then
+            FRONTEND_ORIGIN="https://$FRONTEND_DOMAIN"
+          else
+            FRONTEND_ORIGIN="http://$FRONTEND_HOST"
+          fi
 
-          update_host() {
+          DEPLOY_LOG_FILE="/apps/logs/live/deploy-${{ github.run_id }}.log"
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "\
+            mkdir -p /apps/logs/live /apps/logs/archive /apps/logs/tmp /apps/deployments/runs /apps/deployments/stable /apps/database/backups && \
+            touch '$DEPLOY_LOG_FILE' && \
+            ln -sfn '$DEPLOY_LOG_FILE' /apps/logs/live/deploy-current.log"
 
-            local host="$1"
-            local label="$2"
+          echo "DEPLOY_LOG_FILE=$DEPLOY_LOG_FILE" >> "$GITHUB_ENV"
+          echo "FRONTEND_ORIGIN=$FRONTEND_ORIGIN" >> "$GITHUB_ENV"
+
+          {
+            echo "- Live logs URL: \`$FRONTEND_ORIGIN/admin/logs?view=live&source=deployment-live\`"
+            echo "- Log folder URL: \`$FRONTEND_ORIGIN/admin/logs?view=files\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 5. Deploy and Verify - Update Node.js and npm on Target Hosts
+        run: |
+          update_node_host() {
+            host="$1"
+            label="$2"
 
             if [ -z "$host" ]; then
               return
             fi
 
-            echo "=== $label runtime update ==="
+            {
+              echo "### $label Toolchain Update"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
 
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$host" '
-
               set -e
               export DEBIAN_FRONTEND=noninteractive
-
               sudo apt-get update
-
-              sudo apt-get install -y \
-                ca-certificates \
-                curl \
-                gnupg
-
-              ##############################################################
-              # REMOVE OLD UBUNTU NODE PACKAGES
-              ##############################################################
-
-              sudo apt-get remove -y \
-                nodejs \
-                libnode-dev \
-                libnode72 || true
-
-              sudo apt-get autoremove -y || true
-
-              ##############################################################
-              # INSTALL NODE 22 LTS
-              ##############################################################
-
-              curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-
-              sudo apt-get update
-
+              sudo apt-get install -y ca-certificates curl gnupg
+              curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
               sudo apt-get install -y nodejs
-
-              ##############################################################
-              # UPDATE NPM
-              ##############################################################
-
-              sudo npm install -g npm@10
-
-              ##############################################################
-              # UPDATE PM2
-              ##############################################################
-
+              sudo npm install -g npm@latest
               if command -v pm2 >/dev/null 2>&1; then
                 sudo npm install -g pm2@latest
               fi
-
-              ##############################################################
-              # VERIFY
-              ##############################################################
-
-              echo "Node Version:"
-              node --version
-
-              echo "NPM Version:"
-              npm --version
-
+              echo "Node.js $(node --version)"
+              echo "npm $(npm --version)"
               if command -v pm2 >/dev/null 2>&1; then
-                echo "PM2 Version:"
-                pm2 --version
+                echo "pm2 $(pm2 --version)"
               fi
-            '
+            ' | tee -a "$GITHUB_STEP_SUMMARY"
+
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           }
 
+          update_node_host "${{ secrets.BACKEND_HOST }}" "Backend Host"
+          if [ "${{ secrets.FRONTEND_HOST }}" != "${{ secrets.BACKEND_HOST }}" ]; then
+            update_node_host "${{ secrets.FRONTEND_HOST }}" "Frontend Host"
+          fi
+
+      - name: 5. Deploy and Verify - Audit Target Versions
+        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
+        run: |
           {
-            update_host "${{ secrets.BACKEND_HOST }}" "Backend host"
+            echo "### Target Environment Version Audit"
+            echo "- Node.js and npm are auto-updated before this audit runs."
+            echo "- The rest of this audit is advisory only."
+            echo ""
+            echo "#### Backend Host"
+            echo '```'
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+              set -e
+              echo "Hostname: $(hostname)"
+              if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds; fi
+              uname -r
+              python3 --version || true
+              node --version || true
+              npm --version || true
+              pm2 --version || true
+              psql --version || true
+              apt list --upgradable 2>/dev/null | sed -n "1,25p" || true
+            ' || true
+            echo '```'
+            echo ""
+            echo "#### Frontend Host"
+            echo '```'
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+              set -e
+              echo "Hostname: $(hostname)"
+              if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds; fi
+              uname -r
+              node --version || true
+              npm --version || true
+              nginx -v 2>&1 || true
+              apt list --upgradable 2>/dev/null | sed -n "1,25p" || true
+            ' || true
+            echo '```'
+            echo ""
+            echo "#### Database"
+            echo '```'
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+              set -e
+              export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+              psql \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --tuples-only \
+                --no-align \
+                --command="SHOW server_version; SHOW server_version_num;" || true
+            ' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ] && \
-               [ "${{ secrets.FRONTEND_HOST }}" != "${{ secrets.BACKEND_HOST }}" ]; then
+      - name: 5. Deploy and Verify - Sync Backend Source
+        if: needs.authorize_and_prepare.outputs.backend == 'true'
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Sync backend source ==="
+            BACKEND_RELEASE="/apps/backend/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              backend/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
+          } 2>&1 | tee >(log_to_remote)
 
-              update_host "${{ secrets.FRONTEND_HOST }}" "Frontend host"
+      - name: 5. Deploy and Verify - Configure Backend and Restart
+        if: needs.authorize_and_prepare.outputs.backend == 'true'
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Configure backend and restart ==="
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          set -e
+          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
+          APP_ROOT="/apps/backend"
+          RELEASES_DIR="$APP_ROOT/releases"
+          VENV_DIR="$APP_ROOT/venv"
+          STABLE_LINK="$APP_ROOT/stable"
+          NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
+          STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || readlink -f "$APP_ROOT/current" || true)"
+          mkdir -p "$RELEASES_DIR"
+          if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
+          . "$VENV_DIR/bin/activate"
+          pip install --upgrade pip
+          pip install -r "$NEW_RELEASE/requirements.txt"
+          ln -sfn "$NEW_RELEASE" "$APP_ROOT/current"
+          pm2 delete backend >/dev/null 2>&1 || true
+          AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+            pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+          pm2 save
+          sleep 5
+          if ! curl -f http://127.0.0.1:5000/api/health; then
+            pm2 status
+            pm2 logs backend --lines 200 --nostream || true
+            if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+              echo "Rolling back backend to stable release $STABLE_RELEASE"
+              ln -sfn "$STABLE_RELEASE" "$APP_ROOT/current"
+              pm2 delete backend >/dev/null 2>&1 || true
+              AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+                pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+              pm2 save
+              sleep 5
+              curl -f http://127.0.0.1:5000/api/health
+            fi
+            exit 1
+          fi
+          EOFSSH
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Sync Database Source
+        if: needs.authorize_and_prepare.outputs.database == 'true'
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Sync database source ==="
+            DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              database/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Apply Database Migrations
+        if: needs.authorize_and_prepare.outputs.database == 'true'
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Apply database migrations ==="
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          set -e
+          DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+          export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          SERVER_MAJOR="$(
+            psql \
+              --host="${{ secrets.DB_HOST }}" \
+              --port="${{ secrets.DB_PORT }}" \
+              --username="${{ secrets.DB_USER }}" \
+              --dbname="${{ secrets.DB_NAME }}" \
+              --tuples-only \
+              --no-align \
+              --command="SHOW server_version;" | cut -d. -f1 | tr -d '[:space:]'
+          )"
+          if [ -z "$SERVER_MAJOR" ]; then
+            echo "Unable to detect PostgreSQL server version"
+            exit 1
+          fi
+          PG_BINDIR="/usr/lib/postgresql/$SERVER_MAJOR/bin"
+          if [ ! -x "$PG_BINDIR/pg_dump" ] || [ ! -x "$PG_BINDIR/psql" ] || [ ! -x "$PG_BINDIR/pg_restore" ]; then
+            sudo apt-get update
+            sudo apt-get install -y ca-certificates curl gnupg lsb-release
+            if [ ! -f /etc/apt/sources.list.d/pgdg.list ]; then
+              echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | \
+                sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+            fi
+            if [ ! -f /usr/share/keyrings/postgresql.gpg ]; then
+              curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | \
+                gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg >/dev/null
+            fi
+            sudo apt-get update
+            sudo apt-get install -y "postgresql-client-$SERVER_MAJOR"
+          fi
+          BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
+          "$PG_BINDIR/pg_dump" \
+            --host="${{ secrets.DB_HOST }}" \
+            --port="${{ secrets.DB_PORT }}" \
+            --username="${{ secrets.DB_USER }}" \
+            --dbname="${{ secrets.DB_NAME }}" \
+            --format=custom \
+            --file="$BACKUP_FILE"
+          restore_database() {
+            echo "Rolling back database from $BACKUP_FILE"
+            "$PG_BINDIR/pg_restore" \
+              --host="${{ secrets.DB_HOST }}" \
+              --port="${{ secrets.DB_PORT }}" \
+              --username="${{ secrets.DB_USER }}" \
+              --dbname="${{ secrets.DB_NAME }}" \
+              --clean \
+              --if-exists \
+              --no-owner \
+              --no-privileges \
+              "$BACKUP_FILE"
+          }
+          trap restore_database ERR
+          "$PG_BINDIR/psql" \
+            --host="${{ secrets.DB_HOST }}" \
+            --port="${{ secrets.DB_PORT }}" \
+            --username="${{ secrets.DB_USER }}" \
+            --dbname="${{ secrets.DB_NAME }}" \
+            --set=ON_ERROR_STOP=1 \
+            --command="
+              CREATE TABLE IF NOT EXISTS schema_migrations (
+                filename TEXT PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              );
+            "
+          MIGRATIONS_DIR="$DATABASE_RELEASE/migrations"
+          if [ -d "$MIGRATIONS_DIR" ]; then
+            for migration in $(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort); do
+              filename="$(basename "$migration")"
+              already_applied="$(
+                "$PG_BINDIR/psql" \
+                  --host="${{ secrets.DB_HOST }}" \
+                  --port="${{ secrets.DB_PORT }}" \
+                  --username="${{ secrets.DB_USER }}" \
+                  --dbname="${{ secrets.DB_NAME }}" \
+                  --tuples-only \
+                  --no-align \
+                  --command="SELECT 1 FROM schema_migrations WHERE filename = '$filename' LIMIT 1;"
+              )"
+              if [ "$already_applied" = "1" ]; then
+                echo "Skipping already applied migration: $filename"
+                continue
+              fi
+              echo "Applying migration: $filename"
+              "$PG_BINDIR/psql" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --set=ON_ERROR_STOP=1 \
+                --single-transaction \
+                --file="$migration"
+              "$PG_BINDIR/psql" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --set=ON_ERROR_STOP=1 \
+                --command="INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT (filename) DO NOTHING;"
+            done
+          else
+            echo "No migrations directory found. Skipping database migration step."
+          fi
+          EOFSSH
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Upload Frontend Build
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Upload frontend build ==="
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              frontend/dist/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Publish Frontend
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Publish frontend ==="
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
+          set -e
+          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
+          FRONTEND_ROOT="/var/www/interview"
+          RELEASES_DIR="$FRONTEND_ROOT/releases"
+          CURRENT_LINK="$FRONTEND_ROOT/current"
+          STABLE_LINK="$FRONTEND_ROOT/stable"
+          STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || readlink -f "$CURRENT_LINK" || true)"
+          NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
+          APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
+          BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
+          BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
+          BACKEND_PROXY_HOST="127.0.0.1:5001"
+          sudo mkdir -p "$RELEASES_DIR"
+          sudo rsync -av --delete /tmp/frontend-dist/ "$NEW_RELEASE/"
+          if [ -z "$APP_DOMAIN" ]; then
+            DETECTED_CERT_DIR="$(find /etc/letsencrypt/live -mindepth 1 -maxdepth 1 -type d ! -name 'README' | head -n 1 || true)"
+            if [ -n "$DETECTED_CERT_DIR" ]; then
+              APP_DOMAIN="$(basename "$DETECTED_CERT_DIR")"
+              echo "FRONTEND_DOMAIN secret missing, auto-detected HTTPS domain: $APP_DOMAIN"
+            fi
+          fi
+          if [ -z "$APP_DOMAIN" ]; then
+            APP_DOMAIN="ugaanlabs.ai"
+          fi
+          APP_DOMAIN="${APP_DOMAIN#http://}"
+          APP_DOMAIN="${APP_DOMAIN#https://}"
+          APP_DOMAIN="${APP_DOMAIN%%/*}"
+          has_ssl_cert() {
+            [ -n "$APP_DOMAIN" ] &&
+              sudo test -f "/etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem" &&
+              sudo test -f "/etc/letsencrypt/live/$APP_DOMAIN/privkey.pem"
+          }
+          SERVER_NAMES="$APP_DOMAIN"
+          case "$APP_DOMAIN" in
+            www.*) ;;
+            *) SERVER_NAMES="$APP_DOMAIN www.$APP_DOMAIN" ;;
+          esac
+          cat > "$BACKEND_TUNNEL_KEY" <<'KEYEOF'
+          ${{ secrets.EC2_SSH_KEY }}
+          KEYEOF
+          chmod 600 "$BACKEND_TUNNEL_KEY"
+          EXISTING_TUNNEL_PID="$(ss -ltnp 2>/dev/null | awk '/127.0.0.1:5001/ && /ssh/ { if (match($0, /pid=([0-9]+)/, pid)) print pid[1] }' | head -n 1)"
+          if [ -n "$EXISTING_TUNNEL_PID" ]; then
+            kill "$EXISTING_TUNNEL_PID" || true
+            sleep 1
+          fi
+          ssh -f -N -L 127.0.0.1:5001:127.0.0.1:5000 \
+            -i "$BACKEND_TUNNEL_KEY" \
+            -o ExitOnForwardFailure=yes \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            ${{ secrets.EC2_USER }}@"$BACKEND_HOST"
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 5 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          export APP_DOMAIN
+          export SERVER_NAMES
+          export BACKEND_PROXY_HOST
+          if has_ssl_cert; then
+            {
+              echo "server {"
+              echo "    listen 80;"
+              echo "    server_name $SERVER_NAMES;"
+              echo '    return 301 https://$host$request_uri;'
+              echo "}"
+              echo
+              echo "server {"
+              echo "    listen 443 ssl http2;"
+              echo "    server_name $SERVER_NAMES;"
+              echo
+              echo "    ssl_certificate /etc/letsencrypt/live/$APP_DOMAIN/fullchain.pem;"
+              echo "    ssl_certificate_key /etc/letsencrypt/live/$APP_DOMAIN/privkey.pem;"
+              echo "    gzip on;"
+              echo '    gzip_vary on;'
+              echo '    gzip_proxied any;'
+              echo '    gzip_comp_level 6;'
+              echo '    gzip_min_length 1024;'
+              echo '    gzip_types text/plain text/css application/json application/javascript text/javascript application/xml text/xml image/svg+xml;'
+              echo
+              echo "    root $CURRENT_LINK;"
+              echo "    index index.html;"
+              echo
+              echo '    location = /.env { return 404; }'
+              echo '    location ^~ /.git/ { return 404; }'
+              echo '    location ^~ /.svn/ { return 404; }'
+              echo '    location ^~ /.hg/ { return 404; }'
+              echo '    location ^~ /vendor/ { return 404; }'
+              echo '    location ^~ /cgi-bin/ { return 404; }'
+              echo '    location ^~ /wp-admin/ { return 404; }'
+              echo '    location ^~ /wp-content/ { return 404; }'
+              echo '    location ^~ /wp-includes/ { return 404; }'
+              echo '    location ^~ /phpunit/ { return 404; }'
+              echo '    location ^~ /phpMyAdmin/ { return 404; }'
+              echo '    location ^~ /.well-known/pki-validation/ { return 404; }'
+              echo '    location ~* \\.(php|asp|aspx|jsp|cgi|pl|sh)$ { return 404; }'
+              echo
+              echo "    location = /index.html {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
+              echo '        try_files $uri =404;'
+              echo "    }"
+              echo
+              echo "    location ~* \\.(js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$ {"
+              echo '        try_files $uri =404;'
+              echo '        expires 1y;'
+              echo '        add_header Cache-Control "public, immutable" always;'
+              echo "    }"
+              echo
+              echo "    location / {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
+              echo '        try_files $uri $uri/ /index.html;'
+              echo "    }"
+              echo
+              echo "    location /api/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/api/;"
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Real-IP $remote_addr;'
+              echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "        proxy_read_timeout 300s;"
+              echo "        client_max_body_size 200M;"
+              echo "    }"
+              echo
+              echo "    location /functions/v1/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/functions/v1/;"
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Real-IP $remote_addr;'
+              echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "        proxy_read_timeout 300s;"
+              echo "        client_max_body_size 200M;"
+              echo "    }"
+              echo
+              echo "    location /socket.io/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/socket.io/;"
+              echo "        proxy_http_version 1.1;"
+              echo '        proxy_set_header Upgrade $http_upgrade;'
+              echo '        proxy_set_header Connection "upgrade";'
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "        proxy_read_timeout 300s;"
+              echo "    }"
+              echo
+              echo "    location /storage/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/storage/;"
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Real-IP $remote_addr;'
+              echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "    }"
+              echo "}"
+            } >/tmp/interview-nginx.conf
+          else
+            {
+              echo "server {"
+              echo "    listen 80;"
+              echo "    server_name _;"
+              echo "    gzip on;"
+              echo '    gzip_vary on;'
+              echo '    gzip_proxied any;'
+              echo '    gzip_comp_level 6;'
+              echo '    gzip_min_length 1024;'
+              echo '    gzip_types text/plain text/css application/json application/javascript text/javascript application/xml text/xml image/svg+xml;'
+              echo
+              echo "    root $CURRENT_LINK;"
+              echo "    index index.html;"
+              echo
+              echo '    location = /.env { return 404; }'
+              echo '    location ^~ /.git/ { return 404; }'
+              echo '    location ^~ /.svn/ { return 404; }'
+              echo '    location ^~ /.hg/ { return 404; }'
+              echo '    location ^~ /vendor/ { return 404; }'
+              echo '    location ^~ /cgi-bin/ { return 404; }'
+              echo '    location ^~ /wp-admin/ { return 404; }'
+              echo '    location ^~ /wp-content/ { return 404; }'
+              echo '    location ^~ /wp-includes/ { return 404; }'
+              echo '    location ^~ /phpunit/ { return 404; }'
+              echo '    location ^~ /phpMyAdmin/ { return 404; }'
+              echo '    location ^~ /.well-known/pki-validation/ { return 404; }'
+              echo '    location ~* \\.(php|asp|aspx|jsp|cgi|pl|sh)$ { return 404; }'
+              echo
+              echo "    location = /index.html {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
+              echo '        try_files $uri =404;'
+              echo "    }"
+              echo
+              echo "    location ~* \\.(js|mjs|css|map|json|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$ {"
+              echo '        try_files $uri =404;'
+              echo '        expires 1y;'
+              echo '        add_header Cache-Control "public, immutable" always;'
+              echo "    }"
+              echo
+              echo "    location / {"
+              echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
+              echo '        try_files $uri $uri/ /index.html;'
+              echo "    }"
+              echo
+              echo "    location /api/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/api/;"
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Real-IP $remote_addr;'
+              echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "        proxy_read_timeout 300s;"
+              echo "        client_max_body_size 200M;"
+              echo "    }"
+              echo
+              echo "    location /functions/v1/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/functions/v1/;"
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Real-IP $remote_addr;'
+              echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "        proxy_read_timeout 300s;"
+              echo "        client_max_body_size 200M;"
+              echo "    }"
+              echo
+              echo "    location /socket.io/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/socket.io/;"
+              echo "        proxy_http_version 1.1;"
+              echo '        proxy_set_header Upgrade $http_upgrade;'
+              echo '        proxy_set_header Connection "upgrade";'
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "        proxy_read_timeout 300s;"
+              echo "    }"
+              echo
+              echo "    location /storage/ {"
+              echo "        proxy_pass http://$BACKEND_PROXY_HOST/storage/;"
+              echo '        proxy_set_header Host $host;'
+              echo '        proxy_set_header X-Real-IP $remote_addr;'
+              echo '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+              echo '        proxy_set_header X-Forwarded-Proto $scheme;'
+              echo "    }"
+              echo "}"
+            } >/tmp/interview-nginx.conf
+          fi
+          sudo mv /tmp/interview-nginx.conf /etc/nginx/sites-available/interview
+          sudo ln -sf /etc/nginx/sites-available/interview /etc/nginx/sites-enabled/interview
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
+          sudo nginx -t
+          sudo systemctl reload nginx
+          frontend_check() {
+            if has_ssl_cert; then
+              curl -kfsS --max-time 10 \
+                --resolve "$APP_DOMAIN:443:127.0.0.1" \
+                "https://$APP_DOMAIN/index.html" >/dev/null
+            else
+              curl -fsS --max-time 10 http://127.0.0.1/index.html >/dev/null
             fi
           }
+          if ! frontend_check || ! curl -fsS --max-time 10 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
+            if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+              echo "Rolling back frontend to stable release $STABLE_RELEASE"
+              sudo ln -sfn "$STABLE_RELEASE" "$CURRENT_LINK"
+              sudo nginx -t
+              sudo systemctl reload nginx
+            fi
+            exit 1
+          fi
+          EOFSSH
+          } 2>&1 | tee >(log_to_remote)
 
-      ####################################################################
-      # CONTINUE YOUR EXISTING DEPLOYMENT STEPS
-      ####################################################################
-
-      - name: Sync backend source
-        if: needs.authorize_and_prepare.outputs.backend == 'true'
+      - name: 5. Deploy and Verify - Report Deployment Status
+        env:
+          FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
+          FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
         run: |
-          echo "Sync backend here..."
+          {
+            echo "### Deployment Status"
+            echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
+            echo "- Selected release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
+            echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Configure backend and restart
-        if: needs.authorize_and_prepare.outputs.backend == 'true'
+          if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+            curl -fsS --max-time 15 "$FRONTEND_ORIGIN/" >/dev/null
+            echo "- Frontend check: success ($FRONTEND_ORIGIN/)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ] || [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+            curl -fsS --max-time 15 "$FRONTEND_ORIGIN/api/health" >/dev/null
+            echo "- Backend health check: success ($FRONTEND_ORIGIN/api/health)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
+            echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 5. Deploy and Verify - Promote Stable Release
+        if: success()
         run: |
-          echo "Restart backend here..."
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Promote stable release ==="
 
-      - name: Upload frontend build
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+                set -e
+                APP_ROOT="/apps/backend"
+                CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
+                if [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                  ln -sfn "$CURRENT_RELEASE" "$APP_ROOT/stable"
+                fi
+              '
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+                set -e
+                FRONTEND_ROOT="/var/www/interview"
+                CURRENT_RELEASE="$(readlink -f "$FRONTEND_ROOT/current" || true)"
+                if [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                  sudo ln -sfn "$CURRENT_RELEASE" "$FRONTEND_ROOT/stable"
+                fi
+              '
+            fi
+
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+            set -e
+            mkdir -p /apps/deployments/stable
+            cat > /apps/deployments/stable/latest.json <<EOFJSON
+            {
+              "release_sha": "${{ needs.resolve_release.outputs.release_sha }}",
+              "requested_ref": "${{ needs.authorize_and_prepare.outputs.requested_ref }}",
+              "deploy_target": "${{ needs.authorize_and_prepare.outputs.deploy_target }}",
+              "frontend": "${{ needs.authorize_and_prepare.outputs.frontend }}",
+              "backend": "${{ needs.authorize_and_prepare.outputs.backend }}",
+              "database": "${{ needs.authorize_and_prepare.outputs.database }}",
+              "deployed_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            }
+            EOFJSON
+            EOFSSH
+
+            if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+                "rm -f '/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump'"
+            fi
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Roll Back To Last Stable Release
+        if: failure()
         run: |
-          echo "Upload frontend here..."
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Roll back to last stable release ==="
 
-      - name: Publish frontend
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+                set -e
+                FRONTEND_ROOT="/var/www/interview"
+                STABLE_RELEASE="$(readlink -f "$FRONTEND_ROOT/stable" || true)"
+                if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+                  echo "Restoring frontend stable release $STABLE_RELEASE"
+                  sudo ln -sfn "$STABLE_RELEASE" "$FRONTEND_ROOT/current"
+                  sudo nginx -t
+                  sudo systemctl reload nginx
+                fi
+              '
+            fi
+
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+            set -e
+            APP_ROOT="/apps/backend"
+            CURRENT_LINK="$APP_ROOT/current"
+            STABLE_LINK="$APP_ROOT/stable"
+            VENV_DIR="$APP_ROOT/venv"
+            BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
+
+            find_pg_bindir() {
+              export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+              SERVER_MAJOR="$(
+                psql \
+                  --host="${{ secrets.DB_HOST }}" \
+                  --port="${{ secrets.DB_PORT }}" \
+                  --username="${{ secrets.DB_USER }}" \
+                  --dbname="${{ secrets.DB_NAME }}" \
+                  --tuples-only \
+                  --no-align \
+                  --command="SHOW server_version;" | cut -d. -f1 | tr -d "[:space:]"
+              )"
+              echo "/usr/lib/postgresql/$SERVER_MAJOR/bin"
+            }
+
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ]; then
+              STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || true)"
+              if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+                echo "Restoring backend stable release $STABLE_RELEASE"
+                ln -sfn "$STABLE_RELEASE" "$CURRENT_LINK"
+              fi
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ] && [ -f "$BACKUP_FILE" ]; then
+              PG_BINDIR="$(find_pg_bindir)"
+              pm2 delete backend >/dev/null 2>&1 || true
+              "$PG_BINDIR/pg_restore" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --clean \
+                --if-exists \
+                --no-owner \
+                --no-privileges \
+                "$BACKUP_FILE"
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ] || [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
+              TARGET_RELEASE="$(readlink -f "$CURRENT_LINK" || true)"
+              if [ -n "$TARGET_RELEASE" ] && [ -d "$TARGET_RELEASE" ]; then
+                pm2 delete backend >/dev/null 2>&1 || true
+                AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+                  pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+                pm2 save
+                sleep 5
+                curl -f http://127.0.0.1:5000/api/health
+              fi
+            fi
+            EOFSSH
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Maintain Log Archives
+        if: always()
         run: |
-          echo "Publish frontend here..."
-
-      - name: Verify deployed endpoints
-        run: |
-          echo "Verification complete"
-
-  mark_latest_stable:
-    name: 4. Mark Latest Stable
-    runs-on: ubuntu-latest
-
-    needs:
-      - authorize_and_prepare
-      - deploy_and_verify
-
-    if: needs.deploy_and_verify.result == 'success'
-
-    steps:
-
-      - name: Mark stable
-        run: |
-          echo "Deployment marked stable"
-
-  rollback_to_last_stable:
-    name: 5. Roll Back to Last Stable
-    runs-on: ubuntu-latest
-
-    needs:
-      - authorize_and_prepare
-      - deploy_and_verify
-
-    if: always() && needs.deploy_and_verify.result == 'failure'
-
-    steps:
-
-      - name: Rollback
-        run: |
-          echo "Rollback triggered"
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Maintain log archives ==="
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+              "LOG_ROOT=/apps/logs FORCE_ARCHIVE=0 KEEP_DEPLOY_LOGS=8 KEEP_PM2_LINES=5000 bash -s" \
+              < scripts/log-maintenance.sh
+          } 2>&1 | tee >(log_to_remote)
