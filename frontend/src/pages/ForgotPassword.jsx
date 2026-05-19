@@ -1,28 +1,40 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { FiArrowLeft, FiKey, FiMail } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
 import { forgotPassword, isValidEmail } from '../lib/authClient';
+import { buildLoginCoachState } from '../utils/authCoachNotice';
 
 function ForgotPassword() {
+  const navigate = useNavigate();
   useTheme();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [infoMsg, setInfoMsg] = useState('');
-  const [resetLink, setResetLink] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setErrorMsg('');
-    setInfoMsg('');
-    setResetLink('');
 
     try {
+      const normalizedEmail = email.toLowerCase().trim();
       const data = await forgotPassword(email);
-      setInfoMsg(data.message || 'If an account exists, a reset link has been sent.');
-      setResetLink(data.reset_link || '');
+      navigate('/login', {
+        replace: true,
+        state: buildLoginCoachState({
+          identifier: normalizedEmail,
+          notice: {
+            tone: 'success',
+            title: 'Reset link sent',
+            message: data.message || `If an account exists for ${normalizedEmail}, a password reset link has been sent.`,
+            actionLabel: data.reset_link ? 'Open reset link' : '',
+            actionHref: data.reset_link || '',
+          },
+        }),
+      });
     } catch (error) {
       setErrorMsg(error.message || 'Unable to send password reset link.');
     } finally {
@@ -33,64 +45,60 @@ function ForgotPassword() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4 py-8">
-        <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)]">
-          <h2 className="text-3xl font-bold text-center mb-3 text-[var(--color-primary)]">Forgot Password</h2>
-          <p className="text-sm text-center text-[var(--color-text-secondary)] mb-6">
-            Enter your signup email and we&apos;ll send a reset link.
+      <AuthSceneShell
+        variant="night"
+        badge="Reset access"
+        icon={<FiKey size={18} />}
+        title="Forgot your password?"
+        description="Enter the email tied to your account and we’ll send a secure reset link so you can get back into your interview workspace."
+        footer={(
+          <p className="text-sm text-center text-[var(--color-text-secondary)]">
+            Remembered it?{' '}
+            <Link to="/login" className="auth-scene-link-inline">
+              Back to login
+            </Link>
           </p>
+        )}
+      >
+        {errorMsg && (
+          <div className="auth-scene-alert auth-scene-alert-error">
+            {errorMsg}
+          </div>
+        )}
 
-          {errorMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm text-center">
-              {errorMsg}
-            </div>
-          )}
-
-          {infoMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm text-center">
-              <p>{infoMsg}</p>
-              {resetLink && (
-                <a
-                  href={resetLink}
-                  className="mt-2 inline-block font-semibold text-[var(--color-primary)] hover:underline break-all"
-                >
-                  Open reset link
-                </a>
-              )}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Email</label>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label className="auth-scene-label">Email</label>
+            <div className="auth-scene-input-wrap">
+              <span className="auth-scene-input-icon">
+                <FiMail size={16} />
+              </span>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
+                className="auth-scene-input"
                 placeholder="you@example.com"
               />
             </div>
+          </div>
 
-            <button
-              type="submit"
-              disabled={loading || !isValidEmail(email.trim())}
-              className="w-full py-2.5 rounded-lg bg-[var(--color-primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50"
-            >
-              {loading ? 'Sending...' : 'Send reset link'}
-            </button>
-          </form>
+          <button
+            type="submit"
+            disabled={loading || !isValidEmail(email.trim())}
+            className="auth-scene-submit"
+          >
+            {loading ? 'Sending...' : 'Send reset link'}
+          </button>
+        </form>
 
-          <p className="text-sm text-center mt-6 text-[var(--color-text-secondary)]">
-            Remembered it?{' '}
-            <Link to="/login" className="text-[var(--color-primary)] hover:underline">
-              Back to login
-            </Link>
-          </p>
-        </div>
-      </div>
+        <Link to="/login" className="auth-scene-link-row">
+          <FiArrowLeft size={15} />
+          <span>Return to sign in</span>
+        </Link>
+      </AuthSceneShell>
     </>
   );
 }

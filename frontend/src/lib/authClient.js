@@ -2,18 +2,58 @@ import { getApiBaseUrl } from '../utils/apiConfig';
 
 const API_BASE = getApiBaseUrl();
 
+const decodeJwtPayload = (token) => {
+  if (!token) return null;
+  try {
+    const [, payload] = token.split('.');
+    if (!payload) return null;
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+};
+
+export const isTokenExpired = (token, clockSkewSeconds = 30) => {
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) {
+    return false;
+  }
+  return payload.exp * 1000 <= Date.now() + clockSkewSeconds * 1000;
+};
+
 const normalizeUser = (user) => {
   if (!user) return null;
+  const full_name = user.full_name || user.user_metadata?.full_name || '';
+  const nickname = user.nickname || user.user_metadata?.nickname || '';
+  const avatar_url = user.avatar_url || user.user_metadata?.avatar_url || '';
+  const date_of_birth = user.date_of_birth || user.user_metadata?.date_of_birth || '';
   return {
     ...user,
+    full_name,
+    nickname,
+    avatar_url,
+    date_of_birth,
     user_metadata: {
-      full_name: user.full_name || user.user_metadata?.full_name || '',
-      avatar_url: user.avatar_url || user.user_metadata?.avatar_url || '',
+      ...user.user_metadata,
+      full_name,
+      nickname,
+      avatar_url,
+      date_of_birth,
     },
   };
 };
 
-export const getAccessToken = () => localStorage.getItem('ic_token');
+export const getAccessToken = () => {
+  const token = localStorage.getItem('ic_token');
+  if (!token) return null;
+  if (isTokenExpired(token)) {
+    clearStoredAuth();
+    return null;
+  }
+  return token;
+};
 
 export const getStoredUser = () => {
   try {
@@ -188,6 +228,9 @@ export const forgotUsername = async (email) => {
     body: JSON.stringify({ email: email.toLowerCase().trim() }),
   });
   const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || data.message || 'Unable to recover username right now');
+  }
   return data;
 };
 

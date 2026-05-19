@@ -1,0 +1,52 @@
+name: Log Maintenance
+
+on:
+  schedule:
+    - cron: '0 4 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LOG_ROOT: /var/www/interview-logs
+
+jobs:
+  archive_and_clean_logs:
+    name: Archive and clean deployment logs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+
+      - name: Run log maintenance on the log host
+        run: |
+          set -euo pipefail
+          chmod +x scripts/log-maintenance.sh
+          rsync -avz \
+            -e "ssh $SSH_OPTS" \
+            scripts/log-maintenance.sh \
+            ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/log-maintenance.sh
+
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} \
+            "LOG_ROOT='${{ env.LOG_ROOT }}' SIZE_LIMIT_BYTES='2147483648' RETENTION_DAYS='30' KEEP_RECENT_LOGS='10' KEEP_ARCHIVES='6' bash /tmp/log-maintenance.sh" \
+            | tee "$RUNNER_TEMP/log-maintenance.json"
+
+          {
+            echo "## Log Maintenance"
+            echo "- Log root: \`${{ env.LOG_ROOT }}\`"
+            echo "- Threshold: \`2147483648\` bytes"
+            echo "- Cleanup schedule: monthly"
+            echo ""
+            echo '```json'
+            cat "$RUNNER_TEMP/log-maintenance.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

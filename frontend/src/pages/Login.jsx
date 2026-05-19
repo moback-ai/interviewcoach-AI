@@ -1,16 +1,45 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { FiEye, FiEyeOff } from 'react-icons/fi';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import {
+  FiArrowRight,
+  FiCheckCircle,
+  FiEye,
+  FiEyeOff,
+  FiInfo,
+  FiMail,
+  FiX,
+} from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import AuthSimpleShell from '../components/auth/AuthSimpleShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail, isValidUsername } from '../lib/authClient';
 import { performSmartRedirect } from '../utils/smartRouting';
 import { trackEvents } from '../services/mixpanel';
 import { checkEmailAvailability } from '../utils/emailAvailability';
+import { createAuthCoachNotice, getDefaultLoginCoachNotice } from '../utils/authCoachNotice';
+
+const NOTICE_META = {
+  success: {
+    label: 'Ready',
+    Icon: FiCheckCircle,
+    panelClass: 'auth-simple-alert-success',
+  },
+  warning: {
+    label: 'Action needed',
+    Icon: FiMail,
+    panelClass: 'auth-simple-alert-warning',
+  },
+  info: {
+    label: 'Secure access',
+    Icon: FiInfo,
+    panelClass: 'auth-simple-alert-info',
+  },
+};
 
 function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   useTheme();
   const { login, resendVerificationEmail } = useAuth();
   const [identifier, setIdentifier] = useState('');
@@ -18,17 +47,90 @@ function Login() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [infoMsg, setInfoMsg] = useState('');
+  const [coachNotice, setCoachNotice] = useState(() => getDefaultLoginCoachNotice());
 
   const normalizedIdentifier = identifier.toLowerCase().trim();
   const looksLikeEmail = normalizedIdentifier.includes('@');
   const identifierIsValid = looksLikeEmail ? isValidEmail(normalizedIdentifier) : isValidUsername(normalizedIdentifier);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  const requestedNextPath = new URLSearchParams(location.search).get('next');
+  const stateRedirectPath = typeof location.state?.from === 'string' ? location.state.from : '';
+  const nextPath = (requestedNextPath && requestedNextPath.startsWith('/'))
+    ? requestedNextPath
+    : (stateRedirectPath && stateRedirectPath.startsWith('/'))
+      ? stateRedirectPath
+      : '';
+
+  const noticeMeta = NOTICE_META[coachNotice.tone] || NOTICE_META.info;
+  const NoticeIcon = noticeMeta.Icon;
+
+  useEffect(() => {
+    const incomingNotice = location.state?.authNotice;
+    const incomingIdentifier = typeof location.state?.prefillIdentifier === 'string'
+      ? location.state.prefillIdentifier
+      : '';
+
+    if (!incomingNotice?.message && !incomingIdentifier) {
+      return;
+    }
+
+    if (incomingIdentifier) {
+      setIdentifier((currentValue) => currentValue || incomingIdentifier);
+    }
+
+    if (incomingNotice?.message) {
+      setCoachNotice(incomingNotice);
+      setErrorMsg('');
+    }
+
+    const nextState = typeof location.state?.from === 'string'
+      ? { from: location.state.from }
+      : null;
+
+    navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+      },
+      {
+        replace: true,
+        state: nextState,
+      }
+    );
+  }, [location.pathname, location.search, location.state, navigate]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('expired') !== 'true') {
+      return;
+    }
+
+    setCoachNotice(createAuthCoachNotice({
+      tone: 'warning',
+      title: 'Session expired',
+      message: 'Your session has expired. Please log in again.',
+    }));
+    setErrorMsg('');
+
+    params.delete('expired');
+    const search = params.toString();
+
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+      },
+      {
+        replace: true,
+        state: location.state ?? null,
+      }
+    );
+  }, [location.pathname, location.search, location.state, navigate]);
+
+  const handleLogin = async (event) => {
+    event.preventDefault();
     setLoading(true);
     setErrorMsg('');
-    setInfoMsg('');
 
     try {
       const data = await login(identifier, password);
@@ -39,11 +141,20 @@ function Login() {
         login_timestamp: new Date().toISOString(),
       });
 
-      performSmartRedirect(data.user, navigate);
+      if (nextPath) {
+        navigate(nextPath, { replace: true });
+      } else {
+        performSmartRedirect(data.user, navigate);
+      }
     } catch (error) {
       const message = (error.message || '').toLowerCase();
       if (message.includes('verify your email')) {
         setErrorMsg('Your account is not verified yet. Check your inbox or resend the verification email below.');
+        setCoachNotice(createAuthCoachNotice({
+          tone: 'warning',
+          title: 'Verification required',
+          message: 'Your account needs a confirmed email before sign-in. Resend the verification email and then come right back here.',
+        }));
       } else if (message.includes('invalid credentials')) {
         try {
           if (!looksLikeEmail) {
@@ -76,11 +187,15 @@ function Login() {
     setErrorMsg('');
     try {
       const data = await resendVerificationEmail(normalizedIdentifier);
-      setInfoMsg(
-        data.delivery === 'manual'
-          ? 'A new verification link was created. SMTP is not configured yet, so use the link returned by the backend response.'
-          : 'Verification email sent again. Please check your inbox.'
-      );
+      setCoachNotice(createAuthCoachNotice({
+        tone: 'success',
+        title: 'Confirmation mail sent',
+        message: data.delivery === 'manual'
+          ? 'A fresh confirmation link is ready. Email delivery is not configured yet, so use the direct link below to verify now.'
+          : `A fresh confirmation email was sent to ${normalizedIdentifier}. Check your inbox and spam folder, then sign in here.`,
+        actionLabel: data.verification_link ? 'Open confirmation link' : '',
+        actionHref: data.verification_link || '',
+      }));
     } catch (error) {
       setErrorMsg(error.message || 'Unable to resend verification email.');
     } finally {
@@ -91,95 +206,124 @@ function Login() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4 py-8">
-        <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)]">
-          <h2 className="text-3xl font-bold text-center mb-6 text-[var(--color-primary)]">Welcome Back</h2>
+      <AuthSimpleShell
+        eyebrow="Sign in"
+        title="Welcome back"
+        description="Use your email or username and password to continue to your interview workspace."
+        footer={(
+          <p className="auth-simple-footer-copy">
+            Don&apos;t have an account?{' '}
+            <Link to="/signup" className="auth-simple-link">
+              Create one
+            </Link>
+          </p>
+        )}
+      >
+        {errorMsg ? (
+          <div className="auth-simple-alert auth-simple-alert-error">
+            <p>{errorMsg}</p>
+          </div>
+        ) : null}
 
-          {errorMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm text-center">
-              {errorMsg}
+        {!errorMsg && coachNotice.kind !== 'default' ? (
+          <div className={`auth-simple-alert ${noticeMeta.panelClass}`}>
+            <div className="auth-simple-alert-top">
+              <span className="auth-simple-alert-chip">
+                <NoticeIcon size={14} />
+                {noticeMeta.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCoachNotice(getDefaultLoginCoachNotice())}
+                className="auth-simple-alert-close"
+                aria-label="Dismiss sign-in notice"
+              >
+                <FiX size={14} />
+              </button>
             </div>
-          )}
+            {coachNotice.title ? <p className="auth-simple-alert-title">{coachNotice.title}</p> : null}
+            <p className="auth-simple-alert-body">{coachNotice.message}</p>
+            {coachNotice.actionHref && coachNotice.actionLabel ? (
+              <a href={coachNotice.actionHref} className="auth-simple-alert-link">
+                <span>{coachNotice.actionLabel}</span>
+                <FiArrowRight size={15} />
+              </a>
+            ) : null}
+          </div>
+        ) : null}
 
-          {infoMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm text-center">
-              {infoMsg}
-            </div>
-          )}
+        <form onSubmit={handleLogin} className="auth-simple-form">
+          <div className="auth-simple-field">
+            <label htmlFor="auth-login-identifier" className="auth-simple-label">Email or Username</label>
+            <input
+              id="auth-login-identifier"
+              type="text"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              required
+              disabled={loading}
+              autoComplete="username"
+              className="auth-simple-input"
+              placeholder="you@example.com or your.username"
+            />
+            {identifier && !identifierIsValid ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Enter a valid email or a username with at least 3 characters.
+              </p>
+            ) : null}
+          </div>
 
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Email or Username</label>
+          <div className="auth-simple-field">
+            <label htmlFor="auth-login-password" className="auth-simple-label">Password</label>
+            <div className="auth-simple-input-wrap">
               <input
-                type="text"
-                value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
+                id="auth-login-password"
+                type={passwordVisible ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
-                placeholder="you@example.com or your.username"
+                autoComplete="current-password"
+                className="auth-simple-input auth-simple-input-with-button"
+                placeholder="Enter your password"
               />
-              {identifier && !identifierIsValid && (
-                <p className="text-xs text-red-500 mt-1">Enter a valid email or a username with at least 3 valid characters.</p>
-              )}
+              <button
+                type="button"
+                onClick={() => setPasswordVisible((prev) => !prev)}
+                className="auth-simple-password-toggle"
+                aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+              >
+                {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+              </button>
             </div>
+          </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Password</label>
-              <div className="relative">
-                <input
-                  type={passwordVisible ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  disabled={loading}
-                  className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition pr-10"
-                  placeholder="Enter your password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setPasswordVisible((prev) => !prev)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]"
-                >
-                  {passwordVisible ? <FiEyeOff /> : <FiEye />}
-                </button>
-              </div>
-              <div className="mt-2 flex items-center justify-between text-sm">
-                <Link to="/forgot-password" className="text-[var(--color-primary)] hover:underline">
-                  Forgot password?
-                </Link>
-                <Link to="/forgot-username" className="text-[var(--color-primary)] hover:underline">
-                  Forgot username?
-                </Link>
-              </div>
-            </div>
+          <button
+            type="submit"
+            disabled={loading || !identifierIsValid || !password}
+            className="auth-simple-submit"
+          >
+            {loading ? 'Signing in...' : 'Sign in'}
+          </button>
+        </form>
 
-            <button
-              type="submit"
-              disabled={loading || !identifierIsValid || !password}
-              className="w-full py-2.5 rounded-lg bg-[var(--color-primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50"
-            >
-              {loading ? 'Signing in...' : 'Login'}
-            </button>
-          </form>
-
+        <div className="auth-simple-link-grid">
+          <Link to="/forgot-password" className="auth-simple-link">
+            Forgot password?
+          </Link>
+          <Link to="/forgot-username" className="auth-simple-link">
+            Forgot username?
+          </Link>
           <button
             type="button"
             onClick={handleResend}
             disabled={loading}
-            className="w-full mt-4 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] font-medium hover:bg-[var(--color-input-bg)] transition disabled:opacity-50"
+            className="auth-simple-link auth-simple-link-button"
           >
-            Resend verification email
+            Resend verification
           </button>
-
-          <p className="text-sm text-center mt-6 text-[var(--color-text-secondary)]">
-            Don&apos;t have an account?{' '}
-            <Link to="/signup" className="text-[var(--color-primary)] hover:underline">
-              Create one
-            </Link>
-          </p>
         </div>
-      </div>
+      </AuthSimpleShell>
     </>
   );
 }

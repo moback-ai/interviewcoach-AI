@@ -1,0 +1,37 @@
+name: Monthly Log Cleanup
+
+on:
+  schedule:
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup_logs:
+    name: Archive and trim production logs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+
+      - name: Run monthly zipped cleanup
+        run: |
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+            "LOG_ROOT=/apps/logs FORCE_ARCHIVE=1 KEEP_DEPLOY_LOGS=8 KEEP_PM2_LINES=5000 bash -s" \
+            < scripts/log-maintenance.sh | tee "$RUNNER_TEMP/log-cleanup.txt"
+
+          {
+            echo "## Monthly Log Cleanup"
+            echo "- Host: \`${{ secrets.BACKEND_HOST }}\`"
+            echo "- Cleanup mode: forced monthly archive"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/log-cleanup.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

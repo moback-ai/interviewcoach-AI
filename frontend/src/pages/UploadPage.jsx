@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
 import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
 import { useTheme } from '../hooks/useTheme';
@@ -374,6 +375,15 @@ function UploadPage() {
         throw new Error(`Failed to generate questions: ${questionsResult.message}`);
       }
 
+      const generationDebug = questionsResult.debug || {};
+      const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
+      const usedLocalFallback = generationDebug.generator === 'local_fallback';
+      const generationWarning = usedLocalFallback
+        ? 'The live backend fell back to template-based generation because Ollama was unavailable or the configured model was missing.'
+        : fallbackAnswerCount > 0
+          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+          : '';
+
       // Step 4: Save questions to database via edge function
       console.log('[DEBUG] Step 4: Saving questions to database...');
       const questionsSaveResult = await saveQuestionsToDatabase(
@@ -422,14 +432,18 @@ function UploadPage() {
       // Show success modal instead of alert
       setSuccessModal({
         isOpen: true,
-        title: 'Upload & Generation Complete!',
-        message: `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
+        title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
+        message: generationWarning
+          ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
+          : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
         details: [
           `Question Set: ${savedQuestionSet}`,
           `Total Questions: ${uniqueQuestions.size}`,
           `Resume: ${resume.name}`,
           `Job Title: ${jobTitle}`,
-          `Status: Ready for interview preparation`
+          generationWarning
+            ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
+            : 'Status: Ready for interview preparation'
         ]
       });
 
@@ -664,7 +678,7 @@ function UploadPage() {
   return (
     <>
       <Navbar disableNavigation={isCriticalOperationInProgress} />
-      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center">
+      <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center">
         <div className="w-full max-w-4xl bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 md:p-10">
           <div className="text-center mb-10">
             <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-4">
@@ -1113,7 +1127,7 @@ function UploadPage() {
           </form>
           </motion.div>
         </div>
-      </div>
+      </PageWavesShell>
 
       {/* Success Modal */}
       <SuccessModal
