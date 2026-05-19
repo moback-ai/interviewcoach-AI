@@ -54,6 +54,7 @@ from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
+from INTERVIEW.Resumeparser import parse_job_description_file, classify_if_technical_role
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -1281,7 +1282,7 @@ def initialize_whisper():
     global whisper_model
     if whisper_model is not None:
         return
-    model_size = optional_env("WHISPER_MODEL", "base")
+    model_size = optional_env("WHISPER_MODEL", "large-v3")
     whisper_device = "cpu" if device == "mps" else device
     print(f"[INFO] Loading Whisper {model_size} on {whisper_device}...")
     try:
@@ -1408,6 +1409,11 @@ def health_check():
     })
 
 
+EMPTY_UPLOAD_READABLE_MESSAGE = (
+    "The uploaded resume appears to be empty or missing enough relevant information. Please upload a valid resume."
+)
+
+
 def extract_text_from_uploaded_document(file_path, ext):
     ext = ext.lower()
     if ext == 'txt':
@@ -1415,11 +1421,15 @@ def extract_text_from_uploaded_document(file_path, ext):
             return handle.read()
     if ext == 'pdf':
         import PyPDF2
+        from PyPDF2.errors import EmptyFileError
         text = []
-        with open(file_path, 'rb') as handle:
-            reader = PyPDF2.PdfReader(handle)
-            for page in reader.pages:
-                text.append(page.extract_text() or "")
+        try:
+            with open(file_path, 'rb') as handle:
+                reader = PyPDF2.PdfReader(handle)
+                for page in reader.pages:
+                    text.append(page.extract_text() or "")
+        except EmptyFileError:
+            raise ValueError(EMPTY_UPLOAD_READABLE_MESSAGE) from None
         return "\n".join(text)
     if ext == 'docx':
         try:
@@ -1477,24 +1487,19 @@ def summarize_job_description_text(raw_text):
     }
 
 
+def validate_job_description_text(job_description, min_chars=30, min_words=6, min_alpha_ratio=0.45):
+    from common.document_validation import validate_job_description_extracted_text
+    return validate_job_description_extracted_text(job_description)
+
+
+def validate_resume_text(resume_text):
+    from common.document_validation import validate_resume_text as _validate_resume_text
+    return _validate_resume_text(resume_text)
+
+
 def classify_job_description_is_technical(job_title, job_description):
-    haystack = f"{job_title} {job_description}".lower()
-    technical_keywords = [
-        'python', 'java', 'javascript', 'typescript', 'sql', 'api', 'backend', 'frontend',
-        'full stack', 'fullstack', 'developer', 'engineer', 'devops', 'sre', 'automation',
-        'selenium', 'aws', 'cloud', 'kubernetes', 'docker', 'microservices', 'react',
-        'node', 'coding', 'programming', 'software', 'data engineer', 'machine learning',
-        'qa automation', 'test automation', 'ci/cd'
-    ]
-    non_technical_keywords = [
-        'sales', 'marketing', 'hr', 'human resources', 'recruiter', 'customer support',
-        'business development', 'operations manager', 'office assistant'
-    ]
-    if any(keyword in haystack for keyword in technical_keywords):
-        return True
-    if any(keyword in haystack for keyword in non_technical_keywords):
-        return False
-    return False
+    from common.role_classification import classify_job_description_is_technical as _classify
+    return _classify(job_title, job_description)
 
 
 def infer_candidate_name_from_text(raw_text):
@@ -1938,9 +1943,13 @@ def create_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     data = request.get_json() or {}
+    jd_description = (data.get('description') or "").strip()
+    is_valid_jd, jd_validation_error = validate_job_description_text(jd_description)
+    if not is_valid_jd:
+        return jsonify({"success": False, "message": jd_validation_error}), 400
     jd = execute(
         "INSERT INTO job_descriptions (user_id, title, description, technical) VALUES (%s,%s,%s,%s) RETURNING *",
-        (request.user['id'], data.get('title'), data.get('description'), data.get('technical', True))
+        (request.user['id'], data.get('title'), jd_description, data.get('technical', True))
     )
     return jsonify({"success": True, "data": dict(jd)}), 201
 
@@ -2184,10 +2193,41 @@ def parse_job_description():
             file.save(tf.name)
             temp_path = tf.name
         try:
-            result = summarize_job_description_text(extract_text_from_uploaded_document(temp_path, ext))
-            job_title = result.get('job_title', '')
-            job_description = result.get('job_description', '')
-            is_technical = classify_job_description_is_technical(job_title, job_description)
+            try:
+                extracted_text = extract_text_from_uploaded_document(temp_path, ext)
+            except ValueError as ve:
+                return jsonify({"success": False, "message": str(ve)}), 400
+            is_valid_jd, jd_validation_error = validate_job_description_text(extracted_text)
+            if not is_valid_jd:
+                return jsonify({"success": False, "message": jd_validation_error}), 400
+
+            job_title = ""
+            job_description = ""
+            is_technical = False
+            # 1) Primary path: LLM JD parsing with technical classification
+            try:
+                if not ollama_ready():
+                    raise RuntimeError("Ollama is unavailable")
+                llm_result = parse_job_description_file(temp_path, model="llama3")
+                job_title = (llm_result.get("job_title") or "").strip()
+                job_description = (llm_result.get("job_description") or "").strip()
+                if job_title and job_description:
+                    try:
+                        is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
+                    except Exception as classify_error:
+                        print(f"[WARN] LLM technical classification failed, using heuristic fallback: {classify_error}")
+                        is_technical = classify_job_description_is_technical(job_title, job_description)
+                else:
+                    raise RuntimeError("LLM parser returned empty title/description")
+            # 2) Fallback path: keep existing extraction + summarization flow
+            except Exception as llm_error:
+                print(f"[WARN] LLM JD parsing failed; falling back to local summarizer: {llm_error}")
+                fallback_result = summarize_job_description_text(
+                    extracted_text
+                )
+                job_title = (fallback_result.get("job_title") or "").strip()
+                job_description = (fallback_result.get("job_description") or "").strip()
+                is_technical = classify_job_description_is_technical(job_title, job_description)
             return jsonify({"success": True, "data": {
                 "job_title": job_title,
                 "job_description": job_description,
@@ -2211,8 +2251,20 @@ def classify_technical_role():
     job_description = data.get('job_description', '').strip()
     if not job_title or not job_description:
         return jsonify({"success": False, "message": "job_title and job_description required"}), 400
+    is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
+    if not is_valid_jd:
+        return jsonify({"success": False, "message": jd_validation_error}), 400
     try:
-        is_technical = classify_job_description_is_technical(job_title, job_description)
+        is_technical = False
+        try:
+            if ollama_ready():
+                from INTERVIEW.Resumeparser import classify_if_technical_role
+                is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
+            else:
+                raise RuntimeError("Ollama is unavailable")
+        except Exception as classify_error:
+            print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
+            is_technical = classify_job_description_is_technical(job_title, job_description)
         return jsonify({"success": True, "is_technical": is_technical})
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
@@ -2230,10 +2282,13 @@ def generate_questions():
     try:
         data = request.get_json() or {}
         resume_url = data.get('resume_url')
-        job_description = data.get('job_description')
+        job_description = (data.get('job_description') or "").strip()
         job_title = data.get('job_title')
         if not all([resume_url, job_description, job_title]):
             return jsonify({"success": False, "message": "resume_url, job_description, job_title required"}), 400
+        is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
+        if not is_valid_jd:
+            return jsonify({"success": False, "message": jd_validation_error}), 400
 
         # Download resume from local storage or URL
         public_storage_url = require_env("PUBLIC_STORAGE_URL")
@@ -2253,12 +2308,13 @@ def generate_questions():
             temp_resume = tf.name
 
         try:
-            resume_text = extract_text_from_uploaded_document(temp_resume, ext)
-            if not resume_text or not resume_text.strip():
-                return jsonify({
-                    "success": False,
-                    "message": "Resume is empty. Please upload a resume with readable content before generating questions."
-                }), 400
+            try:
+                resume_text = extract_text_from_uploaded_document(temp_resume, ext)
+            except ValueError as ve:
+                return jsonify({"success": False, "message": str(ve)}), 400
+            is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
+            if not is_valid_resume:
+                return jsonify({"success": False, "message": resume_validation_error}), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
             try:

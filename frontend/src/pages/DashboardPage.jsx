@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
@@ -787,9 +788,10 @@ function DashboardPage() {
         </div>
       </PageWavesShell>
 
-      {/* Job Description Modal */}
-      {isModalOpen && modalContent && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+      {/* Job Description Modal — portaled so fixed positioning is not trapped by App route motion wrapper */}
+      {isModalOpen && modalContent && typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-2 sm:p-4">
           <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg max-w-xs sm:max-w-md md:max-w-2xl w-full max-h-[90vh] sm:max-h-[80vh] overflow-hidden shadow-xl">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-3 sm:p-4 md:p-6 border-b border-[var(--color-border)]">
@@ -825,12 +827,14 @@ function DashboardPage() {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
 
-      {/* ✅ NEW: Question Generation Settings Modal */}
-      {showQuestionModal && selectedPairingForRegen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      {/* Question Generation Settings Modal (regenerate) — portaled for correct viewport centering */}
+      {showQuestionModal && selectedPairingForRegen && typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -1146,8 +1150,9 @@ function DashboardPage() {
               </button>
             </div>
           </motion.div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
 
 
       {/* Success Modal */}
