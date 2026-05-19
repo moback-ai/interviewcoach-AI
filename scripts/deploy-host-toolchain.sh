@@ -23,11 +23,8 @@ if ! command -v node >/dev/null 2>&1 || ! node --version | grep -q "v${NODE_MAJO
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
   sudo apt-get install -y -qq nodejs
 fi
-corepack enable || true
-if ! corepack prepare npm@latest --activate; then
-  sudo npm install -g "npm@latest"
-fi
-sudo npm install -g pm2@latest
+# Avoid corepack enable on EC2 — it needs write access to /usr/local/bin (EACCES as ubuntu).
+sudo npm install -g "npm@latest" pm2@latest
 
 echo "Node $(node --version)"
 echo "npm $(npm --version)"
