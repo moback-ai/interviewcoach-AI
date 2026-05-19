@@ -980,6 +980,7 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
       - name: 5. Deploy and Verify - Report Deployment Status
+        id: report_status
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
@@ -1074,7 +1075,7 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
       - name: 5. Deploy and Verify - Roll Back To Last Stable Release
-        if: failure()
+        if: failure() && steps.report_status.outcome == 'failure'
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
