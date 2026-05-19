@@ -40,19 +40,19 @@ const EFFECT_PRESETS = {
   },
   auth: {
     light: {
-      backgroundColor: 0x177fc9,
-      color: 0x1a8fe2,
-      shininess: 38,
-      waveHeight: 18,
-      waveSpeed: 0.85,
-      zoom: 1.05,
+      backgroundColor: 0x1565c0,
+      color: 0x2196f3,
+      shininess: 45,
+      waveHeight: 20,
+      waveSpeed: 1.15,
+      zoom: 1,
     },
     dark: {
-      backgroundColor: 0x0b406e,
-      color: 0x2196f3,
-      shininess: 34,
-      waveHeight: 15,
-      waveSpeed: 0.72,
+      backgroundColor: 0x0a2f52,
+      color: 0x1e88e5,
+      shininess: 40,
+      waveHeight: 18,
+      waveSpeed: 1,
       zoom: 0.98,
     },
   },
@@ -100,6 +100,7 @@ export default function AnimatedWavesLayer({
   className = '',
   preset = 'subtle',
   defer = true,
+  interactive = false,
 }) {
   const elementRef = useRef(null);
   const instanceRef = useRef(null);
@@ -125,8 +126,8 @@ export default function AnimatedWavesLayer({
       const baseOptions = {
         el: elementRef.current,
         THREE,
-        mouseControls: false,
-        touchControls: false,
+        mouseControls: interactive || preset === 'auth',
+        touchControls: interactive || preset === 'auth',
         gyroControls: false,
         minHeight: 200,
         minWidth: 200,
@@ -186,7 +187,7 @@ export default function AnimatedWavesLayer({
         instanceRef.current = null;
       }
     };
-  }, [defer, preset, theme]);
+  }, [defer, interactive, preset, theme]);
 
   return <div ref={elementRef} className={className} aria-hidden="true" />;
 }
