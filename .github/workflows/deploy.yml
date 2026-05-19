@@ -232,10 +232,14 @@ jobs:
       - name: 2. Build and Audit - Update npm
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
-          npm install --global npm@${{ env.NPM_VERSION_SPEC }}
+          NPM_TARGET="${{ env.NPM_VERSION_SPEC }}"
+          corepack enable
+          # Global `npm install -g npm@latest` can break on hosted runners (missing promise-retry).
+          corepack prepare "npm@${NPM_TARGET}" --activate
+          hash -r
           {
             echo "- Build runner Node.js: \`$(node --version)\`"
-            echo "- Build runner npm: \`$(npm --version)\`"
+            echo "- Build runner npm: \`$(npm --version)\` (via corepack, target: ${NPM_TARGET})"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 2. Build and Audit - Build Frontend
