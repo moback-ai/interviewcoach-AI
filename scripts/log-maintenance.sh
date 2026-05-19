@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LOG_ROOT="${LOG_ROOT:-/var/www/interview-logs}"
+LOG_ROOT="${LOG_ROOT:-/apps/logs}"
 LIVE_DIR="${LIVE_DIR:-$LOG_ROOT/live}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-$LOG_ROOT/archive}"
 SIZE_LIMIT_BYTES="${SIZE_LIMIT_BYTES:-2147483648}"
@@ -12,8 +12,23 @@ TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 mkdir -p "$LIVE_DIR" "$ARCHIVE_DIR"
 
+file_size_bytes() {
+  local target="$1"
+  if stat -c '%s' /dev/null >/dev/null 2>&1; then
+    stat -c '%s' "$target"
+  else
+    stat -f '%z' "$target"
+  fi
+}
+
 total_size() {
-  find "$LOG_ROOT" -type f -print0 2>/dev/null | xargs -0 stat -f '%z' 2>/dev/null | awk '{sum += $1} END {print sum + 0}'
+  local sum=0
+  local size
+  while IFS= read -r -d '' file; do
+    size="$(file_size_bytes "$file")"
+    sum=$((sum + size))
+  done < <(find "$LOG_ROOT" -type f -print0 2>/dev/null)
+  echo "$sum"
 }
 
 archive_single_file() {
@@ -52,14 +67,28 @@ done < <(
 
 current_size="$(total_size)"
 if (( current_size > SIZE_LIMIT_BYTES )); then
-  mapfile -d '' log_candidates < <(
-    find "$LIVE_DIR" -maxdepth 1 -type f -name '*.log' -print0 2>/dev/null |
-      xargs -0 stat -f '%m %N' 2>/dev/null |
-      sort -n |
-      while read -r _ path; do
-        printf '%s\0' "$path"
-      done
-  )
+  mapfile -d '' log_candidates < <(find "$LIVE_DIR" -maxdepth 1 -type f -name '*.log' -print0 2>/dev/null)
+
+  if stat -c '%Y %n' /dev/null >/dev/null 2>&1; then
+    mapfile -d '' log_candidates < <(
+      find "$LIVE_DIR" -maxdepth 1 -type f -name '*.log' -printf '%T@ %p\0' 2>/dev/null |
+        sort -z -n |
+        while IFS= read -r -d '' entry; do
+          printf '%s\0' "${entry#* }"
+        done
+    )
+  else
+    mapfile -d '' log_candidates < <(
+      find "$LIVE_DIR" -maxdepth 1 -type f -name '*.log' -print0 2>/dev/null |
+        while IFS= read -r -d '' path; do
+          printf '%s %s\0' "$(file_size_bytes "$path")" "$path"
+        done |
+        sort -z -n |
+        while IFS= read -r -d '' entry; do
+          printf '%s\0' "${entry#* }"
+        done
+    )
+  fi
 
   keep_from_index=0
   if (( ${#log_candidates[@]} > KEEP_RECENT_LOGS )); then

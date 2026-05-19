@@ -8,11 +8,12 @@ const LOG_SOURCES = [
   { value: 'deployment-live', label: 'Deployment Live Log' },
   { value: 'backend-error', label: 'Backend Errors' },
   { value: 'backend-out', label: 'Backend Output' },
+  { value: 'frontend-access', label: 'Frontend (nginx)' },
   { value: 'database', label: 'Database Diagnostics' },
   { value: 'ai-diagnostics', label: 'AI Diagnostics' },
 ];
 
-const LIVE_STREAM_SOURCES = new Set(['deployment-live', 'backend-error', 'backend-out']);
+const LIVE_STREAM_SOURCES = new Set(['deployment-live', 'backend-error', 'backend-out', 'frontend-access']);
 const MAX_LIVE_LINES = 400;
 
 const formatError = (error) => {

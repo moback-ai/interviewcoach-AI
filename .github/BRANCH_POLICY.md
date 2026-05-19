@@ -25,49 +25,53 @@ Configure in Settings -> Branches, or org-level Rulesets:
 
 ## 2) Deployment Approval & Manual Trigger
 
-- Deployments are manual only through `.github/workflows/deploy.yml` using `workflow_dispatch`.
-- A human must explicitly provide:
-  - `git_ref`
-  - target `environment` (`dev` / `uat` / `prod`)
-  - deploy target (`all` / `frontend` / `backend` / `database`)
-  - explicit confirmation text `APPROVED`
-- Deployments require protected GitHub Environment approval by admins for the selected environment.
-- Manual deployment dispatch is additionally limited to approved admins, or approved automation with an `approved_by` value.
-- Without explicit approval, deployment is blocked.
+- Deployments are manual through `.github/workflows/deploy.yml` (`workflow_dispatch`) and may auto-dispatch after approved merges via `auto-deploy-main.yml`.
+- A human must approve the protected GitHub Environment (`production`) before deploy steps run.
+- Deploy target options: `all`, `frontend`, `backend`, `database`.
 
-## 3) Notifications (admins only)
+## 3) Requirement: HTTP logs (frontend, backend, database)
 
-Use GitHub notification routing so only admins are recipients for:
+Production exposes logs over HTTPS at:
 
-- merge events
-- deployment events
-- deployment failures
+| URL | Content |
+|-----|---------|
+| `https://ugaanlabs.ai/logs/` | Log hub (static index) |
+| `https://ugaanlabs.ai/logs/live.html` | Live deployment log (auto-refresh) |
+| `https://ugaanlabs.ai/logs/files/live/deploy-current.log` | Raw deployment log file (public) |
+| `https://ugaanlabs.ai/logs/api/<source>` | Runtime logs API (admin Bearer token) |
+| `https://ugaanlabs.ai/admin/logs` | Admin UI for live streams and archives |
 
-Recommended implementation:
+**Log sources** (via `/logs/api/` or admin UI):
 
-- Route workflow failure/deploy notifications to admin-only Slack/Teams/email destinations.
-- Keep repository watchers limited to admins for deploy channels.
+- `backend-error`, `backend-out` — PM2 backend logs
+- `frontend-access` — nginx access log (synced from frontend host to `/apps/logs/live/frontend-nginx.log`)
+- `database` — PostgreSQL diagnostics snapshot
+- `deployment-live` — current deploy log
 
-## 4) Observability & Logs
+Log files on the backend host: `/apps/logs` (`live/`, `archive/`).
 
-The deployment workflow publishes live deployment logs over HTTP/HTTPS:
+## 4) Requirement: Rollback on deployment failure
 
-- live deployment log page: `/logs/live.html`
-- raw and archived log files: `/logs/files/`
-- stable deployment metadata: `/logs/files/live/latest-stable.json`
+- Before deploy, the workflow snapshots the current `stable` release symlink if missing.
+- Backend and frontend deploy steps roll back to `stable` if health checks fail during the same step.
+- If the deploy job fails, the **Roll Back To Last Stable Release** step restores:
+  - Frontend `current` → last `stable` release
+  - Backend `current` → last `stable` release
+  - Database from pre-migration backup (when database deploy was selected)
+- `stable` is updated only after a successful deploy (**Promote Stable Release**).
 
-The backend admin logs page also exposes authenticated, admin-only live runtime streams and archived log downloads.
+## 5) Requirement: Keep toolchain updated during deploy
 
-For full runtime observability requirements (CPU, memory, disk, API latency, uptime, errors, and container health), integrate the deployment/runtime infrastructure with a monitoring stack such as Grafana/Loki/Prometheus, CloudWatch, or another approved provider.
+On each deploy, target EC2 hosts run `scripts/deploy-host-toolchain.sh`:
 
-## 5) Rollback & Stable Release Tracking
+- `apt-get update` and `apt-get upgrade` (Ubuntu packages)
+- Node.js 22 LTS, latest npm, latest PM2
+- nginx reload when present
 
-- If deployment fails, the workflow rolls back frontend/backend to the last stable release.
-- The last stable release is updated only after a successful deployment.
-- Deployment status, selected ref, resolved commit, approver, environment, and log URLs are recorded in GitHub Actions summaries and live deployment logs.
+The GitHub Actions runner builds with Node 22. Version audits in the workflow remain advisory for app dependencies.
 
 ## 6) Log Retention
 
-- Deployment logs are zipped before cleanup.
-- Log maintenance runs monthly.
+- Deployment logs are zipped before cleanup (`scripts/log-maintenance.sh`).
+- Monthly workflow: `.github/workflows/log-maintenance.yml`
 - If total log storage exceeds 2 GB, older logs are archived and cleaned while recent logs are retained.
