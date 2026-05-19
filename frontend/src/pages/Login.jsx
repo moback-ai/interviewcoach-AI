@@ -10,7 +10,7 @@ import {
   FiX,
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
-import AuthSimpleShell from '../components/auth/AuthSimpleShell';
+import AuthStudioShell from '../components/auth/AuthStudioShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { isValidEmail, isValidUsername } from '../lib/authClient';
@@ -206,10 +206,12 @@ function Login() {
   return (
     <>
       <Navbar />
-      <AuthSimpleShell
+      <AuthStudioShell
         eyebrow="Sign in"
         title="Welcome back"
         description="Use your email or username and password to continue to your interview workspace."
+        heroTitle="Your AI interview studio."
+        heroCopy="Mock interviews tailored to your resume and target role — with voice practice and instant feedback."
         footer={(
           <p className="auth-simple-footer-copy">
             Don&apos;t have an account?{' '}
@@ -323,7 +325,7 @@ function Login() {
             Resend verification
           </button>
         </div>
-      </AuthSimpleShell>
+      </AuthStudioShell>
     </>
   );
 }
