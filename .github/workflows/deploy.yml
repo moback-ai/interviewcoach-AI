@@ -233,13 +233,14 @@ jobs:
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
           NPM_TARGET="${{ env.NPM_VERSION_SPEC }}"
-          corepack enable
-          # Global `npm install -g npm@latest` can break on hosted runners (missing promise-retry).
-          corepack prepare "npm@${NPM_TARGET}" --activate
+          # Do not run `corepack enable` — it symlinks into /usr/local/bin and fails on EC2 (EACCES).
+          if ! corepack prepare "npm@${NPM_TARGET}" --activate 2>/dev/null; then
+            npm install -g "npm@${NPM_TARGET}" || true
+          fi
           hash -r
           {
             echo "- Build runner Node.js: \`$(node --version)\`"
-            echo "- Build runner npm: \`$(npm --version)\` (via corepack, target: ${NPM_TARGET})"
+            echo "- Build runner npm: \`$(npm --version)\` (target: ${NPM_TARGET})"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 2. Build and Audit - Build Frontend
