@@ -469,7 +469,7 @@ class InterviewManager:
 
         print(f"[DEBUG] Resume Q evaluation: {result}")
 
-        # 3. Evaluate response
+        # 3. Evaluate response — weak, confused, and off_topic trigger follow-up questions
         if result == "strong":
             self.current_resume_question = ""
 

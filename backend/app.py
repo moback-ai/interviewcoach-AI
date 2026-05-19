@@ -1398,43 +1398,18 @@ def summarize_job_description_text(raw_text):
 
 
 def validate_job_description_text(job_description, min_chars=30, min_words=6, min_alpha_ratio=0.45):
-    text = (job_description or "").strip()
-    if not text:
-        return False, "Job description cannot be empty."
-    if len(text) < min_chars:
-        return False, f"Job description must be at least {min_chars} characters."
+    from common.document_validation import validate_job_description_extracted_text
+    return validate_job_description_extracted_text(job_description)
 
-    words = re.findall(r"[A-Za-z0-9]+", text)
-    if len(words) < min_words:
-        return False, "Job description appears too short. Please provide more details."
 
-    alpha_count = sum(1 for ch in text if ch.isalpha())
-    symbol_count = sum(1 for ch in text if not ch.isspace())
-    alpha_ratio = (alpha_count / symbol_count) if symbol_count else 0.0
-    if alpha_ratio < min_alpha_ratio:
-        return False, "Job description appears invalid or random. Please share readable role details."
-
-    return True, ""
+def validate_resume_text(resume_text):
+    from common.document_validation import validate_resume_text as _validate_resume_text
+    return _validate_resume_text(resume_text)
 
 
 def classify_job_description_is_technical(job_title, job_description):
-    haystack = f"{job_title} {job_description}".lower()
-    technical_keywords = [
-        'python', 'java', 'javascript', 'typescript', 'sql', 'api', 'backend', 'frontend',
-        'full stack', 'fullstack', 'developer', 'engineer', 'devops', 'sre', 'automation',
-        'selenium', 'aws', 'cloud', 'kubernetes', 'docker', 'microservices', 'react',
-        'node', 'coding', 'programming', 'software', 'data engineer', 'machine learning',
-        'qa automation', 'test automation', 'ci/cd'
-    ]
-    non_technical_keywords = [
-        'sales', 'marketing', 'hr', 'human resources', 'recruiter', 'customer support',
-        'business development', 'operations manager', 'office assistant'
-    ]
-    if any(keyword in haystack for keyword in technical_keywords):
-        return True
-    if any(keyword in haystack for keyword in non_technical_keywords):
-        return False
-    return False
+    from common.role_classification import classify_job_description_is_technical as _classify
+    return _classify(job_title, job_description)
 
 
 def infer_candidate_name_from_text(raw_text):
@@ -2190,7 +2165,16 @@ def classify_technical_role():
     if not is_valid_jd:
         return jsonify({"success": False, "message": jd_validation_error}), 400
     try:
-        is_technical = classify_job_description_is_technical(job_title, job_description)
+        is_technical = False
+        try:
+            if ollama_ready():
+                from INTERVIEW.Resumeparser import classify_if_technical_role
+                is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
+            else:
+                raise RuntimeError("Ollama is unavailable")
+        except Exception as classify_error:
+            print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
+            is_technical = classify_job_description_is_technical(job_title, job_description)
         return jsonify({"success": True, "is_technical": is_technical})
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
@@ -2238,11 +2222,9 @@ def generate_questions():
                 resume_text = extract_text_from_uploaded_document(temp_resume, ext)
             except ValueError as ve:
                 return jsonify({"success": False, "message": str(ve)}), 400
-            if not resume_text or not resume_text.strip():
-                return jsonify({
-                    "success": False,
-                    "message": "Resume is empty. Please upload a resume with readable content before generating questions."
-                }), 400
+            is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
+            if not is_valid_resume:
+                return jsonify({"success": False, "message": resume_validation_error}), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
             try:

@@ -866,7 +866,7 @@ function InterviewPage() {
           </div>
         </header>
 
-        <div className="flex flex-col xl:flex-row min-h-0 xl:h-[calc(100vh-80px)]">
+        <motion.div className="flex flex-col xl:flex-row min-h-0 h-[calc(100dvh-5rem)] max-h-[calc(100dvh-5rem)] overflow-hidden">
           {/* Left - Interviewer Video */}
           <div 
             className="w-full xl:w-1/3 border-b xl:border-b-0 xl:border-r p-3 sm:p-4 lg:p-6 flex-shrink-0"
@@ -1053,7 +1053,7 @@ function InterviewPage() {
               selectedVoiceId={selectedVoiceId}
             />
           </div>
-        </div>
+        </motion.div>
       </div>
     </>
   );

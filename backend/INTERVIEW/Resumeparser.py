@@ -1300,6 +1300,41 @@ OUTPUT: Pure JSON array of {count} items:
 
 # === CORE QUESTION GENERATION WITH ANSWERS INTEGRATED ===
 
+def _is_weak_generated_answer(answer_text):
+    text = (answer_text or "").strip().lower()
+    if len(text.split()) < 18:
+        return True
+    weak_phrases = [
+        "i don't know",
+        "not sure",
+        "cannot say",
+        "no experience",
+        "n/a",
+        "as an ai",
+        "placeholder",
+    ]
+    return any(phrase in text for phrase in weak_phrases)
+
+
+def _generate_follow_up_for_question(original_question, context_answer, model="llama3"):
+    prompt = f"""
+You are an expert interviewer. The model answer below is too weak or vague for training purposes.
+
+Original question: "{original_question}"
+Weak answer: "{context_answer}"
+
+Write ONE specific follow-up question the interviewer should ask if the candidate gives a weak answer.
+Return only the follow-up question text.
+"""
+    try:
+        response = try_ollama_chat(prompt.strip(), model=model)
+        follow_up = response["message"]["content"].strip().strip('"')
+        return follow_up or "Could you walk me through a concrete example with more technical detail?"
+    except Exception as exc:
+        print(f"[WARN] Follow-up generation failed: {exc}")
+        return "Could you elaborate with a specific example from your experience?"
+
+
 def generate_answers_for_existing_questions(structured_resume, job_title, job_description, questions_csv_path, output_path, model="llama3"):
     if not os.path.exists(questions_csv_path):
         raise FileNotFoundError(f"[ERROR] CSV not found: {questions_csv_path}")
@@ -1338,7 +1373,7 @@ def generate_answers_for_existing_questions(structured_resume, job_title, job_de
     with open(questions_csv_path, "r", encoding="utf-8") as infile, open(output_path, "w", newline='', encoding="utf-8") as outfile:
         reader = csv.DictReader(infile)
         writer = csv.writer(outfile)
-        writer.writerow(["question_id", "question", "level", "strength", "answer", "requires_code", "answer_source"])
+        writer.writerow(["question_id", "question", "level", "strength", "answer", "requires_code", "answer_source", "follow_up_question"])
 
         for row in reader:
             if row.get("strength"):  # Skip rows that already have answers
@@ -1347,6 +1382,7 @@ def generate_answers_for_existing_questions(structured_resume, job_title, job_de
             
             # Get requires_code from input row (default to False if not present)
             requires_code = row.get('requires_code', 'false').lower() == 'true'
+            follow_up_question = ""
             
             for strength in ["weak", "medium", "strong"]:  # These map to beginner, intermediate, expert in read_questions_from_csv
                 prompt = f"""
@@ -1371,14 +1407,41 @@ Only respond with the answer text, no formatting.
                     answer = response["message"]["content"].strip().replace('"', "'")
                     if not answer:
                         raise ValueError("Empty answer generated")
-                    # Include requires_code when writing the row
-                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false", "ai"])
+                    row_follow_up = ""
+                    if strength == "weak" and _is_weak_generated_answer(answer):
+                        row_follow_up = _generate_follow_up_for_question(row["question"], answer, model=model)
+                        if not follow_up_question:
+                            follow_up_question = row_follow_up
+                    writer.writerow([
+                        row["question_id"],
+                        row["question"],
+                        row["level"],
+                        strength,
+                        answer,
+                        "true" if requires_code else "false",
+                        "ai",
+                        row_follow_up,
+                    ])
                     stats["generated_count"] += 1
                     print(f"[DEBUG] ↳ {strength.capitalize()} answer generated.")
                 except Exception as e:
                     print(f"[ERROR] Failed generating answer for {row['question_id']} [{strength}]: {e}")
                     answer = fallback_answer(row["question"], strength)
-                    writer.writerow([row["question_id"], row["question"], row["level"], strength, answer, "true" if requires_code else "false", "fallback"])
+                    row_follow_up = ""
+                    if strength == "weak":
+                        row_follow_up = _generate_follow_up_for_question(row["question"], answer, model=model)
+                        if not follow_up_question:
+                            follow_up_question = row_follow_up
+                    writer.writerow([
+                        row["question_id"],
+                        row["question"],
+                        row["level"],
+                        strength,
+                        answer,
+                        "true" if requires_code else "false",
+                        "fallback",
+                        row_follow_up,
+                    ])
                     stats["fallback_count"] += 1
                     if len(stats["fallback_examples"]) < 10:
                         stats["fallback_examples"].append({
@@ -1493,6 +1556,92 @@ def parse_job_description_file(file_path, model="llama3"):
 # JD PARSING END
 #---------------------------------------------------------------------------------------------------------------------------------------------
 
+def _keyword_classify_technical_role(job_title, job_description):
+    from common.role_classification import classify_job_description_is_technical
+    return classify_job_description_is_technical(job_title, job_description)
+
+
+def _resume_has_usable_sections(structured_data):
+    if not isinstance(structured_data, dict):
+        return False
+    return bool(
+        structured_data.get("work_experience")
+        or structured_data.get("projects")
+        or structured_data.get("education")
+        or structured_data.get("skills")
+        or structured_data.get("summary")
+    )
+
+
+def build_structured_resume_fallback(resume_text):
+    """Non-LLM structured resume when Ollama parsing is empty or unavailable."""
+    lines = [line.strip() for line in resume_text.splitlines() if line.strip()]
+    name = lines[0][:80] if lines else "Candidate"
+    if len(name.split()) > 5:
+        name = "Candidate"
+
+    skills = []
+    skill_markers = ("skills", "technical skills", "core competencies")
+    capture_skills = False
+    for line in lines:
+        lower = line.lower()
+        if any(marker in lower for marker in skill_markers):
+            capture_skills = True
+            continue
+        if capture_skills:
+            if line.isupper() and len(line) < 40:
+                break
+            parts = re.split(r"[,;|•·]", line)
+            for part in parts:
+                token = part.strip(" -•·\t")
+                if 2 <= len(token) <= 40:
+                    skills.append(token)
+            if len(skills) >= 8:
+                break
+
+    summary_lines = lines[1:6]
+    summary = " ".join(summary_lines)[:600].strip()
+
+    return {
+        "name": name,
+        "location": "",
+        "summary": summary or resume_text[:500].strip(),
+        "skills": deduplicate_string_list(skills)[:25],
+        "education": [],
+        "work_experience": [],
+        "projects": [],
+        "certifications": [],
+        "tools_and_technologies": {
+            "Operating Systems": [],
+            "Languages": [],
+            "Databases": [],
+            "Automation Tools": [],
+            "Load Testing": [],
+            "Version Control": [],
+            "Bug Trackers": [],
+        },
+        "links": {"linkedin": "", "github": ""},
+        "contact": {"email": "", "phone": ""},
+        "parse_source": "keyword_fallback",
+    }
+
+
+def parse_resume_structured(resume_text, model="llama3"):
+    """
+    Primary: LLM chunked parse. Fallback: heuristic structured parse from raw text.
+    """
+    structured = ask_ollama_for_structured_data_chunked(resume_text, model=model)
+    if _resume_has_usable_sections(structured):
+        structured["parse_source"] = structured.get("parse_source") or "llm"
+        return structured
+
+    print("[WARN] LLM resume parse returned empty sections; using structured fallback parser.")
+    fallback = build_structured_resume_fallback(resume_text)
+    if not _resume_has_usable_sections(fallback):
+        raise ResumeParseError("Resume parsing returned no usable sections.")
+    return fallback
+
+
 def classify_if_technical_role(job_title, job_description, model="llama3"):
     """
     Returns True if the job description implies that
@@ -1540,12 +1689,12 @@ Classification rules:
     try:
         result = json.loads(raw)
         return bool(result.get("is_technical", False))
-    except:
-        # fallback: regex extraction
+    except Exception as classify_error:
+        print(f"[WARN] LLM technical classification parse failed: {classify_error}")
         match = re.search(r'true|false', raw, re.IGNORECASE)
         if match:
             return match.group(0).lower() == "true"
-        return False
+        return _keyword_classify_technical_role(job_title, job_description)
 
 def try_ollama_chat(prompt, model="llama3", max_retries=100000):
     if ollama is None:
@@ -1764,17 +1913,11 @@ def run_pipeline_from_api(
             
             # Extract resume text and parse into structured data
             resume_text = extract_text_from_resume(resume_path)
-            structured_data = ask_ollama_for_structured_data_chunked(resume_text)
-            
-            # Validate parsed data
-            if not isinstance(structured_data, dict):
-                raise ResumeParseError("Resume parsing returned an invalid format.")
-            if (
-                not structured_data.get("work_experience") and
-                not structured_data.get("projects") and
-                not structured_data.get("education")
-            ):
-                raise ResumeParseError("Parsed resume has no usable sections.")
+            from common.document_validation import validate_resume_text
+            is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
+            if not is_valid_resume:
+                raise ResumeParseError(resume_validation_error)
+            structured_data = parse_resume_structured(resume_text)
             
             # Candidate name for file naming
             candidate_name = structured_data.get("name", "candidate").replace(" ", "_")
@@ -2002,6 +2145,8 @@ def read_questions_from_csv(csv_file_path):
                 if 'answer' in row and row['answer']:
                     question_data["expected_answer"] = row['answer']
                     question_data["answer_source"] = answer_source
+                if row.get('follow_up_question'):
+                    question_data["follow_up_question"] = row['follow_up_question']
                 
                 questions.append(question_data)
         
