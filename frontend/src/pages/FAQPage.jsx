@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
+import { Link, useLocation } from 'react-router-dom';
+import {
   Search, 
   ChevronDown, 
   ChevronUp, 
@@ -14,8 +15,11 @@ import {
   Wifi,
   MessageSquare
 } from 'lucide-react';
-import { useTheme } from '../hooks/useTheme';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
+import { useAuth } from '../contexts/AuthContext';
+
+const SupportBot = lazy(() => import('../components/SupportBot'));
 
 // FAQ Data extracted from support_bot.md
 const faqData = [
@@ -143,10 +147,53 @@ const faqData = [
 ];
 
 function FAQPage() {
-  const { isDark } = useTheme();
+  const location = useLocation();
+  const { isAuthenticated } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [expandedItems, setExpandedItems] = useState({});
+  const supportQueryOpen = new URLSearchParams(location.search).get('support') === 'open';
+  const supportLoginPath = `/login?next=${encodeURIComponent('/faq?support=open#contact')}`;
+
+  useEffect(() => {
+    if (!location.hash) {
+      return;
+    }
+
+    let frameId = null;
+    const targetId = location.hash.slice(1);
+
+    const scrollToHashTarget = () => {
+      const target = document.getElementById(targetId);
+
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
+      frameId = window.requestAnimationFrame(scrollToHashTarget);
+    };
+
+    frameId = window.requestAnimationFrame(scrollToHashTarget);
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [location.hash]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !supportQueryOpen) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('support-chat:open'));
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
+  }, [isAuthenticated, supportQueryOpen]);
 
   // Filter FAQs based on search term and category
   const filteredFAQs = useMemo(() => {
@@ -179,12 +226,16 @@ function FAQPage() {
     }));
   };
 
+  const handleOpenSupportChat = () => {
+    window.dispatchEvent(new CustomEvent('support-chat:open'));
+  };
+
   const categories = ['All', ...faqData.map(cat => cat.category)];
 
   return (
     <>
       <Navbar />
-      <div className="min-h-screen bg-[var(--color-bg)]">
+      <PageWavesShell>
         <div className="max-w-6xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
           {/* Header */}
           <motion.div
@@ -368,6 +419,7 @@ function FAQPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.4 }}
+            id="contact"
             className="mt-12 sm:mt-16 md:mt-20 text-center"
           >
             <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl sm:rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 p-4 sm:p-6 md:p-8">
@@ -375,17 +427,41 @@ function FAQPage() {
                 Still need help?
               </h2>
               <p className="text-xs sm:text-sm md:text-base text-[var(--color-text-secondary)] mb-4 sm:mb-6 max-w-2xl mx-auto leading-relaxed px-2">
-                Can't find the answer you're looking for? Our support team is here to help you with any questions or issues.
+                Can't find the answer you're looking for? Use the help center, {isAuthenticated ? 'open the AI support chat' : 'sign in for AI support chat'}, or email billing support for payment-related issues.
               </p>
               <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center">
-                <button className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium bg-[var(--color-primary)] text-white rounded-lg sm:rounded-xl hover:opacity-90 transition-all duration-200 shadow-md hover:shadow-lg">
-                  Contact Support
-                </button>
+                {isAuthenticated ? (
+                  <button
+                    type="button"
+                    onClick={handleOpenSupportChat}
+                    className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium bg-[var(--color-primary)] text-white rounded-lg sm:rounded-xl hover:opacity-90 transition-all duration-200 shadow-md hover:shadow-lg"
+                  >
+                    Open Support Chat
+                  </button>
+                ) : (
+                  <Link
+                    to={supportLoginPath}
+                    className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium bg-[var(--color-primary)] text-white rounded-lg sm:rounded-xl hover:opacity-90 transition-all duration-200 shadow-md hover:shadow-lg"
+                  >
+                    Sign In for Support Chat
+                  </Link>
+                )}
+                <a
+                  href="mailto:support@dodopayments.com?subject=Interview%20Coach%20Billing%20Support"
+                  className="px-4 sm:px-6 py-2.5 sm:py-3 text-sm sm:text-base font-medium border border-[var(--color-border)] text-[var(--color-text-primary)] rounded-lg sm:rounded-xl hover:bg-[var(--color-input-bg)] transition-all duration-200 shadow-md hover:shadow-lg"
+                >
+                  Email Billing Support
+                </a>
               </div>
             </div>
           </motion.div>
         </div>
-      </div>
+      </PageWavesShell>
+      {isAuthenticated && (
+        <Suspense fallback={null}>
+          <SupportBot />
+        </Suspense>
+      )}
     </>
   );
 }

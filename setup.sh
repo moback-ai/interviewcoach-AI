@@ -11,7 +11,7 @@ echo "  InterviewCoach - EC2 Setup"
 echo "============================================"
 
 # ── System packages ───────────────────────────────────────────
-echo "[1/8] Installing system packages..."
+echo "[1/9] Installing system packages..."
 sudo apt update -q
 sudo apt install -y \
     python3 python3-pip python3-venv \
@@ -22,14 +22,26 @@ sudo apt install -y \
     nodejs npm
 
 # ── Node / PM2 ────────────────────────────────────────────────
-echo "[2/8] Installing Node/PM2..."
+echo "[2/9] Installing Node/PM2..."
 sudo npm install -g pm2 n
 sudo n 22
 hash -r
 pm2 startup systemd -u ubuntu --hp /home/ubuntu | tail -1 | sudo bash
 
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3}"
+
+# ── Ollama ────────────────────────────────────────────────────
+echo "[3/9] Installing Ollama..."
+if ! command -v ollama >/dev/null 2>&1; then
+    curl -fsSL https://ollama.com/install.sh | sh
+fi
+sudo systemctl enable ollama
+sudo systemctl restart ollama || sudo systemctl start ollama
+sleep 5
+ollama pull "$OLLAMA_MODEL"
+
 # ── Storage dirs ──────────────────────────────────────────────
-echo "[3/8] Creating storage directories..."
+echo "[4/9] Creating storage directories..."
 sudo mkdir -p /apps/storage/{resumes,audio,general}
 sudo chown -R ubuntu:ubuntu /apps/storage
 chmod -R 755 /apps/storage
@@ -39,7 +51,7 @@ sudo mkdir -p /var/www/interview
 sudo chown ubuntu:ubuntu /var/www/interview
 
 # ── Python venv ───────────────────────────────────────────────
-echo "[4/8] Creating Python virtual environment..."
+echo "[5/9] Creating Python virtual environment..."
 cd /apps/backend
 python3 -m venv venv
 source venv/bin/activate
@@ -47,7 +59,7 @@ pip install --no-cache-dir --upgrade pip
 pip install --no-cache-dir -r requirements.txt
 
 # ── Nginx ─────────────────────────────────────────────────────
-echo "[5/8] Configuring Nginx..."
+echo "[6/9] Configuring Nginx..."
 sudo bash -c 'cat > /etc/nginx/sites-available/interview << '"'"'NGINX'"'"'
 server {
     listen 80;
@@ -97,7 +109,7 @@ sudo systemctl enable nginx
 sudo systemctl restart nginx
 
 # ── PM2 backend ───────────────────────────────────────────────
-echo "[6/8] Starting backend with PM2..."
+echo "[7/9] Starting backend with PM2..."
 cd /apps/backend
 pm2 delete backend 2>/dev/null || true
 pm2 start "venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 --worker-class eventlet app:app" \
@@ -105,7 +117,7 @@ pm2 start "venv/bin/gunicorn -w 2 -b 127.0.0.1:5000 --timeout 300 --worker-class
 pm2 save
 
 # ── Frontend build ────────────────────────────────────────────
-echo "[7/8] Building frontend..."
+echo "[8/9] Building frontend..."
 cd /apps/frontend
 npm install --legacy-peer-deps
 npm run build
@@ -113,12 +125,13 @@ cp -r dist/* /var/www/interview/
 sudo systemctl reload nginx
 
 # ── Done ─────────────────────────────────────────────────────
-echo "[8/8] Setup complete!"
+echo "[9/9] Setup complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Edit /apps/backend/.env with your real values"
 echo "  2. Run the DB schema: psql -h DB_IP -U interview_user -d interview_db -f /apps/backend/schema.sql"
 echo "  3. Verify: curl http://localhost/api/health"
+echo "  4. Confirm Ollama tags: curl http://127.0.0.1:11434/api/tags"
 echo ""
 echo "PM2 status:"
 pm2 status

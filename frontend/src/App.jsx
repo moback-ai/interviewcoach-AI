@@ -3,8 +3,9 @@ import { lazy, Suspense } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import './index.css';
 
+import Landing from './pages/Landing';
+
 // Lazy load heavy pages
-const Landing             = lazy(() => import('./pages/Landing'));
 const Signup              = lazy(() => import('./pages/SignUp'));
 const Login               = lazy(() => import('./pages/Login'));
 const ForgotPassword      = lazy(() => import('./pages/ForgotPassword'));

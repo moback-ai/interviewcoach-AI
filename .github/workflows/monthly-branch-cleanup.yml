@@ -1,0 +1,84 @@
+name: Monthly Branch Cleanup
+
+on:
+  schedule:
+    - cron: '0 3 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    name: Review and delete stale merged branches
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged stale feature branches and report old unmerged branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const defaultBranch = context.payload.repository?.default_branch || 'main';
+            const staleDays = 30;
+            const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
+            const deletedBranches = [];
+            const reviewBranches = [];
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner,
+              repo,
+              protected: false,
+              per_page: 100,
+            });
+
+            for (const branch of branches) {
+              const name = branch.name;
+              if (!name.startsWith('feature/')) {
+                continue;
+              }
+
+              const commit = await github.rest.repos.getCommit({
+                owner,
+                repo,
+                ref: branch.commit.sha,
+              });
+
+              const committedAt = new Date(
+                commit.data.commit.committer?.date || commit.data.commit.author?.date
+              );
+
+              if (committedAt > cutoff) {
+                continue;
+              }
+
+              const comparison = await github.rest.repos.compareCommits({
+                owner,
+                repo,
+                base: defaultBranch,
+                head: name,
+              });
+
+              const fullyMerged = ['behind', 'identical'].includes(comparison.data.status);
+              if (fullyMerged) {
+                await github.rest.git.deleteRef({
+                  owner,
+                  repo,
+                  ref: `heads/${name}`,
+                });
+                deletedBranches.push(`${name} (${committedAt.toISOString().slice(0, 10)})`);
+                continue;
+              }
+
+              reviewBranches.push(`${name} (${committedAt.toISOString().slice(0, 10)})`);
+            }
+
+            await core.summary
+              .addHeading('Monthly Branch Cleanup')
+              .addRaw(`Stale branch threshold: \`${staleDays} days\``)
+              .addBreak()
+              .addHeading('Deleted merged branches', 2)
+              .addList(deletedBranches.length ? deletedBranches : ['None'])
+              .addHeading('Old unmerged branches for admin review', 2)
+              .addList(reviewBranches.length ? reviewBranches : ['None'])
+              .write();

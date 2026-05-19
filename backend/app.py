@@ -24,7 +24,7 @@ except Exception as mediapipe_import_error:
     mp = None
     print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
 
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
@@ -85,6 +85,12 @@ app.config['MAX_CONTENT_LENGTH'] = int(optional_env("MAX_CONTENT_MB", "200")) * 
 
 DOMAIN = require_env("DOMAIN")
 EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", "24"))
+ADMIN_LOG_ROOT = os.path.abspath(optional_env("ADMIN_LOG_ROOT", "/apps/logs"))
+ADMIN_LIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_LIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "live")))
+ADMIN_ARCHIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_ARCHIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "archive")))
+DEPLOYMENT_LIVE_LOG_FILE = os.path.abspath(
+    optional_env("DEPLOYMENT_LIVE_LOG_FILE", os.path.join(ADMIN_LIVE_LOG_DIR, "deploy-current.log"))
+)
 
 CORS(app,
      supports_credentials=True,
@@ -124,6 +130,9 @@ def normalize_username(raw_username: str) -> str:
 
 def ensure_auth_schema():
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ")
     execute("""
@@ -146,6 +155,36 @@ def ensure_auth_schema():
 
 
 _ALLOWED_DIFFICULTY_EXPERIENCE = frozenset({"beginner", "intermediate", "expert"})
+_USER_PUBLIC_FIELDS = (
+    "id",
+    "username",
+    "email",
+    "full_name",
+    "nickname",
+    "avatar_url",
+    "date_of_birth",
+    "plan",
+    "created_at",
+    "email_verified_at",
+)
+_USER_AUTH_FIELDS = (
+    "id",
+    "email",
+    "username",
+    "password_hash",
+    "full_name",
+    "nickname",
+    "avatar_url",
+    "date_of_birth",
+    "plan",
+    "created_at",
+    "email_verified_at",
+)
+
+
+def build_user_columns(fields, alias: str = "") -> str:
+    prefix = f"{alias}." if alias else ""
+    return ", ".join(f"{prefix}{field}" for field in fields)
 
 
 def normalize_question_difficulty(value) -> str:
@@ -174,6 +213,26 @@ def normalize_difficulty_experience(value) -> str:
     if normalized in {"strong", "expert", "senior", "advanced", "hard"}:
         return "expert"
     return "beginner"
+
+
+def normalize_date_of_birth(value):
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    try:
+        return datetime.strptime(normalized, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError("Date of birth must use the YYYY-MM-DD format.") from exc
+
+
+def serialize_date_value(value):
+    if not value:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 QUESTION_ORDER_SQL = """
@@ -244,8 +303,14 @@ def serialize_user(user):
     payload = dict(user)
     payload["id"] = str(payload["id"])
     payload["email_verified"] = bool(payload.get("email_verified_at"))
+    payload["nickname"] = payload.get("nickname") or ""
+    payload["avatar_url"] = payload.get("avatar_url") or ""
+    payload["date_of_birth"] = serialize_date_value(payload.get("date_of_birth"))
     payload.setdefault("user_metadata", {})
     payload["user_metadata"]["full_name"] = payload.get("full_name", "")
+    payload["user_metadata"]["nickname"] = payload["nickname"]
+    payload["user_metadata"]["avatar_url"] = payload["avatar_url"]
+    payload["user_metadata"]["date_of_birth"] = payload["date_of_birth"]
     return payload
 
 
@@ -302,10 +367,10 @@ def get_user_for_auth(identifier: str):
     normalized = (identifier or "").strip().lower()
     return query_one(
         """
-        SELECT id, email, username, password_hash, full_name, plan, created_at, email_verified_at
+        SELECT {columns}
         FROM users
         WHERE lower(email) = %s OR lower(coalesce(username, '')) = %s
-        """,
+        """.format(columns=build_user_columns(_USER_AUTH_FIELDS)),
         (normalized, normalized),
     )
 
@@ -729,38 +794,237 @@ def _database_log_snapshot():
     }
 
 
+def _admin_log_sources(line_count: int):
+    return {
+        "backend-error": {
+            "resolver": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
+            "path": "/home/ubuntu/.pm2/logs/backend-error.log",
+            "live_supported": True,
+        },
+        "backend-out": {
+            "resolver": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
+            "path": "/home/ubuntu/.pm2/logs/backend-out.log",
+            "live_supported": True,
+        },
+        "deployment-live": {
+            "resolver": lambda: _tail_text_file(DEPLOYMENT_LIVE_LOG_FILE, line_count),
+            "path": DEPLOYMENT_LIVE_LOG_FILE,
+            "live_supported": True,
+        },
+        "database": {
+            "resolver": _database_log_snapshot,
+            "path": "database diagnostics",
+            "live_supported": False,
+        },
+        "ai-diagnostics": {
+            "resolver": _ollama_diagnostic_snapshot,
+            "path": "AI diagnostics",
+            "live_supported": False,
+        },
+    }
+
+
+def _admin_log_http_urls(source: str):
+    return {
+        "live_url": build_public_url("/admin/logs", view="live", source=source),
+        "folder_url": build_public_url("/admin/logs", view="files"),
+        "files_api_url": build_public_url("/api/admin/logs/files"),
+    }
+
+
+def _verify_admin_log_access():
+    client_ip = _extract_request_ip()
+    if not _is_allowed_ip(client_ip):
+        return None, (jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403)
+    if not _can_view_admin_logs(request.user):
+        return None, (jsonify({"error": "Admin access required"}), 403)
+    return client_ip, None
+
+
+def _stream_text_file(path: str):
+    if not os.path.exists(path):
+        return None
+
+    def generate():
+        keepalive_started_at = time.time()
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(0, os.SEEK_END)
+            yield json.dumps({
+                "type": "meta",
+                "path": path,
+                "timestamp": datetime.utcnow().isoformat(),
+            }) + "\n"
+
+            while True:
+                line = handle.readline()
+                if line:
+                    keepalive_started_at = time.time()
+                    yield json.dumps({
+                        "type": "line",
+                        "line": _redact_log_text(line.rstrip("\n")),
+                    }) + "\n"
+                    continue
+
+                try:
+                    if os.path.getsize(path) < handle.tell():
+                        handle.seek(0)
+                except OSError:
+                    pass
+
+                if time.time() - keepalive_started_at >= 10:
+                    keepalive_started_at = time.time()
+                    yield json.dumps({
+                        "type": "keepalive",
+                        "timestamp": datetime.utcnow().isoformat(),
+                    }) + "\n"
+
+                time.sleep(1)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _relative_log_path(root_path: str, absolute_path: str):
+    root_real = os.path.realpath(root_path)
+    absolute_real = os.path.realpath(absolute_path)
+    if absolute_real == root_real:
+        return "."
+    if not absolute_real.startswith(f"{root_real}{os.sep}"):
+        raise ValueError("Path is outside the allowed log root.")
+    return os.path.relpath(absolute_real, root_real)
+
+
+def _safe_log_file_path(relative_path: str):
+    candidate = os.path.realpath(os.path.join(ADMIN_LOG_ROOT, relative_path))
+    root_real = os.path.realpath(ADMIN_LOG_ROOT)
+    if candidate == root_real or not candidate.startswith(f"{root_real}{os.sep}"):
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
+def _list_admin_log_files(limit: int = 200):
+    entries = []
+    if not os.path.isdir(ADMIN_LOG_ROOT):
+        return entries
+
+    for root, _, files in os.walk(ADMIN_LOG_ROOT):
+        for filename in files:
+            absolute_path = os.path.join(root, filename)
+            try:
+                stat_result = os.stat(absolute_path)
+                relative_path = _relative_log_path(ADMIN_LOG_ROOT, absolute_path)
+            except (OSError, ValueError):
+                continue
+
+            category = "archive" if absolute_path.startswith(ADMIN_ARCHIVE_LOG_DIR) else "live"
+            entries.append({
+                "name": filename,
+                "relative_path": relative_path,
+                "category": category,
+                "size_bytes": stat_result.st_size,
+                "modified_at": datetime.utcfromtimestamp(stat_result.st_mtime).isoformat() + "Z",
+                "download_url": build_public_url(f"/api/admin/logs/files/{relative_path}"),
+            })
+
+    entries.sort(key=lambda item: item["modified_at"], reverse=True)
+    return entries[:limit]
+
+
 @app.route('/api/admin/logs', methods=['GET'])
 @verify_auth_token
 def admin_logs():
-    client_ip = _extract_request_ip()
-    if not _is_allowed_ip(client_ip):
-        return jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403
-    if not _can_view_admin_logs(request.user):
-        return jsonify({"error": "Admin access required"}), 403
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
 
     source = (request.args.get("source") or "backend-error").strip().lower()
     line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
-
-    sources = {
-        "backend-error": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
-        "backend-out": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
-        "database": _database_log_snapshot,
-    }
-
-    resolver = sources.get(source)
-    if not resolver:
+    sources = _admin_log_sources(line_count)
+    source_config = sources.get(source)
+    if not source_config:
         return jsonify({
             "error": "Unknown log source",
             "available_sources": sorted(sources.keys()),
         }), 400
 
-    payload = resolver()
+    payload = source_config["resolver"]()
     payload.update({
         "source": source,
+        "live_supported": source_config.get("live_supported", False),
         "requested_by": request.user.get("email"),
         "client_ip": client_ip,
+        **_admin_log_http_urls(source),
     })
     return jsonify({"success": True, "data": payload})
+
+
+@app.route('/api/admin/logs/stream', methods=['GET'])
+@verify_auth_token
+def admin_logs_stream():
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    source = (request.args.get("source") or "backend-error").strip().lower()
+    sources = _admin_log_sources(200)
+    source_config = sources.get(source)
+    if not source_config:
+        return jsonify({
+            "error": "Unknown log source",
+            "available_sources": sorted(sources.keys()),
+        }), 400
+
+    if not source_config.get("live_supported"):
+        return jsonify({"error": "Selected log source does not support live streaming."}), 400
+
+    response = _stream_text_file(source_config["path"])
+    if response is None:
+        return jsonify({
+            "error": "Log file is not available yet.",
+            "source": source,
+            "client_ip": client_ip,
+        }), 404
+    return response
+
+
+@app.route('/api/admin/logs/files', methods=['GET'])
+@verify_auth_token
+def admin_log_files():
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    return jsonify({
+        "success": True,
+        "data": {
+            "root_path": ADMIN_LOG_ROOT,
+            "requested_by": request.user.get("email"),
+            "client_ip": client_ip,
+            "folder_url": build_public_url("/admin/logs", view="files"),
+            "files": _list_admin_log_files(),
+        },
+    })
+
+
+@app.route('/api/admin/logs/files/<path:relative_path>', methods=['GET'])
+@verify_auth_token
+def admin_log_file_download(relative_path):
+    _, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    file_path = _safe_log_file_path(relative_path)
+    if not file_path:
+        return jsonify({"error": "Log file not found."}), 404
+
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    return send_from_directory(directory, filename, as_attachment=False)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
@@ -1038,7 +1302,21 @@ def schedule_background_ai_warmup():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": datetime.utcnow().isoformat(), "version": "2.0.0"})
+    ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=2)
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "version": "2.0.0",
+        "services": {
+            "ollama": {
+                "ready": ollama_diagnostics.get("ready", False),
+                "reachable": ollama_diagnostics.get("reachable", False),
+                "model": ollama_diagnostics.get("model"),
+                "model_available": ollama_diagnostics.get("model_available", False),
+                "error": ollama_diagnostics.get("error", ""),
+            }
+        }
+    })
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (
@@ -1271,6 +1549,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
                 "difficulty_level": normalized_difficulty,
                 "difficulty_category": normalized_difficulty,
                 "difficulty_experience": experience,
+                "answer_source": "template_fallback",
                 "requires_code": requires_code,
             })
     normalized_counts = {
@@ -1293,18 +1572,101 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
         "candidate": candidate_name,
         "questions": questions,
         "questions_count": len(questions),
+        "generator": "local_fallback",
+        "answer_generation": {
+            "requested": True,
+            "model": None,
+            "generated_count": 0,
+            "fallback_count": len(questions),
+            "fallback_examples": [],
+        },
     }
 
 
-def ollama_ready(timeout_seconds=2):
+def get_ollama_model_name():
+    return (optional_env("OLLAMA_MODEL", "llama3") or "llama3").strip()
+
+
+def _normalize_model_aliases(name: str):
+    normalized = (name or "").strip().lower()
+    if not normalized:
+        return set()
+    base = normalized.split(":", 1)[0]
+    return {normalized, base}
+
+
+def get_ollama_diagnostics(timeout_seconds=2):
+    health_url = optional_env("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags")
+    configured_model = get_ollama_model_name()
+    diagnostics = {
+        "health_url": health_url,
+        "model": configured_model,
+        "reachable": False,
+        "status_code": None,
+        "model_available": False,
+        "ready": False,
+        "available_models": [],
+        "error": "",
+    }
+
     try:
-        response = http_requests.get(
-            optional_env("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags"),
-            timeout=timeout_seconds,
-        )
-        return response.ok
-    except Exception:
-        return False
+        response = http_requests.get(health_url, timeout=timeout_seconds)
+        diagnostics["status_code"] = response.status_code
+        diagnostics["reachable"] = response.ok
+        if not response.ok:
+            diagnostics["error"] = f"Health endpoint returned HTTP {response.status_code}"
+            return diagnostics
+
+        payload = response.json() if response.content else {}
+        models = payload.get("models") if isinstance(payload, dict) else []
+        names = []
+        if isinstance(models, list):
+            for item in models:
+                if not isinstance(item, dict):
+                    continue
+                name = (item.get("name") or "").strip()
+                if name:
+                    names.append(name)
+        diagnostics["available_models"] = names
+
+        configured_aliases = _normalize_model_aliases(configured_model)
+        available_aliases = set()
+        for name in names:
+            available_aliases.update(_normalize_model_aliases(name))
+        diagnostics["model_available"] = bool(configured_aliases & available_aliases)
+        diagnostics["ready"] = diagnostics["reachable"] and diagnostics["model_available"]
+        if diagnostics["reachable"] and not diagnostics["model_available"]:
+            diagnostics["error"] = f"Configured model '{configured_model}' is not installed in Ollama."
+        return diagnostics
+    except Exception as exc:
+        diagnostics["error"] = str(exc)
+        return diagnostics
+
+
+def ollama_ready(timeout_seconds=2):
+    return get_ollama_diagnostics(timeout_seconds=timeout_seconds).get("ready", False)
+
+
+def _ollama_diagnostic_snapshot():
+    diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+    lines = [
+        f"ready={diagnostics.get('ready')}",
+        f"reachable={diagnostics.get('reachable')}",
+        f"status_code={diagnostics.get('status_code')}",
+        f"model={diagnostics.get('model')}",
+        f"model_available={diagnostics.get('model_available')}",
+        f"health_url={diagnostics.get('health_url')}",
+    ]
+    if diagnostics.get("available_models"):
+        lines.append("available_models=" + ", ".join(diagnostics["available_models"]))
+    if diagnostics.get("error"):
+        lines.append(f"error={diagnostics['error']}")
+    return {
+        "available": True,
+        "path": "ollama diagnostics",
+        "lines": lines,
+        "summary": diagnostics,
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUTH  (replaces the legacy hosted auth layer)
@@ -1332,8 +1694,8 @@ def signup():
             """
             INSERT INTO users (username, email, password_hash, full_name)
             VALUES (%s, %s, %s, %s)
-            RETURNING id, username, email, full_name, plan, created_at, email_verified_at
-            """,
+            RETURNING {columns}
+            """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
             (username, email, hash_password(password), full_name)
         )
         verification_payload = issue_email_verification(user, allow_manual_fallback=True)
@@ -1410,9 +1772,9 @@ def resend_verification():
         return jsonify({"error": "Email is required"}), 400
     user = query_one(
         """
-        SELECT id, username, email, full_name, plan, created_at, email_verified_at
+        SELECT {columns}
         FROM users WHERE lower(email) = %s
-        """,
+        """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (email,),
     )
     if not user:
@@ -1435,11 +1797,11 @@ def verify_email():
     token_hash = hash_verification_token(token)
     record = query_one(
         """
-        SELECT evt.user_id, u.email, u.username, u.full_name, u.plan, u.created_at, u.email_verified_at
+        SELECT evt.user_id, {columns}
         FROM email_verification_tokens evt
         JOIN users u ON u.id = evt.user_id
         WHERE evt.token_hash = %s AND evt.consumed_at IS NULL AND evt.expires_at > now()
-        """,
+        """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS, "u")),
         (token_hash,),
     )
     if not record:
@@ -1450,8 +1812,8 @@ def verify_email():
         UPDATE users
         SET email_verified_at = COALESCE(email_verified_at, now())
         WHERE id = %s
-        RETURNING id, username, email, full_name, plan, created_at, email_verified_at
-        """,
+        RETURNING {columns}
+        """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (record['user_id'],),
     )
     token_value = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
@@ -1465,8 +1827,10 @@ def verify_email():
 @app.route('/api/me', methods=['GET'])
 @verify_auth_token
 def get_me():
-    user = query_one("SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id = %s",
-                     (request.user['id'],))
+    user = query_one(
+        "SELECT {columns} FROM users WHERE id = %s".format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
+        (request.user['id'],),
+    )
     if not user:
         return jsonify({"error": "User not found"}), 404
     return jsonify({"user": serialize_user(user)})
@@ -1880,9 +2244,10 @@ def generate_questions():
                     "message": "Resume is empty. Please upload a resume with readable content before generating questions."
                 }), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
+            ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
             try:
-                if not ollama_ready():
-                    raise RuntimeError("Ollama is unavailable")
+                if not ollama_diagnostics.get("ready"):
+                    raise RuntimeError(ollama_diagnostics.get("error") or "Ollama is unavailable")
                 from INTERVIEW.Resumeparser import run_pipeline_from_api
                 result = run_pipeline_from_api(
                     resume_path=temp_resume,
@@ -1899,14 +2264,22 @@ def generate_questions():
                     max_retries=1,
                 )
             except Exception as pipeline_error:
-                print(f"[WARN] Falling back to local question generator: {pipeline_error}")
+                print(
+                    "[WARN] Falling back to local question generator: "
+                    f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+                )
                 result = build_local_question_set(job_title, job_description, resume_text, question_counts)
+                result["ollama_diagnostics"] = ollama_diagnostics
             if not result.get('success'):
                 return jsonify({"success": False, "message": result.get('error', 'Pipeline failed')}), 500
             return jsonify({"success": True, "data": {
                 "questions": result['questions'],
                 "questions_count": result['questions_count'],
                 "candidate_name": result['candidate']
+            }, "debug": {
+                "generator": result.get("generator", "unknown"),
+                "answer_generation": result.get("answer_generation", {}),
+                "ollama": result.get("ollama_diagnostics", ollama_diagnostics),
             }})
         finally:
             if os.path.exists(temp_resume):
@@ -2759,28 +3132,48 @@ def update_me():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
     data = request.get_json() or {}
+    nested_data = data.get('data') or {}
+    missing = object()
     updates = []
     params = []
-    full_name = data.get('full_name') or (data.get('data') or {}).get('full_name')
+    full_name = data['full_name'] if 'full_name' in data else nested_data.get('full_name', missing)
     username = data.get('username')
+    nickname = data['nickname'] if 'nickname' in data else nested_data.get('nickname', missing)
+    avatar_url = data['avatar_url'] if 'avatar_url' in data else nested_data.get('avatar_url', missing)
+    date_of_birth = data['date_of_birth'] if 'date_of_birth' in data else nested_data.get('date_of_birth', missing)
     password = data.get('password')
-    if full_name is not None:
-        updates.append('full_name=%s')
-        params.append(full_name.strip())
-    if username is not None:
-        username = normalize_username(username)
-        updates.append('username=%s')
-        params.append(username)
+    try:
+        if full_name is not missing:
+            updates.append('full_name=%s')
+            params.append(str(full_name).strip())
+        if username is not None:
+            username = normalize_username(username)
+            updates.append('username=%s')
+            params.append(username)
+        if nickname is not missing:
+            updates.append('nickname=%s')
+            params.append(str(nickname).strip())
+        if avatar_url is not missing:
+            updates.append('avatar_url=%s')
+            params.append(str(avatar_url or '').strip())
+        if date_of_birth is not missing:
+            updates.append('date_of_birth=%s')
+            params.append(normalize_date_of_birth(date_of_birth))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     if password:
         updates.append('password_hash=%s')
         params.append(hash_password(password))
     if not updates:
-        user = query_one('SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s', (request.user['id'],))
+        user = query_one(
+            'SELECT {columns} FROM users WHERE id=%s'.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
+            (request.user['id'],),
+        )
         return jsonify({'success': True, 'user': serialize_user(user)})
     params.append(request.user['id'])
     try:
         user = execute(
-            f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING id, username, email, full_name, plan, created_at, email_verified_at",
+            f"UPDATE users SET {', '.join(updates)} WHERE id=%s RETURNING {build_user_columns(_USER_PUBLIC_FIELDS)}",
             tuple(params),
         )
     except Exception as exc:
@@ -3189,7 +3582,7 @@ def refresh_token():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
     user = query_one(
-        'SELECT id, username, email, full_name, plan, created_at, email_verified_at FROM users WHERE id=%s',
+        'SELECT {columns} FROM users WHERE id=%s'.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (request.user['id'],)
     )
     if not user:

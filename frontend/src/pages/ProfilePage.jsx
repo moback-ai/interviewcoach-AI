@@ -5,6 +5,7 @@ import {
   FiUser, 
   FiMail, 
   FiCalendar, 
+  FiCamera,
   FiEdit3, 
   FiSave, 
   FiX, 
@@ -25,10 +26,66 @@ import {
   FiRefreshCw
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import { getBackendOrigin } from '../utils/apiConfig';
 
+const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
+const ACCEPTED_AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
+const buildProfileState = (user) => ({
+  full_name: user?.user_metadata?.full_name || user?.full_name || '',
+  nickname: user?.user_metadata?.nickname || user?.nickname || '',
+  date_of_birth: user?.user_metadata?.date_of_birth || user?.date_of_birth || '',
+  email: user?.email || '',
+  username: user?.username || '',
+  avatar_url: user?.user_metadata?.avatar_url || user?.avatar_url || '',
+  created_at: user?.created_at || '',
+});
+
+const getProfileInitials = (value = '') => {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    return `${words[0][0]}${words[1][0]}`.toUpperCase();
+  }
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  return 'IC';
+};
+
+const validateAvatarFile = (file) => {
+  if (!file) {
+    return 'Please choose an image file.';
+  }
+  if (!ACCEPTED_AVATAR_TYPES.has(file.type)) {
+    return 'Use a JPG, PNG, GIF, or WEBP image.';
+  }
+  if (file.size > MAX_AVATAR_SIZE_BYTES) {
+    return 'Profile pictures must be 5 MB or smaller.';
+  }
+  return '';
+};
+
 // Component for Profile Section
-const ProfileSection = ({ user, profileData, setProfileData, isEditing, setIsEditing, loading, setLoading, handleSave, handleCancel, formatDate }) => {
+const ProfileSection = ({
+  profileData,
+  setProfileData,
+  isEditing,
+  setIsEditing,
+  loading,
+  handleSave,
+  handleCancel,
+  formatDate,
+  statusMessage,
+  statusTone,
+  avatarPreview,
+  avatarFile,
+  avatarError,
+  handleAvatarFileChange,
+}) => {
+  const avatarSource = avatarPreview || profileData.avatar_url;
+  const displayName = profileData.full_name || profileData.nickname || profileData.email || 'InterviewCoach';
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -64,33 +121,66 @@ const ProfileSection = ({ user, profileData, setProfileData, isEditing, setIsEdi
         )}
       </div>
 
+      {statusMessage ? (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            statusTone === 'success'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
+              : 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200'
+          }`}
+        >
+          {statusMessage}
+        </div>
+      ) : null}
+
       <div className="space-y-6">
-        {/* Avatar Section */}
-        <div className="flex items-center space-x-4">
-          <div className="w-20 h-20 rounded-full bg-[var(--color-primary)] flex items-center justify-center">
-            {profileData.avatar_url ? (
-              <img 
-                src={profileData.avatar_url} 
-                alt="Profile" 
-                className="w-20 h-20 rounded-full object-cover"
-              />
-            ) : (
-              <FiUser size={32} className="text-white" />
-            )}
+        <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-card)] p-5 shadow-[var(--color-surface-shadow)]">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
+                {avatarSource ? (
+                  <img
+                    src={avatarSource}
+                    alt="Profile"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span>{getProfileInitials(displayName)}</span>
+                )}
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-lg font-medium text-[var(--color-text-primary)]">
+                  Profile picture
+                </h3>
+                <p className="text-sm text-[var(--color-text-secondary)]">
+                  Upload a JPG, PNG, GIF, or WEBP image up to 5 MB.
+                </p>
+                <p className="text-xs text-[var(--color-text-secondary)]">
+                  {avatarFile ? `Selected: ${avatarFile.name}` : avatarSource ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
+                </p>
+              </div>
+            </div>
+
+            {isEditing ? (
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-input-bg)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]">
+                <FiCamera size={16} />
+                <span>{avatarSource ? 'Change photo' : 'Upload photo'}</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  className="hidden"
+                  onChange={handleAvatarFileChange}
+                />
+              </label>
+            ) : null}
           </div>
-          <div>
-            <h3 className="text-lg font-medium text-[var(--color-text-primary)]">
-              Profile Picture
-            </h3>
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              {profileData.avatar_url ? 'Custom avatar' : 'Default avatar'}
-            </p>
-          </div>
+
+          {avatarError ? (
+            <p className="mt-3 text-sm text-rose-600 dark:text-rose-300">{avatarError}</p>
+          ) : null}
         </div>
 
-        {/* Form Fields */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Full Name */}
           <div>
             <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
               <FiUser className="inline mr-2" size={16} />
@@ -111,7 +201,26 @@ const ProfileSection = ({ user, profileData, setProfileData, isEditing, setIsEdi
             )}
           </div>
 
-          {/* Email */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
+              <FiHash className="inline mr-2" size={16} />
+              Nickname
+            </label>
+            {isEditing ? (
+              <input
+                type="text"
+                value={profileData.nickname}
+                onChange={(e) => setProfileData({ ...profileData, nickname: e.target.value })}
+                className="w-full px-4 py-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-input-bg)] text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                placeholder="How you want to be addressed"
+              />
+            ) : (
+              <p className="text-[var(--color-text-primary)]">
+                {profileData.nickname || 'Not provided'}
+              </p>
+            )}
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
               <FiMail className="inline mr-2" size={16} />
@@ -125,34 +234,42 @@ const ProfileSection = ({ user, profileData, setProfileData, isEditing, setIsEdi
             </p>
           </div>
 
-          {/* Avatar URL */}
           <div>
             <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
-              Avatar URL
+              <FiCalendar className="inline mr-2" size={16} />
+              Date of Birth
             </label>
             {isEditing ? (
               <input
-                type="url"
-                value={profileData.avatar_url}
-                onChange={(e) => setProfileData({...profileData, avatar_url: e.target.value})}
+                type="date"
+                value={profileData.date_of_birth}
+                onChange={(e) => setProfileData({ ...profileData, date_of_birth: e.target.value })}
                 className="w-full px-4 py-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-input-bg)] text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
-                placeholder="Enter avatar URL"
               />
             ) : (
               <p className="text-[var(--color-text-primary)]">
-                {profileData.avatar_url || 'No custom avatar'}
+                {formatDate(profileData.date_of_birth, 'Not provided')}
               </p>
             )}
           </div>
 
-          {/* Account Created */}
+          <div>
+            <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
+              <FiHash className="inline mr-2" size={16} />
+              Username
+            </label>
+            <p className="text-[var(--color-text-primary)]">
+              {profileData.username || 'Not available'}
+            </p>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
               <FiCalendar className="inline mr-2" size={16} />
               Account Created
             </label>
             <p className="text-[var(--color-text-primary)]">
-              {formatDate(profileData.created_at)}
+              {formatDate(profileData.created_at, 'Not available')}
             </p>
           </div>
         </div>
@@ -938,12 +1055,23 @@ function ProfilePage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [profileData, setProfileData] = useState({
-    full_name: user?.user_metadata?.full_name || '',
-    email: user?.email || '',
-    avatar_url: user?.user_metadata?.avatar_url || '',
-    created_at: user?.created_at || ''
-  });
+  const [profileStatus, setProfileStatus] = useState(null);
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState('');
+  const [avatarError, setAvatarError] = useState('');
+  const [profileData, setProfileData] = useState(() => buildProfileState(user));
+
+  useEffect(() => {
+    setProfileData(buildProfileState(user));
+  }, [user]);
+
+  useEffect(() => (
+    () => {
+      if (avatarPreview?.startsWith('blob:')) {
+        URL.revokeObjectURL(avatarPreview);
+      }
+    }
+  ), [avatarPreview]);
 
   const navigationItems = [
     { id: 'profile', label: 'Profile', icon: FiUser, description: 'Personal information' },
@@ -952,35 +1080,120 @@ function ProfilePage() {
     { id: 'settings', label: 'Settings', icon: FiSettings, description: 'Account preferences' },
   ];
 
+  const clearAvatarDraft = () => {
+    if (avatarPreview?.startsWith('blob:')) {
+      URL.revokeObjectURL(avatarPreview);
+    }
+    setAvatarPreview('');
+    setAvatarFile(null);
+    setAvatarError('');
+  };
+
+  const handleAvatarFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    const validationMessage = validateAvatarFile(file);
+    if (validationMessage) {
+      setAvatarError(validationMessage);
+      event.target.value = '';
+      return;
+    }
+
+    const nextPreview = URL.createObjectURL(file);
+    if (avatarPreview?.startsWith('blob:')) {
+      URL.revokeObjectURL(avatarPreview);
+    }
+
+    setAvatarFile(file);
+    setAvatarPreview(nextPreview);
+    setAvatarError('');
+    setProfileStatus(null);
+    event.target.value = '';
+  };
+
+  const uploadAvatar = async (file) => {
+    const session = await getSession();
+    if (!session?.access_token || !user?.id) {
+      throw new Error('Please sign in again before updating your profile picture.');
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('folder', `avatars/${user.id}`);
+
+    const response = await fetch(`${getBackendOrigin()}/functions/v1/upload-file`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: formData,
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || result.message || 'Failed to upload your profile picture.');
+    }
+
+    return result.data?.public_url || '';
+  };
+
   const handleSave = async () => {
     setLoading(true);
+    setProfileStatus(null);
     try {
-      await updateProfile({
-        full_name: profileData.full_name,
-        avatar_url: profileData.avatar_url,
+      let nextAvatarUrl = profileData.avatar_url;
+
+      if (avatarFile) {
+        nextAvatarUrl = await uploadAvatar(avatarFile);
+      }
+
+      const nextUser = await updateProfile({
+        full_name: profileData.full_name.trim(),
+        nickname: profileData.nickname.trim(),
+        date_of_birth: profileData.date_of_birth || null,
+        avatar_url: nextAvatarUrl,
       });
+
+      setProfileData(buildProfileState(nextUser));
+      clearAvatarDraft();
       setIsEditing(false);
-      alert('Profile updated successfully!');
+      setProfileStatus({
+        tone: 'success',
+        message: 'Profile updated successfully.',
+      });
     } catch (error) {
       console.error('Error updating profile:', error);
-      alert('Failed to update profile');
+      setProfileStatus({
+        tone: 'error',
+        message: error?.message || 'Failed to update profile.',
+      });
     } finally {
       setLoading(false);
     }
   };
 
   const handleCancel = () => {
-    setProfileData({
-      full_name: user?.user_metadata?.full_name || '',
-      email: user?.email || '',
-      avatar_url: user?.user_metadata?.avatar_url || '',
-      created_at: user?.created_at || ''
-    });
+    setProfileData(buildProfileState(user));
+    clearAvatarDraft();
+    setProfileStatus(null);
     setIsEditing(false);
   };
 
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+  const formatDate = (dateString, fallback = 'Not available') => {
+    if (!dateString) {
+      return fallback;
+    }
+    const normalizedValue = /^\d{4}-\d{2}-\d{2}$/.test(dateString)
+      ? `${dateString}T00:00:00`
+      : dateString;
+    const parsedDate = new Date(normalizedValue);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return fallback;
+    }
+    return parsedDate.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric'
@@ -988,22 +1201,28 @@ function ProfilePage() {
   };
 
   const renderActiveSection = () => {
+    const profileSection = (
+      <ProfileSection
+        profileData={profileData}
+        setProfileData={setProfileData}
+        isEditing={isEditing}
+        setIsEditing={setIsEditing}
+        loading={loading}
+        handleSave={handleSave}
+        handleCancel={handleCancel}
+        formatDate={formatDate}
+        statusMessage={profileStatus?.message || ''}
+        statusTone={profileStatus?.tone || 'success'}
+        avatarPreview={avatarPreview}
+        avatarFile={avatarFile}
+        avatarError={avatarError}
+        handleAvatarFileChange={handleAvatarFileChange}
+      />
+    );
+
     switch (activeSection) {
       case 'profile':
-        return (
-          <ProfileSection 
-            user={user}
-            profileData={profileData}
-            setProfileData={setProfileData}
-            isEditing={isEditing}
-            setIsEditing={setIsEditing}
-            loading={loading}
-            setLoading={setLoading}
-            handleSave={handleSave}
-            handleCancel={handleCancel}
-            formatDate={formatDate}
-          />
-        );
+        return profileSection;
       case 'payments':
         return <PaymentsSection />;
       case 'analytics':
@@ -1011,14 +1230,14 @@ function ProfilePage() {
       case 'settings':
         return <SettingsSection />;
       default:
-        return <ProfileSection />;
+        return profileSection;
     }
   };
 
   return (
     <>
       <Navbar />
-      <div className="min-h-screen bg-[var(--color-bg)]">
+      <PageWavesShell>
         {/* Mobile Header */}
         <div className="md:hidden bg-[var(--color-card)] border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex items-center justify-between">
@@ -1112,7 +1331,7 @@ function ProfilePage() {
             </div>
           </div>
         </div>
-      </div>
+      </PageWavesShell>
     </>
   );
 }

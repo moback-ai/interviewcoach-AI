@@ -6,7 +6,7 @@ import {
   SparklesIcon,
   PlayCircleIcon,
 } from "@heroicons/react/24/outline";
-import { useTheme } from "../../hooks/useTheme"; // adjust path as needed
+import { useTheme } from "../../hooks/useTheme";
 
 
 const steps = [
@@ -14,29 +14,29 @@ const steps = [
     icon: ArrowUpTrayIcon,
     title: "Upload Resume",
     desc: "Easily upload your resume and job description for smart analysis.",
-    imageLight: "/assets/landing/steps/upload-light.png",
-    imageDark: "/assets/landing/steps/upload-dark.png",
+    imageLight: "/assets/landing/steps/upload-light.jpg",
+    imageDark: "/assets/landing/steps/upload-dark.jpg",
   },
   {
     icon: MagnifyingGlassIcon,
     title: "Analyze Fit",
     desc: "We match your skills with the job description using AI models.",
-    imageLight: "/assets/landing/steps/step2_light.png",
-    imageDark: "/assets/landing/steps/step2_dark.png",
+    imageLight: "/assets/landing/steps/step2_light.jpg",
+    imageDark: "/assets/landing/steps/step2_dark.jpg",
   },
   {
     icon: SparklesIcon,
     title: "Generate Q&A",
     desc: "Get tailored interview questions and answers to prepare smartly.",
-    imageLight: "/assets/landing/steps/step3_light.png",
-    imageDark: "/assets/landing/steps/step3_dark.png",
+    imageLight: "/assets/landing/steps/step3_light.jpg",
+    imageDark: "/assets/landing/steps/step3_dark.jpg",
   },
   {
     icon: PlayCircleIcon,
     title: "Mock Interview",
     desc: "Practice in a realistic, AI-powered interview environment.",
-    imageLight: "/assets/landing/steps/step4_light.png",
-    imageDark: "/assets/landing/steps/step4_dark.png",
+    imageLight: "/assets/landing/steps/step4_light.jpg",
+    imageDark: "/assets/landing/steps/step4_dark.jpg",
   },
 ];
 
@@ -45,15 +45,9 @@ export default function HowItWorks() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const { isDark } = useTheme();
 
-  const [themeChanged, setThemeChanged] = useState(0);
-
-    useEffect(() => {
-    const handleThemeChange = () => setThemeChanged(prev => prev + 1);
-    window.addEventListener("theme-change", handleThemeChange);
-    return () => window.removeEventListener("theme-change", handleThemeChange);
-    }, []);
-
-
+  useEffect(() => {
+    setHoveredIndex(null);
+  }, [isDark]);
 
   const activeIndex = hoveredIndex !== null ? hoveredIndex : selectedIndex;
 
@@ -113,6 +107,10 @@ export default function HowItWorks() {
                       <img
                         src={isDark ? imageDark : imageLight}
                         alt={title}
+                        width="1536"
+                        height="1024"
+                        loading="lazy"
+                        decoding="async"
                         className="w-full max-w-lg rounded-2xl shadow border border-[var(--color-border)]"
                       />
                     </div>
@@ -127,16 +125,20 @@ export default function HowItWorks() {
 <div className="hidden lg:flex flex-1 items-center justify-center">
   <AnimatePresence mode="wait">
     <motion.div
-      key={`${activeIndex}-${isDark ? "dark" : "light"}-${themeChanged}`}
+      key={`${activeIndex}-${isDark ? "dark" : "light"}`}
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ duration: 0.3 }}
-      className="w-full max-w-3xl px-4" // <- updated width
+      className="w-full max-w-3xl px-4"
     >
       <img
         src={isDark ? steps[activeIndex].imageDark : steps[activeIndex].imageLight}
         alt={steps[activeIndex].title}
+        width="1536"
+        height="1024"
+        loading="lazy"
+        decoding="async"
         className="w-full h-auto rounded-2xl shadow-xl border border-[var(--color-primary)]"
       />
     </motion.div>

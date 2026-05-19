@@ -2,17 +2,28 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FiEye, FiEyeOff } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import AuthSimpleShell from '../components/auth/AuthSimpleShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 import { formatAuthError, isValidEmail, isValidUsername } from '../lib/authClient';
 import { performSmartRedirect } from '../utils/smartRouting';
 import { trackEvents } from '../services/mixpanel';
 import { checkEmailAvailability, checkUsernameAvailability } from '../utils/emailAvailability';
+import { buildLoginCoachState } from '../utils/authCoachNotice';
+
+const GoogleMark = () => (
+  <svg viewBox="0 0 24 24" className="auth-simple-provider-icon" aria-hidden="true">
+    <path fill="#EA4335" d="M12 10.2v3.94h5.48c-.23 1.27-.96 2.35-2.04 3.08l3.3 2.56c1.92-1.77 3.03-4.38 3.03-7.48 0-.73-.07-1.44-.2-2.1H12z" />
+    <path fill="#34A853" d="M12 22c2.74 0 5.04-.9 6.72-2.44l-3.3-2.56c-.92.62-2.09.98-3.42.98-2.63 0-4.86-1.77-5.66-4.14H2.93v2.64A10 10 0 0012 22z" />
+    <path fill="#4A90E2" d="M6.34 13.84A5.98 5.98 0 016 12c0-.64.11-1.26.34-1.84V7.52H2.93A10 10 0 002 12c0 1.61.39 3.13 1.08 4.48l3.26-2.64z" />
+    <path fill="#FBBC05" d="M12 6.02c1.49 0 2.82.51 3.87 1.5l2.91-2.91C17.03 2.98 14.73 2 12 2A10 10 0 002.93 7.52l3.41 2.64C7.14 7.79 9.37 6.02 12 6.02z" />
+  </svg>
+);
 
 function Signup() {
   const navigate = useNavigate();
   useTheme();
-  const { signup, resendVerificationEmail } = useAuth();
+  const { signup } = useAuth();
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -21,20 +32,83 @@ function Signup() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
-  const [pendingEmail, setPendingEmail] = useState('');
-  const [verificationLink, setVerificationLink] = useState('');
+  const [usernameStatus, setUsernameStatus] = useState('idle');
+  const [emailStatus, setEmailStatus] = useState('idle');
+  const [usernameBlurred, setUsernameBlurred] = useState(false);
 
-  const handleSignup = async (e) => {
-    e.preventDefault();
+  const handleContinueWithGoogle = () => {
+    setErrorMsg('Google signup is not configured yet. Please use email and password for now.');
+  };
+
+  const isRealEmail = (value) => {
+    if (!isValidEmail(value)) {
+      return false;
+    }
+
+    const domain = value.split('@')[1]?.toLowerCase() || '';
+    const parts = domain.split('.');
+    if (parts.length < 2) {
+      return false;
+    }
+
+    const tld = parts[parts.length - 1];
+    if (tld.length < 2) {
+      return false;
+    }
+
+    const popularBases = ['gmail', 'yahoo', 'hotmail', 'outlook'];
+    for (const base of popularBases) {
+      if (domain !== `${base}.com` && domain.startsWith(base) && domain.endsWith('.com')) {
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const handleUsernameBlur = async () => {
+    if (!username || username.length < 3 || !isValidUsername(username)) {
+      setUsernameStatus('idle');
+      return;
+    }
+
+    setUsernameStatus('checking');
+    try {
+      const result = await checkUsernameAvailability(username.toLowerCase().trim());
+      if (result.error) {
+        setUsernameStatus('error');
+      } else {
+        setUsernameStatus(result.available ? 'available' : 'taken');
+      }
+    } catch {
+      setUsernameStatus('idle');
+    }
+  };
+
+  const handleEmailBlur = async () => {
+    if (!email || !isRealEmail(email)) {
+      setEmailStatus(!email ? 'idle' : 'invalid');
+      return;
+    }
+
+    setEmailStatus('checking');
+    try {
+      const result = await checkEmailAvailability(email.toLowerCase().trim());
+      setEmailStatus(result.available ? 'available' : 'taken');
+    } catch {
+      setEmailStatus('idle');
+    }
+  };
+
+  const handleSignup = async (event) => {
+    event.preventDefault();
     setLoading(true);
     setErrorMsg('');
-    setSuccessMsg('');
-    setVerificationLink('');
 
     try {
       const normalizedUsername = username.toLowerCase().trim();
-      const availability = await checkEmailAvailability(email.toLowerCase().trim());
+      const normalizedEmail = email.toLowerCase().trim();
+      const availability = await checkEmailAvailability(normalizedEmail);
       if (!availability.available) {
         throw new Error('This email is already registered. Please log in instead.');
       }
@@ -57,13 +131,21 @@ function Signup() {
       });
 
       if (data.verification_required) {
-        setPendingEmail(email.toLowerCase().trim());
-        setVerificationLink(data.verification_link || '');
-        setSuccessMsg(
-          data.delivery === 'manual'
-            ? 'Account created. SMTP is not configured yet, so use the verification link shown below.'
-            : 'Account created. Check your email and verify your account before logging in.'
-        );
+        navigate('/login', {
+          replace: true,
+          state: buildLoginCoachState({
+            identifier: normalizedEmail,
+            notice: {
+              tone: 'success',
+              title: 'Confirmation mail sent',
+              message: data.delivery === 'manual'
+                ? 'Your account is ready. Email delivery is not configured yet, so a direct confirmation link is available for you.'
+                : `Your account is ready. We sent a confirmation email to ${normalizedEmail}. Verify it, then sign in from there.`,
+              actionLabel: data.verification_link ? 'Open confirmation link' : '',
+              actionHref: data.verification_link || '',
+            },
+          }),
+        });
         return;
       }
 
@@ -75,156 +157,168 @@ function Signup() {
     }
   };
 
-  const handleResend = async () => {
-    setLoading(true);
-    setErrorMsg('');
-    try {
-      const data = await resendVerificationEmail(pendingEmail || email);
-      setVerificationLink(data.verification_link || '');
-      setSuccessMsg(
-        data.delivery === 'manual'
-          ? 'A fresh verification link was created. SMTP is still not configured, so use the link below.'
-          : 'Verification email sent again. Please check your inbox.'
-      );
-    } catch (error) {
-      setErrorMsg(formatAuthError(error));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <>
       <Navbar />
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4 py-8">
-        <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)]">
-          <h2 className="text-3xl font-bold text-center mb-6 text-[var(--color-primary)]">Create Account</h2>
-
-          {errorMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm text-center">
-              {errorMsg}
-            </div>
-          )}
-
-          {successMsg && (
-            <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm text-center">
-              {successMsg}
-            </div>
-          )}
-
-          {verificationLink && (
-            <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-sm break-all">
-              <p className="font-medium mb-1">Verification link</p>
-              <a href={verificationLink} className="underline hover:opacity-80">
-                {verificationLink}
-              </a>
-            </div>
-          )}
-
-          <form onSubmit={handleSignup} className="space-y-5">
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Username</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                disabled={loading}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
-                placeholder="your.username"
-              />
-              {username && !isValidUsername(username) && (
-                <p className="text-xs text-red-500 mt-1">Use at least 3 characters. Letters, numbers, dots, underscores, and hyphens are allowed.</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Full Name</label>
-              <input
-                type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                required
-                disabled={loading}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
-                placeholder="Your full name"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Email</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                disabled={loading}
-                className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition"
-                placeholder="you@example.com"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1 text-[var(--color-text-secondary)]">Password</label>
-              <div className="relative">
-                <input
-                  type={passwordVisible ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  minLength={8}
-                  disabled={loading}
-                  className="w-full px-4 py-2 rounded-lg bg-[var(--color-input-bg)] border border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition pr-10"
-                  placeholder="At least 8 characters"
-                />
-                <button
-                  type="button"
-                  onClick={() => setPasswordVisible((prev) => !prev)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-text-secondary)]"
-                >
-                  {passwordVisible ? <FiEyeOff /> : <FiEye />}
-                </button>
-              </div>
-            </div>
-
-            <label className="flex items-start gap-3 text-sm text-[var(--color-text-secondary)]">
-              <input
-                type="checkbox"
-                checked={acceptedTerms}
-                onChange={(e) => setAcceptedTerms(e.target.checked)}
-                className="mt-1"
-              />
-              <span>I agree to the Terms and Privacy Policy.</span>
-            </label>
-
-            <button
-              type="submit"
-              disabled={loading || !fullName.trim() || !isValidUsername(username) || !isValidEmail(email) || password.length < 8 || !acceptedTerms}
-              className="w-full py-2.5 rounded-lg bg-[var(--color-primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50"
-            >
-              {loading ? 'Creating account...' : 'Sign Up'}
-            </button>
-          </form>
-
-          {!!pendingEmail && (
-            <button
-              type="button"
-              onClick={handleResend}
-              disabled={loading}
-              className="w-full mt-4 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] font-medium hover:bg-[var(--color-input-bg)] transition disabled:opacity-50"
-            >
-              Resend verification email
-            </button>
-          )}
-
-          <p className="text-sm text-center mt-6 text-[var(--color-text-secondary)]">
+      <AuthSimpleShell
+        eyebrow="Create account"
+        title="Start your practice account"
+        description="Create a simple account to upload your resume, tailor interview questions, and track your mock interview progress."
+        wide
+        footer={(
+          <p className="auth-simple-footer-copy">
             Already have an account?{' '}
-            <Link to="/login" className="text-[var(--color-primary)] hover:underline">
-              Login
+            <Link to="/login" className="auth-simple-link">
+              Sign in
             </Link>
           </p>
-        </div>
-      </div>
+        )}
+      >
+        {errorMsg ? (
+          <div className="auth-simple-alert auth-simple-alert-error">
+            <p>{errorMsg}</p>
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={handleContinueWithGoogle}
+          disabled={loading}
+          className="auth-simple-provider"
+        >
+          <GoogleMark />
+          <span>Continue with Google</span>
+        </button>
+
+        <div className="auth-simple-divider">or</div>
+
+        <form onSubmit={handleSignup} className="auth-simple-form">
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-fullname" className="auth-simple-label">Full name</label>
+            <input
+              id="auth-signup-fullname"
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              required
+              disabled={loading}
+              autoComplete="name"
+              className="auth-simple-input"
+              placeholder="Your full name"
+            />
+          </div>
+
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-username" className="auth-simple-label">Username</label>
+            <input
+              id="auth-signup-username"
+              type="text"
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value);
+                setUsernameStatus('idle');
+              }}
+              onFocus={() => setUsernameBlurred(false)}
+              onBlur={() => {
+                setUsernameBlurred(true);
+                handleUsernameBlur();
+              }}
+              required
+              disabled={loading}
+              autoComplete="username"
+              className="auth-simple-input"
+              placeholder="your.username"
+            />
+            {!errorMsg && usernameBlurred && username && !isValidUsername(username) ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Use at least 3 characters. Letters, numbers, dots, underscores, and hyphens are allowed.
+              </p>
+            ) : null}
+            {!errorMsg && usernameStatus === 'taken' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                That username is already taken. Please choose another one.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-email" className="auth-simple-label">Email</label>
+            <input
+              id="auth-signup-email"
+              type="email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setEmailStatus('idle');
+              }}
+              onBlur={handleEmailBlur}
+              required
+              disabled={loading}
+              autoComplete="email"
+              className="auth-simple-input"
+              placeholder="you@example.com"
+            />
+            {!errorMsg && emailStatus === 'invalid' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Enter a valid email address like `you@gmail.com`.
+              </p>
+            ) : null}
+            {!errorMsg && emailStatus === 'taken' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                This email is already registered. Log in instead.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="auth-simple-field">
+            <label htmlFor="auth-signup-password" className="auth-simple-label">Password</label>
+            <div className="auth-simple-input-wrap">
+              <input
+                id="auth-signup-password"
+                type={passwordVisible ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                disabled={loading}
+                autoComplete="new-password"
+                className="auth-simple-input auth-simple-input-with-button"
+                placeholder="At least 8 characters"
+              />
+              <button
+                type="button"
+                onClick={() => setPasswordVisible((prev) => !prev)}
+                className="auth-simple-password-toggle"
+                aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+              >
+                {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+              </button>
+            </div>
+            {!errorMsg && password.length > 0 && password.length < 8 ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Password must be at least 8 characters.
+              </p>
+            ) : null}
+          </div>
+
+          <label className="auth-simple-checkbox">
+            <input
+              type="checkbox"
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+            />
+            <span>I agree to the Terms and Privacy Policy.</span>
+          </label>
+
+          <button
+            type="submit"
+            disabled={loading || !fullName.trim() || !isValidUsername(username) || !isValidEmail(email) || password.length < 8 || !acceptedTerms}
+            className="auth-simple-submit"
+          >
+            {loading ? 'Creating account...' : 'Create account'}
+          </button>
+        </form>
+      </AuthSimpleShell>
     </>
   );
 }

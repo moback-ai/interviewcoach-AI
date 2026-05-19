@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../hooks/useTheme';
 import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import InterviewHistoryCard from '../components/InterviewHistoryCard';
 import SuccessModal from '../components/SuccessModal';
 import { apiPost } from '../api';
@@ -13,6 +14,7 @@ import { trackEvents } from '../services/mixpanel';
 import PerformanceGraph from '../components/PerformanceGraph';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSession } from '../lib/authClient';
+import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const parseApiJson = async (response, fallbackMessage) => {
@@ -87,7 +89,8 @@ function DashboardPage() {
 
       const session = await getSession();
       if (!session) {
-        throw new Error('No active session');
+        navigate('/login', { replace: true });
+        return;
       }
 
       const backendOrigin = getBackendOrigin();
@@ -104,6 +107,10 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
+      if (isAuthErrorMessage(error.message)) {
+        redirectToExpiredLogin();
+        return;
+      }
       setError(error.message);
     } finally {
       setLoading(false);
@@ -508,12 +515,12 @@ function DashboardPage() {
     return (
       <>
         <Navbar />
-        <div className="min-h-screen bg-[var(--color-bg)] pt-20 flex items-center justify-center">
+        <PageWavesShell contentClassName="pt-20 px-4 flex items-center justify-center">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[var(--color-primary)] mx-auto"></div>
             <p className="mt-4 text-[var(--color-text-secondary)]">Loading dashboard...</p>
           </div>
-        </div>
+        </PageWavesShell>
       </>
     );
   }
@@ -522,7 +529,7 @@ function DashboardPage() {
     return (
       <>
         <Navbar />
-        <div className="min-h-screen bg-[var(--color-bg)] pt-20 flex items-center justify-center">
+        <PageWavesShell contentClassName="pt-20 px-4 flex items-center justify-center">
           <div className="text-center max-w-md mx-auto px-4">
             <div className="bg-[var(--color-error)]/10 border border-[var(--color-error)] rounded-lg p-6">
               <h3 className="text-lg font-semibold text-[var(--color-error)] mb-2">Error Loading Dashboard</h3>
@@ -535,7 +542,7 @@ function DashboardPage() {
               </button>
             </div>
           </div>
-        </div>
+        </PageWavesShell>
       </>
     );
   }
@@ -543,7 +550,7 @@ function DashboardPage() {
     return (
     <>
       <Navbar disableNavigation={isGeneratingQuestions} />
-      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 sm:px-4 lg:px-6 py-4 sm:py-6 md:py-8 lg:py-12 flex justify-center">
+      <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-3 sm:px-4 lg:px-6 py-4 sm:py-6 md:py-8 lg:py-12 flex justify-center">
         <div className="w-full max-w-7xl">
           {/* Header */}
           <div className="text-center mb-6 sm:mb-8 md:mb-10">
@@ -779,7 +786,7 @@ function DashboardPage() {
             )}
           </div>
         </div>
-      </div>
+      </PageWavesShell>
 
       {/* Job Description Modal — portaled so fixed positioning is not trapped by App route motion wrapper */}
       {isModalOpen && modalContent && typeof document !== 'undefined' &&

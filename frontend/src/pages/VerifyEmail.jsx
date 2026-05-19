@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { FiAlertCircle, FiCheckCircle, FiLoader, FiMail } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -40,22 +42,41 @@ function VerifyEmail() {
     };
   }, [confirmEmail, navigate, token]);
 
+  const badge = status === 'success' ? 'Verified' : status === 'error' ? 'Action needed' : 'Verifying';
+  const title = status === 'success'
+    ? 'Your email is confirmed'
+    : status === 'error'
+      ? 'This verification link needs attention'
+      : 'Checking your verification link';
+  const icon = status === 'success'
+    ? <FiCheckCircle size={18} />
+    : status === 'error'
+      ? <FiAlertCircle size={18} />
+      : <FiLoader size={18} className="auth-scene-spinner" />;
+
   return (
     <>
       <Navbar />
-      <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg)] px-4 py-8">
-        <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)] text-center">
-          <h2 className="text-3xl font-bold mb-4 text-[var(--color-primary)]">Verify Email</h2>
-          <p className={status === 'error' ? 'text-red-600' : 'text-[var(--color-text-secondary)]'}>
-            {message}
-          </p>
-          {status === 'error' && (
-            <Link to="/login" className="inline-block mt-6 text-[var(--color-primary)] hover:underline">
+      <AuthSceneShell
+        variant={status === 'success' ? 'emerald' : 'night'}
+        badge={badge}
+        icon={icon}
+        title={title}
+        description="We’re validating your email so your account can safely move into the interview dashboard."
+      >
+        <div className={`auth-scene-alert ${status === 'error' ? 'auth-scene-alert-error' : 'auth-scene-alert-soft'}`}>
+          {status !== 'success' ? <FiMail size={15} /> : <FiCheckCircle size={15} />}
+          <span>{message}</span>
+        </div>
+
+        {status === 'error' && (
+          <div className="pt-2 text-center">
+            <Link to="/login" className="auth-scene-link-inline">
               Go back to login
             </Link>
-          )}
-        </div>
-      </div>
+          </div>
+        )}
+      </AuthSceneShell>
     </>
   );
 }
