@@ -810,6 +810,14 @@ def _admin_log_sources(line_count: int):
             "path": DEPLOYMENT_LIVE_LOG_FILE,
             "live_supported": True,
         },
+        "frontend-access": {
+            "resolver": lambda: _tail_text_file(
+                os.path.join(ADMIN_LIVE_LOG_DIR, "frontend-nginx.log"),
+                line_count,
+            ),
+            "path": os.path.join(ADMIN_LIVE_LOG_DIR, "frontend-nginx.log"),
+            "live_supported": True,
+        },
         "database": {
             "resolver": _database_log_snapshot,
             "path": "database diagnostics",
@@ -828,6 +836,32 @@ def _admin_log_http_urls(source: str):
         "live_url": build_public_url("/admin/logs", view="live", source=source),
         "folder_url": build_public_url("/admin/logs", view="files"),
         "files_api_url": build_public_url("/api/admin/logs/files"),
+        "http_logs_index": build_public_url("/logs/"),
+        "http_logs_api": build_public_url(f"/logs/api/{source}"),
+        "http_logs_file": build_public_url("/logs/files/live/deploy-current.log"),
+    }
+
+
+PUBLIC_HTTP_LOG_PREFIXES = (
+    "live/deploy",
+    "archive/",
+)
+
+
+def _is_public_http_log_path(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").strip("/")
+    if normalized == "live/deploy-current.log":
+        return True
+    return any(normalized.startswith(prefix) for prefix in PUBLIC_HTTP_LOG_PREFIXES)
+
+
+def _logs_hub_urls():
+    return {
+        "index_url": build_public_url("/logs/"),
+        "live_page_url": build_public_url("/logs/live.html"),
+        "deployment_file_url": build_public_url("/logs/files/live/deploy-current.log"),
+        "api_base_url": build_public_url("/logs/api"),
+        "admin_url": build_public_url("/admin/logs"),
     }
 
 
@@ -932,6 +966,62 @@ def _list_admin_log_files(limit: int = 200):
 
     entries.sort(key=lambda item: item["modified_at"], reverse=True)
     return entries[:limit]
+
+
+@app.route('/logs/api', methods=['GET'])
+def logs_api_index():
+    return jsonify({
+        "success": True,
+        "data": {
+            "sources": sorted(_admin_log_sources(1).keys()),
+            **_logs_hub_urls(),
+            "usage": "GET /logs/api/<source> with Authorization: Bearer <token>",
+        },
+    })
+
+
+@app.route('/logs/api/<source>', methods=['GET'])
+@verify_auth_token
+def logs_api_source(source):
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
+    sources = _admin_log_sources(line_count)
+    source_config = sources.get(source.strip().lower())
+    if not source_config:
+        return jsonify({
+            "error": "Unknown log source",
+            "available_sources": sorted(sources.keys()),
+        }), 400
+
+    payload = source_config["resolver"]()
+    payload.update({
+        "source": source,
+        "live_supported": source_config.get("live_supported", False),
+        "requested_by": request.user.get("email"),
+        "client_ip": client_ip,
+        **_admin_log_http_urls(source),
+    })
+    return jsonify({"success": True, "data": payload})
+
+
+@app.route('/logs/files/<path:relative_path>', methods=['GET'])
+def logs_http_files(relative_path):
+    if not _is_public_http_log_path(relative_path):
+        return jsonify({
+            "error": "This log path requires admin access.",
+            "admin_files_api": build_public_url("/api/admin/logs/files"),
+        }), 403
+
+    file_path = _safe_log_file_path(relative_path)
+    if not file_path:
+        return jsonify({"error": "Log file not found."}), 404
+
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    return send_from_directory(directory, filename, as_attachment=False)
 
 
 @app.route('/api/admin/logs', methods=['GET'])

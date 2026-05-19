@@ -4,8 +4,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
   AWS_REGION: ap-south-1
-  NODE_VERSION_SPEC: latest
+  NODE_VERSION_SPEC: 22
   NPM_VERSION_SPEC: latest
+  NODE_MAJOR: 22
 
 on:
   workflow_dispatch:
@@ -390,13 +391,52 @@ jobs:
           echo "FRONTEND_ORIGIN=$FRONTEND_ORIGIN" >> "$GITHUB_ENV"
 
           {
-            echo "- Live logs URL: \`$FRONTEND_ORIGIN/admin/logs?view=live&source=deployment-live\`"
-            echo "- Log folder URL: \`$FRONTEND_ORIGIN/admin/logs?view=files\`"
+            echo "- Logs hub: \`$FRONTEND_ORIGIN/logs/\`"
+            echo "- Live deployment log: \`$FRONTEND_ORIGIN/logs/live.html\`"
+            echo "- Admin logs: \`$FRONTEND_ORIGIN/admin/logs?view=live&source=deployment-live\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 5. Deploy and Verify - Update Node.js and npm on Target Hosts
+      - name: 5. Deploy and Verify - Prepare nginx logs snippet
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
-          update_node_host() {
+          BACKEND_PROXY_HOST=127.0.0.1:5001 bash scripts/nginx-logs-locations.sh > /tmp/nginx-logs.snippet
+
+      - name: 5. Deploy and Verify - Snapshot stable releases before deploy
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'" 2>/dev/null || true
+          }
+          {
+            echo "=== Snapshot stable releases (pre-deploy) ==="
+            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+                set -e
+                APP_ROOT="/apps/backend"
+                STABLE_LINK="$APP_ROOT/stable"
+                CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
+                if [ -z "$(readlink -f "$STABLE_LINK" || true)" ] && [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                  ln -sfn "$CURRENT_RELEASE" "$STABLE_LINK"
+                  echo "Recorded backend stable release: $CURRENT_RELEASE"
+                fi
+              '
+            fi
+            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
+                set -e
+                FRONTEND_ROOT="/var/www/interview"
+                STABLE_LINK="$FRONTEND_ROOT/stable"
+                CURRENT_RELEASE="$(readlink -f "$FRONTEND_ROOT/current" || true)"
+                if [ -z "$(readlink -f "$STABLE_LINK" || true)" ] && [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                  sudo ln -sfn "$CURRENT_RELEASE" "$STABLE_LINK"
+                  echo "Recorded frontend stable release: $CURRENT_RELEASE"
+                fi
+              '
+            fi
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 5. Deploy and Verify - Update OS, Node.js, npm, and PM2 on Target Hosts
+        run: |
+          update_host_toolchain() {
             host="$1"
             label="$2"
 
@@ -409,30 +449,16 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$host" '
-              set -e
-              export DEBIAN_FRONTEND=noninteractive
-              sudo apt-get update
-              sudo apt-get install -y ca-certificates curl gnupg
-              curl -fsSL https://deb.nodesource.com/setup_current.x | sudo -E bash -
-              sudo apt-get install -y nodejs
-              sudo npm install -g npm@latest
-              if command -v pm2 >/dev/null 2>&1; then
-                sudo npm install -g pm2@latest
-              fi
-              echo "Node.js $(node --version)"
-              echo "npm $(npm --version)"
-              if command -v pm2 >/dev/null 2>&1; then
-                echo "pm2 $(pm2 --version)"
-              fi
-            ' | tee -a "$GITHUB_STEP_SUMMARY"
+            scp $SSH_OPTS scripts/deploy-host-toolchain.sh ${{ secrets.EC2_USER }}@"$host":/tmp/deploy-host-toolchain.sh
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$host" \
+              "NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh" | tee -a "$GITHUB_STEP_SUMMARY"
 
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           }
 
-          update_node_host "${{ secrets.BACKEND_HOST }}" "Backend Host"
+          update_host_toolchain "${{ secrets.BACKEND_HOST }}" "Backend Host"
           if [ "${{ secrets.FRONTEND_HOST }}" != "${{ secrets.BACKEND_HOST }}" ]; then
-            update_node_host "${{ secrets.FRONTEND_HOST }}" "Frontend Host"
+            update_host_toolchain "${{ secrets.FRONTEND_HOST }}" "Frontend Host"
           fi
 
       - name: 5. Deploy and Verify - Audit Target Versions
