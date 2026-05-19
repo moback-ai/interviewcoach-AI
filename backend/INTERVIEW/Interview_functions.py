@@ -350,7 +350,7 @@ def evaluate_resume_response(question, response):
 
     except Exception as e:
         print(f"[ERROR] evaluate_resume_response failed: {e}")
-        return "weak" if _is_substantive_response(response) else "confused"
+        return "weak" if not _is_substantive_response(response) else "strong"
 
 def generate_followup_question(original_question, weak_response):
     log("generate_followup_question")

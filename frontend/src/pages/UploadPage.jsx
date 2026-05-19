@@ -11,7 +11,9 @@ import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
 import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
+import { mapEmptyUploadFileError } from '../utils/uploadErrors';
 import { getSession } from '../lib/authClient';
+import useBodyScrollLock from '../hooks/useBodyScrollLock';
 
 function UploadPage() {
   const { theme } = useTheme();
@@ -44,6 +46,8 @@ function UploadPage() {
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
   const [questionValidationError, setQuestionValidationError] = useState('');
+
+  useBodyScrollLock(loading || successModal.isOpen);
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -174,7 +178,13 @@ function UploadPage() {
       
     } catch (error) {
       console.error('Error parsing job description:', error);
-      setJobDescError(`Failed to parse job description: ${error.message}`);
+      const raw = mapEmptyUploadFileError(
+        error instanceof Error ? error.message : String(error || '')
+      );
+      const userMessage = /job description must be at least \d+ characters/i.test(raw)
+        ? 'The uploaded job description is too short. Please add more detail about the role and try again.'
+        : raw || 'Could not read that job description file. Try another file or paste the text below.';
+      setJobDescError(userMessage);
       setJobDescParsed(false);
       setIsTechnical(false); // Reset on error
     } finally {
@@ -442,7 +452,8 @@ function UploadPage() {
 
     } catch (error) {
       console.error('Error in complete workflow:', error);
-      alert(`Error: ${error.message}`);
+      const msg = error instanceof Error ? error.message : String(error || '');
+      alert(mapEmptyUploadFileError(msg));
     } finally {
       setLoading(false);
       setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
@@ -618,7 +629,7 @@ function UploadPage() {
     return null; // Button should be enabled
   };
 
-  // Handle navigation to questions page (used by both buttons)
+  // Close success modal and go to the new question set (View Questions only)
   const handleNavigateToQuestions = () => {
     setSuccessModal({ isOpen: false, title: '', message: '', details: null });
     
@@ -1124,7 +1135,7 @@ function UploadPage() {
       {/* Success Modal */}
       <SuccessModal
         isOpen={successModal.isOpen}
-        onClose={handleNavigateToQuestions}
+        onClose={() => setSuccessModal({ isOpen: false, title: '', message: '', details: null })}
         title={successModal.title}
         message={successModal.message}
         details={successModal.details}

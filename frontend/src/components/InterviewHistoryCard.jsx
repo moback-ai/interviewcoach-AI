@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw } from 'react-icons/fi';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
@@ -9,6 +10,15 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [retakeModalOpen, setRetakeModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!retakeModalOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [retakeModalOpen]);
 
   // Check if this specific tile or any tile is regenerating
   const isDisabled = isRegenerating || isAnyRegenerating;
@@ -395,10 +405,11 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
         </div>
       </div>
 
-      {/* Retake Confirmation Modal */}
-      {retakeModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
-          <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg max-w-xs sm:max-w-md w-full shadow-xl">
+      {/* Retake Confirmation Modal — portaled so fixed positioning is not trapped by App route motion wrapper */}
+      {retakeModalOpen && typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-2 sm:p-4">
+          <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg max-w-xs sm:max-w-md w-full max-h-[90vh] overflow-y-auto shadow-xl">
             <div className="p-3 sm:p-4 md:p-6">
               <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)] mb-3 sm:mb-4">
                 Retake Interview
@@ -448,8 +459,9 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
               </div>
             </div>
           </div>
-        </div>
-      )}
+        </div>,
+          document.body
+        )}
     </>
   );
 };
