@@ -20,6 +20,24 @@ const EFFECT_PRESETS = {
       zoom: 0.9,
     },
   },
+  upload: {
+    light: {
+      backgroundColor: 0xeaf6ff,
+      color: 0x6eb8ff,
+      shininess: 24,
+      waveHeight: 6,
+      waveSpeed: 0.35,
+      zoom: 0.88,
+    },
+    dark: {
+      backgroundColor: 0x081a2e,
+      color: 0x1a6ba8,
+      shininess: 22,
+      waveHeight: 5,
+      waveSpeed: 0.3,
+      zoom: 0.86,
+    },
+  },
   auth: {
     light: {
       backgroundColor: 0x177fc9,
@@ -63,12 +81,29 @@ const getPresetOptions = (theme, preset) => {
   return resolvedPreset[theme] || resolvedPreset.light;
 };
 
+const scheduleIdle = (callback) => {
+  if (typeof window.requestIdleCallback === 'function') {
+    return window.requestIdleCallback(callback, { timeout: 2200 });
+  }
+  return window.setTimeout(callback, 120);
+};
+
+const cancelIdle = (handle) => {
+  if (typeof window.cancelIdleCallback === 'function') {
+    window.cancelIdleCallback(handle);
+    return;
+  }
+  window.clearTimeout(handle);
+};
+
 export default function AnimatedWavesLayer({
   className = '',
   preset = 'subtle',
+  defer = true,
 }) {
   const elementRef = useRef(null);
   const instanceRef = useRef(null);
+  const idleHandleRef = useRef(null);
   const { theme } = useTheme();
 
   useEffect(() => {
@@ -76,12 +111,11 @@ export default function AnimatedWavesLayer({
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     const mountEffect = async () => {
-      if (!elementRef.current || prefersReducedMotion) {
+      if (!elementRef.current || prefersReducedMotion || cancelled) {
         return;
       }
 
       const THREE = await import('three');
-      window.THREE = THREE;
       const { default: WAVES } = await import('vanta/dist/vanta.waves.min');
 
       if (cancelled || !elementRef.current) {
@@ -91,8 +125,8 @@ export default function AnimatedWavesLayer({
       const baseOptions = {
         el: elementRef.current,
         THREE,
-        mouseControls: true,
-        touchControls: true,
+        mouseControls: false,
+        touchControls: false,
         gyroControls: false,
         minHeight: 200,
         minWidth: 200,
@@ -103,8 +137,8 @@ export default function AnimatedWavesLayer({
       };
 
       if (window.innerWidth < 768) {
-        baseOptions.waveHeight = Math.max(5, baseOptions.waveHeight - 3);
-        baseOptions.zoom = Math.max(0.84, baseOptions.zoom - 0.08);
+        baseOptions.waveHeight = Math.max(4, baseOptions.waveHeight - 2);
+        baseOptions.zoom = Math.max(0.82, baseOptions.zoom - 0.06);
       }
 
       if (instanceRef.current) {
@@ -115,18 +149,44 @@ export default function AnimatedWavesLayer({
       instanceRef.current = WAVES(baseOptions);
     };
 
-    mountEffect().catch((error) => {
-      console.error('Unable to initialize animated waves background:', error);
-    });
+    const startMount = () => {
+      mountEffect().catch((error) => {
+        console.error('Unable to initialize animated waves background:', error);
+      });
+    };
+
+    if (defer) {
+      idleHandleRef.current = scheduleIdle(startMount);
+    } else {
+      startMount();
+    }
+
+    const handleVisibility = () => {
+      if (!instanceRef.current) {
+        return;
+      }
+      if (document.hidden) {
+        instanceRef.current.setOptions({ waveSpeed: 0.05 });
+      } else {
+        instanceRef.current.setOptions(getPresetOptions(theme, preset));
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       cancelled = true;
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (idleHandleRef.current) {
+        cancelIdle(idleHandleRef.current);
+        idleHandleRef.current = null;
+      }
       if (instanceRef.current) {
         instanceRef.current.destroy();
         instanceRef.current = null;
       }
     };
-  }, [preset, theme]);
+  }, [defer, preset, theme]);
 
   return <div ref={elementRef} className={className} aria-hidden="true" />;
 }

@@ -172,6 +172,74 @@ body::after {
   background: rgba(59, 130, 246, 0.18);
 }
 
+.page-waves-shell__backdrop-aurora {
+  border-radius: 999px;
+  filter: blur(72px);
+  opacity: 0.42;
+  will-change: transform, opacity;
+  animation: page-aurora-drift 18s ease-in-out infinite alternate;
+}
+
+.page-waves-shell__backdrop-aurora-a {
+  top: 8%;
+  left: -8%;
+  width: 28rem;
+  height: 28rem;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.35), transparent 68%);
+}
+
+.page-waves-shell__backdrop-aurora-b {
+  right: -10%;
+  bottom: 6%;
+  width: 30rem;
+  height: 30rem;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.28), transparent 70%);
+  animation-duration: 22s;
+  animation-delay: -4s;
+}
+
+@keyframes page-aurora-drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.34;
+  }
+  100% {
+    transform: translate3d(3rem, -2rem, 0) scale(1.08);
+    opacity: 0.48;
+  }
+}
+
+.upload-panel-reveal {
+  animation: upload-panel-reveal 0.38s ease-out both;
+}
+
+@keyframes upload-panel-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.upload-collapse-reveal {
+  overflow: hidden;
+  animation: upload-collapse-reveal 0.32s ease-out both;
+}
+
+@keyframes upload-collapse-reveal {
+  from {
+    opacity: 0;
+    max-height: 0;
+  }
+  to {
+    opacity: 1;
+    max-height: 2400px;
+  }
+}
+
 .page-waves-shell__content {
   position: relative;
   z-index: 1;
@@ -275,6 +343,61 @@ body::after {
   backdrop-filter: blur(18px);
   transform: perspective(1200px) rotateX(0deg) rotateY(0deg) translate3d(0, 0, 0);
   transition: transform 180ms ease-out, box-shadow 180ms ease-out;
+  animation: auth-card-enter 0.62s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes auth-card-enter {
+  from {
+    opacity: 0;
+    transform: perspective(1200px) translateY(22px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1200px) translateY(0) scale(1);
+  }
+}
+
+.auth-simple-header > * {
+  animation: auth-fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-simple-header > *:nth-child(1) { animation-delay: 0.06s; }
+.auth-simple-header > *:nth-child(2) { animation-delay: 0.12s; }
+.auth-simple-header > *:nth-child(3) { animation-delay: 0.18s; }
+
+.auth-simple-content > * {
+  animation: auth-fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-simple-content > *:nth-child(1) { animation-delay: 0.14s; }
+.auth-simple-content > *:nth-child(2) { animation-delay: 0.2s; }
+.auth-simple-content > *:nth-child(3) { animation-delay: 0.26s; }
+.auth-simple-content > *:nth-child(4) { animation-delay: 0.32s; }
+
+@keyframes auth-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-simple-backdrop-aurora {
+  position: absolute;
+  inset: -8%;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(56, 189, 248, 0.34), transparent 42%),
+    radial-gradient(circle at 82% 72%, rgba(99, 102, 241, 0.26), transparent 46%);
+  animation: auth-aurora-shift 16s ease-in-out infinite alternate;
+}
+
+@keyframes auth-aurora-shift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(2rem, -1.5rem, 0) scale(1.04); }
 }
 
 .dark .auth-simple-card {
@@ -618,6 +741,7 @@ body::after {
   margin-top: 1.4rem;
   padding-top: 1.1rem;
   border-top: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
+  animation: auth-fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.34s both;
 }
 
 .auth-simple-footer-copy {
