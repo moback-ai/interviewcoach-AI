@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -6,7 +6,6 @@ import UploadBox from '../components/upload/UploadBox';
 import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
 import { useTheme } from '../hooks/useTheme';
 import { useOperation } from '../contexts/OperationContext';
-import { motion, AnimatePresence } from 'framer-motion';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
 import { trackEvents } from '../services/mixpanel';
@@ -46,6 +45,7 @@ function UploadPage() {
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
   const [questionValidationError, setQuestionValidationError] = useState('');
+  const classifyAbortRef = useRef(null);
 
   useBodyScrollLock(loading || successModal.isOpen);
 
@@ -72,12 +72,16 @@ function UploadPage() {
 
     // Set a timer to debounce the API call
     const timer = setTimeout(async () => {
+      if (classifyAbortRef.current) {
+        classifyAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      classifyAbortRef.current = controller;
       setClassifyingTechnical(true);
       
       try {
         const session = await getSession();
         if (!session) {
-          console.warn('[WARNING] No session for technical role classification');
           return;
         }
 
@@ -85,7 +89,7 @@ function UploadPage() {
         
         const requestPayload = {
           job_title: trimmedTitle,
-          job_description: descriptionToUse  // Use title as description if description is empty
+          job_description: descriptionToUse
         };
         
         const response = await fetch(`${backendUrl}/api/classify-technical-role`, {
@@ -94,7 +98,8 @@ function UploadPage() {
             'Authorization': `Bearer ${session.access_token}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(requestPayload)
+          body: JSON.stringify(requestPayload),
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -117,18 +122,24 @@ function UploadPage() {
           setCodingQuestions(0); // Reset on error
         }
       } catch (error) {
-        console.error('[ERROR] Failed to classify technical role:', error);
-        // On error, set to false and reset coding questions
+        if (error?.name === 'AbortError') {
+          return;
+        }
         setIsTechnical(false);
         setCodingQuestions(0);
       } finally {
-        setClassifyingTechnical(false);
+        if (!controller.signal.aborted) {
+          setClassifyingTechnical(false);
+        }
       }
-    }, 1000); // Wait 1 second after user stops typing
+    }, 1200);
 
-    // Cleanup timer on next change
     return () => {
       clearTimeout(timer);
+      if (classifyAbortRef.current) {
+        classifyAbortRef.current.abort();
+        classifyAbortRef.current = null;
+      }
     };
   }, [jobTitle, jobDescription, jobDescParsed]); // Re-run when these change
 
@@ -303,17 +314,6 @@ function UploadPage() {
 
   const handleGenerateQuestions = async (e) => {
     e.preventDefault();
-    
-    // ✅ ADD DEBUGGING
-    console.log('=== DEBUGGING QUESTION GENERATION ===');
-    console.log('easyQuestions:', easyQuestions);
-    console.log('mediumQuestions:', mediumQuestions);
-    console.log('hardQuestions:', hardQuestions);
-    console.log('codingQuestions:', codingQuestions);
-    console.log('splitMode:', splitMode);
-    console.log('blendMode:', blendMode);
-    console.log('totalQuestions:', easyQuestions + mediumQuestions + hardQuestions + codingQuestions);
-    console.log('=====================================');
     
     if (!resume || !jobTitle.trim() || !jobDescription.trim()) {
       alert('Please upload a resume and ensure job title and description are filled.');
@@ -572,26 +572,31 @@ function UploadPage() {
     }
   };
 
-  // Check if generate questions button should be enabled
-  const canGenerateQuestions = () => {
-    // Basic requirements
+  const canGenerateQuestions = useMemo(() => {
     if (!resume || !jobTitle.trim() || !jobDescription.trim() || !jobDescParsed || loading || parsingJobDesc) {
       return false;
     }
-    
-    // Only validate when both split AND blend modes are enabled
+
     if (splitMode && blendMode) {
-      // ✅ CHANGE: Only count easy, medium, hard (exclude coding questions)
       const totalQuestions = easyQuestions + mediumQuestions + hardQuestions;
-      // Both modes on - need at least 6 total questions (excluding coding)
       return totalQuestions >= 6;
     }
-    
-    // In all other cases, button is enabled (no additional validation)
-    return true;
-  };
 
-  // Helper function to get the reason why button is disabled
+    return true;
+  }, [
+    resume,
+    jobTitle,
+    jobDescription,
+    jobDescParsed,
+    loading,
+    parsingJobDesc,
+    splitMode,
+    blendMode,
+    easyQuestions,
+    mediumQuestions,
+    hardQuestions,
+  ]);
+
   const getDisabledReason = () => {
     if (loading || parsingJobDesc) {
       return null; // Don't show message during loading/parsing
@@ -681,8 +686,12 @@ function UploadPage() {
   return (
     <>
       <Navbar disableNavigation={isCriticalOperationInProgress} />
-      <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center">
-        <div className="w-full max-w-4xl bg-[var(--color-card)] border border-[var(--color-border)] rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 md:p-10">
+      <PageWavesShell
+        preset="upload"
+        deferWaves
+        contentClassName="text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center"
+      >
+        <div className="w-full max-w-4xl bg-[var(--color-card)]/95 border border-[var(--color-border)] rounded-2xl sm:rounded-3xl shadow-xl sm:shadow-2xl p-6 sm:p-8 md:p-10 upload-panel-reveal backdrop-blur-sm">
           <div className="text-center mb-10">
             <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-4">
             Prepare With Confidence
@@ -693,11 +702,6 @@ function UploadPage() {
             </p>
           </div>
           
-            <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-            >
             <form onSubmit={handleGenerateQuestions} className="space-y-8">
                         <UploadBox
               key={`resume-${clearCounter}`}
@@ -732,15 +736,8 @@ function UploadPage() {
               />
 
               {/* Job Title and Description Fields - Only show after parsing */}
-              <AnimatePresence>
-                {jobDescParsed && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className="space-y-6"
-                  >
+              {jobDescParsed ? (
+                  <div className="space-y-6 upload-collapse-reveal">
                     {/* Success Message */}
                     <div className="flex items-center gap-3 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl">
                       <FiCheck className="w-5 h-5 text-green-600 dark:text-green-400" />
@@ -931,7 +928,7 @@ function UploadPage() {
                         </div>
 
                         {/* Validation Error Message */}
-                        {!canGenerateQuestions() && splitMode && blendMode && (
+                        {!canGenerateQuestions && splitMode && blendMode && (
                           <div className="p-3 bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg">
                             <p className="text-sm text-red-700 dark:text-red-300">
                               {/* ✅ CHANGE: Conditional message based on coding slider visibility */}
@@ -982,15 +979,8 @@ function UploadPage() {
                           </div>
 
                           {/* Split Mode Slider */}
-                          <AnimatePresence>
-                            {splitMode && (
-                              <motion.div
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                transition={{ duration: 0.3 }}
-                                className="mt-4"
-                              >
+                          {splitMode ? (
+                              <div className="mt-4 upload-panel-reveal">
                                 <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                                   <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
                                     Split Mode Settings
@@ -1015,9 +1005,8 @@ function UploadPage() {
                                     </div>
                                   </div>
                                 </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                              </div>
+                            ) : null}
                         </div>
 
                         {/* Blend Mode Section */}
@@ -1048,15 +1037,8 @@ function UploadPage() {
                           </div>
 
                           {/* Blend Mode Slider */}
-                          <AnimatePresence>
-                            {blendMode && (
-                              <motion.div
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                transition={{ duration: 0.3 }}
-                                className="mt-4"
-                              >
+                          {blendMode ? (
+                              <div className="mt-4 upload-panel-reveal">
                                 <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
                                   <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
                                     Blend Mode Settings
@@ -1081,16 +1063,14 @@ function UploadPage() {
                                     </div>
                                   </div>
                                 </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
+                              </div>
+                            ) : null}
                         </div>
                       </div>
 
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  </div>
+                ) : null}
 
             {(resume || jobDesc) && (
               <div className="flex justify-end">
@@ -1114,8 +1094,8 @@ function UploadPage() {
               
                 <button
                 type="submit"
-                disabled={!canGenerateQuestions()}
-                title={!canGenerateQuestions() ? getDisabledReason() : ''}  // ✅ ADD: Show tooltip when disabled
+                disabled={!canGenerateQuestions}
+                title={!canGenerateQuestions ? getDisabledReason() : ''}
                 className="w-full py-3 text-base sm:text-lg font-semibold bg-[var(--color-primary)] text-white rounded-xl transition hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {loading ? (
@@ -1128,7 +1108,6 @@ function UploadPage() {
                 )}
                 </button>
           </form>
-          </motion.div>
         </div>
       </PageWavesShell>
 

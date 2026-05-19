@@ -82,7 +82,8 @@ export default function AuthSimpleShell({
     >
       <div className="auth-simple-backdrop" aria-hidden="true">
         <div className="auth-simple-backdrop-image" />
-        <AnimatedWavesLayer className="auth-simple-backdrop-vanta" preset="auth" />
+        <div className="auth-simple-backdrop-aurora" aria-hidden="true" />
+        <AnimatedWavesLayer className="auth-simple-backdrop-vanta" preset="auth" defer={false} />
         <div className="auth-simple-backdrop-grid" />
         <div className="auth-simple-backdrop-glow auth-simple-backdrop-glow-a" />
         <div className="auth-simple-backdrop-glow auth-simple-backdrop-glow-b" />
