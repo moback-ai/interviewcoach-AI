@@ -54,11 +54,16 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   };
 
   useEffect(() => {
-    // ✅ FIXED: Scroll only the messages container
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-    }
-  }, [conversation]);
+    scrollToBottom();
+  }, [conversation, isLoading, isAudioPlaying]);
+
+  useEffect(() => {
+    if (!messagesEndRef.current) return undefined;
+    const frame = requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [conversation.length, isLoading]);
 
   // Cleanup function to stop media stream when component unmounts
   useEffect(() => {

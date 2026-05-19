@@ -13,6 +13,7 @@ import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
 import { getSession } from '../lib/authClient';
+import useBodyScrollLock from '../hooks/useBodyScrollLock';
 
 function UploadPage() {
   const { theme } = useTheme();
@@ -45,6 +46,8 @@ function UploadPage() {
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
   const [questionValidationError, setQuestionValidationError] = useState('');
+
+  useBodyScrollLock(loading || successModal.isOpen);
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
