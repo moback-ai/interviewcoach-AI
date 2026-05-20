@@ -687,6 +687,7 @@ function UploadPage() {
     <>
       <Navbar disableNavigation={isCriticalOperationInProgress} />
       <PageWavesShell
+        preset="upload"
         deferWaves
         contentClassName="text-[var(--color-text-primary)] px-4 py-8 sm:py-12 md:py-16 flex justify-center"
       >

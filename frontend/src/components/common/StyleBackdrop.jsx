@@ -1,5 +1,5 @@
 import AnimatedWavesLayer from './AnimatedWavesLayer';
-import { getBackgroundStyleById, isInteractiveWaveStyle } from '../../lib/backgroundStyles';
+import { getBackgroundStyleById } from '../../lib/backgroundStyles';
 
 export default function StyleBackdrop({
   styleId,
@@ -10,7 +10,7 @@ export default function StyleBackdrop({
   const style = getBackgroundStyleById(styleId);
   const rootClass = ['style-backdrop', className].filter(Boolean).join(' ');
   const isPageContext = className.includes('style-backdrop--page');
-  const useInteractiveWaves = interactive || isInteractiveWaveStyle(styleId);
+  const useInteractiveWaves = interactive;
 
   if (style.shell === 'css') {
     return (
@@ -32,7 +32,6 @@ export default function StyleBackdrop({
         <div className="auth-studio-page-aurora auth-studio-page-aurora-a" />
         <div className="auth-studio-page-aurora auth-studio-page-aurora-b" />
         <div className="auth-studio-page-grid" />
-        <div className="auth-studio-page-shade" />
       </div>
     );
   }
