@@ -32,15 +32,29 @@ import { getBackendOrigin } from '../utils/apiConfig';
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
+const GENDER_OPTIONS = [
+  { value: '', label: 'Select gender' },
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
+  { value: 'other', label: 'Other / prefer not to say' },
+];
+
 const buildProfileState = (user) => ({
   full_name: user?.user_metadata?.full_name || user?.full_name || '',
   nickname: user?.user_metadata?.nickname || user?.nickname || '',
   date_of_birth: user?.user_metadata?.date_of_birth || user?.date_of_birth || '',
+  gender: user?.user_metadata?.gender || user?.gender || '',
   email: user?.email || '',
   username: user?.username || '',
   avatar_url: user?.user_metadata?.avatar_url || user?.avatar_url || '',
   created_at: user?.created_at || '',
 });
+
+const formatGender = (value) => {
+  if (!value) return 'Not provided';
+  const option = GENDER_OPTIONS.find((item) => item.value === value);
+  return option?.label || value;
+};
 
 const getProfileInitials = (value = '') => {
   const words = value.trim().split(/\s+/).filter(Boolean);
@@ -251,6 +265,33 @@ const ProfileSection = ({
                 {formatDate(profileData.date_of_birth, 'Not provided')}
               </p>
             )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
+              <FiUser className="inline mr-2" size={16} />
+              Gender
+            </label>
+            {isEditing ? (
+              <select
+                value={profileData.gender}
+                onChange={(e) => setProfileData({ ...profileData, gender: e.target.value })}
+                className="w-full px-4 py-2 border border-[var(--color-border)] rounded-lg bg-[var(--color-input-bg)] text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+              >
+                {GENDER_OPTIONS.map((option) => (
+                  <option key={option.value || 'unset'} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-[var(--color-text-primary)]">
+                {formatGender(profileData.gender)}
+              </p>
+            )}
+            <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+              Used to personalize your mock interview voice and interviewer image.
+            </p>
           </div>
 
           <div>
@@ -1154,11 +1195,15 @@ function ProfilePage() {
         full_name: profileData.full_name.trim(),
         nickname: profileData.nickname.trim(),
         date_of_birth: profileData.date_of_birth || null,
+        gender: profileData.gender || null,
         avatar_url: nextAvatarUrl,
       });
 
       setProfileData(buildProfileState(nextUser));
       clearAvatarDraft();
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem('interviewcoach.voicePresetManual');
+      }
       setIsEditing(false);
       setProfileStatus({
         tone: 'success',

@@ -49,7 +49,6 @@ export const getAccessToken = () => {
   const token = localStorage.getItem('ic_token');
   if (!token) return null;
   if (isTokenExpired(token)) {
-    clearStoredAuth();
     return null;
   }
   return token;

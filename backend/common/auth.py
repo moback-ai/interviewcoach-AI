@@ -66,14 +66,15 @@ def verify_auth_token(f):
                 "plan": payload.get("plan", "basic"),
                 "user_metadata": {"full_name": payload.get("full_name", "")}
             }
-            return f(*args, **kwargs)
         except jwt.ExpiredSignatureError:
             return jsonify({"error": "Token expired"}), 401
         except jwt.InvalidTokenError:
             return jsonify({"error": "Invalid token"}), 401
         except Exception as e:
-            print(f"Token error: {e}")
+            print(f"Token verification error: {e}")
             return jsonify({"error": "Token verification failed"}), 401
+
+        return f(*args, **kwargs)
 
     return decorated
 

@@ -13,6 +13,7 @@ CREATE TABLE users (
     nickname TEXT,
     avatar_url TEXT NOT NULL DEFAULT '',
     date_of_birth DATE,
+    gender TEXT,
     plan TEXT NOT NULL DEFAULT 'basic',
     email_verified_at TIMESTAMPTZ,
     verification_sent_at TIMESTAMPTZ,

@@ -31,6 +31,126 @@ const parseJsonSafely = (value) => {
   }
 };
 
+const METRICS_REFRESH_MS = 20000;
+
+const formatBytes = (bytes) => {
+  if (!bytes && bytes !== 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+};
+
+const formatUptime = (seconds) => {
+  if (!seconds && seconds !== 0) return '—';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+};
+
+const usageTone = (percent) => {
+  if (percent == null) return 'text-slate-400';
+  if (percent >= 90) return 'text-red-300';
+  if (percent >= 75) return 'text-amber-300';
+  return 'text-emerald-300';
+};
+
+const usageBarTone = (percent) => {
+  if (percent == null) return 'bg-slate-600';
+  if (percent >= 90) return 'bg-red-500';
+  if (percent >= 75) return 'bg-amber-500';
+  return 'bg-emerald-500';
+};
+
+function MetricBar({ label, percent }) {
+  const safePercent = percent == null ? 0 : Math.max(0, Math.min(100, percent));
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
+        <span>{label}</span>
+        <span className={usageTone(percent)}>{percent == null ? '—' : `${percent}%`}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+        <div
+          className={`h-full rounded-full transition-all ${usageBarTone(percent)}`}
+          style={{ width: `${safePercent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ServerMetricsCard({ host }) {
+  const role = host?.role || 'Unknown';
+  const titleMap = {
+    BACKEND: 'API (Backend)',
+    FRONTEND: 'Frontend',
+    AI: 'AI / Ollama',
+    DB: 'Database (RDS)',
+  };
+
+  if (!host?.available) {
+    return (
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+        <div className="text-sm font-semibold text-blue-100">{titleMap[role] || role}</div>
+        <div className="mt-1 text-xs text-slate-500">{host?.host || 'unavailable'}</div>
+        <p className="mt-3 text-sm text-amber-200">{host?.error || 'Metrics unavailable'}</p>
+      </div>
+    );
+  }
+
+  if (role === 'DB') {
+    return (
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+        <div className="text-sm font-semibold text-blue-100">{titleMap.DB}</div>
+        <div className="mt-1 text-xs text-slate-500">{host.host}</div>
+        <div className="mt-4 space-y-2 text-sm text-slate-300">
+          <div>Connections: <span className="text-white">{host.connection_total ?? '—'}</span></div>
+          <div>DB size: <span className="text-white">{formatBytes(host.database_size_bytes)}</span></div>
+          {(host.connections || []).map((row) => (
+            <div key={row.state} className="text-xs text-slate-400">
+              {row.state}: {row.total}
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] text-slate-500">{host.note}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold text-blue-100">{titleMap[role] || role}</div>
+          <div className="mt-1 text-xs text-slate-500">{host.host}</div>
+        </div>
+        <div className="text-right text-[11px] text-slate-500">
+          <div>{host.cpu_cores} cores</div>
+          <div>up {formatUptime(host.uptime_seconds)}</div>
+        </div>
+      </div>
+      <div className="mt-4 space-y-3">
+        <MetricBar label="CPU" percent={host.cpu_percent} />
+        <MetricBar label="RAM" percent={host.memory_percent} />
+        <MetricBar label="Disk" percent={host.disk_percent} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-500">
+        <span>Load {host.load_1 ?? '—'}</span>
+        <span>RAM {formatBytes(host.memory_used_bytes)} / {formatBytes(host.memory_total_bytes)}</span>
+        <span>Disk {formatBytes(host.disk_free_bytes)} free</span>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminLogsPage() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -47,6 +167,55 @@ export default function AdminLogsPage() {
   const [streamStatus, setStreamStatus] = useState('idle');
   const [liveLines, setLiveLines] = useState([]);
   const [downloadingPath, setDownloadingPath] = useState('');
+  const [metricsData, setMetricsData] = useState(null);
+  const [metricsLoading, setMetricsLoading] = useState(true);
+  const [metricsError, setMetricsError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    let intervalId;
+
+    const loadMetrics = async () => {
+      try {
+        const session = await getSession();
+        if (!session?.access_token) {
+          throw new Error('Please log in again to view server metrics.');
+        }
+
+        const response = await fetch('/api/admin/metrics', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.error || 'Unable to load server metrics.');
+        }
+
+        if (active) {
+          setMetricsData(payload.data);
+          setMetricsError('');
+        }
+      } catch (fetchError) {
+        if (active) {
+          setMetricsData(null);
+          setMetricsError(formatError(fetchError));
+        }
+      } finally {
+        if (active) {
+          setMetricsLoading(false);
+        }
+      }
+    };
+
+    loadMetrics();
+    intervalId = window.setInterval(loadMetrics, METRICS_REFRESH_MS);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [refreshTick]);
 
   useEffect(() => {
     let active = true;
@@ -344,6 +513,38 @@ export default function AdminLogsPage() {
             {filesError}
           </div>
         )}
+
+        <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-950/70 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-blue-100">Server Metrics</h2>
+              <p className="text-xs text-slate-400">
+                CPU, RAM, and disk per host. Auto-refreshes every {METRICS_REFRESH_MS / 1000}s.
+                {metricsData?.collected_at ? ` Last sample: ${metricsData.collected_at}` : ''}
+              </p>
+            </div>
+            <span className="text-xs uppercase tracking-[0.2em] text-slate-500">
+              {metricsLoading ? 'Loading…' : 'Live'}
+            </span>
+          </div>
+
+          {metricsError && (
+            <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              {metricsError}
+            </div>
+          )}
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {(metricsData?.hosts || []).map((host) => (
+              <ServerMetricsCard key={host.role} host={host} />
+            ))}
+            {!metricsLoading && !(metricsData?.hosts || []).length && (
+              <div className="col-span-full rounded-xl border border-slate-800 bg-slate-900/70 px-4 py-3 text-sm text-slate-300">
+                No metrics available yet.
+              </div>
+            )}
+          </div>
+        </section>
 
         <div className="grid gap-6 xl:grid-cols-[1.05fr_1.55fr_1.2fr]">
           <section className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
