@@ -32,14 +32,16 @@ on:
         default: true
         type: boolean
       deploy_target:
-        description: Which part should be deployed?
+        description: Which part should be deployed? (auto = only boxes with changed files)
         required: true
-        default: all
+        default: auto
         type: choice
         options:
+          - auto
           - all
           - frontend
           - backend
+          - ai
           - database
 
 jobs:
@@ -49,7 +51,9 @@ jobs:
     outputs:
       frontend: ${{ steps.targets.outputs.frontend }}
       backend: ${{ steps.targets.outputs.backend }}
+      ai: ${{ steps.targets.outputs.ai }}
       database: ${{ steps.targets.outputs.database }}
+      has_targets: ${{ steps.targets.outputs.has_targets }}
       requested_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
       version_audit: ${{ github.event.inputs.version_audit }}
@@ -87,11 +91,20 @@ jobs:
         uses: dorny/paths-filter@v4
         with:
           base: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event.inputs.git_ref }}
           filters: |
             frontend:
               - 'frontend/**'
             backend:
               - 'backend/**'
+              - '!backend/INTERVIEW/**'
+              - '!backend/Piper/**'
+            ai:
+              - 'setup.sh'
+              - 'scripts/server-repair.sh'
+              - 'scripts/deploy-ai-host.sh'
+              - 'backend/INTERVIEW/**'
+              - 'backend/Piper/**'
             database:
               - 'database/**'
 
@@ -99,42 +112,78 @@ jobs:
         id: targets
         run: |
           target="${{ github.event.inputs.deploy_target }}"
+          changed_frontend="${{ steps.changes.outputs.frontend }}"
+          changed_backend="${{ steps.changes.outputs.backend }}"
+          changed_ai="${{ steps.changes.outputs.ai }}"
+          changed_database="${{ steps.changes.outputs.database }}"
+
           case "$target" in
+            auto)
+              frontend=$changed_frontend
+              backend=$changed_backend
+              ai=$changed_ai
+              database=$changed_database
+              ;;
             all)
               frontend=true
               backend=true
+              ai=true
               database=true
               ;;
             frontend)
               frontend=true
               backend=false
+              ai=false
               database=false
               ;;
             backend)
               frontend=false
               backend=true
+              ai=false
+              database=false
+              ;;
+            ai)
+              frontend=false
+              backend=false
+              ai=true
               database=false
               ;;
             database)
               frontend=false
               backend=false
+              ai=false
               database=true
+              ;;
+            *)
+              echo "Unknown deploy_target: $target"
+              exit 1
               ;;
           esac
 
+          has_targets=false
+          if [ "$frontend" = "true" ] || [ "$backend" = "true" ] || [ "$ai" = "true" ] || [ "$database" = "true" ]; then
+            has_targets=true
+          fi
+
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "ai=$ai" >> "$GITHUB_OUTPUT"
           echo "database=$database" >> "$GITHUB_OUTPUT"
-          echo "Detected targets -> frontend=$frontend backend=$backend database=$database"
+          echo "has_targets=$has_targets" >> "$GITHUB_OUTPUT"
+          echo "Resolved targets -> frontend=$frontend backend=$backend ai=$ai database=$database has_targets=$has_targets"
           {
             echo "### Selected Components"
-            echo "- Frontend: \`$frontend\`"
-            echo "- Backend: \`$backend\`"
-            echo "- Database: \`$database\`"
+            echo "- Deploy mode: \`$target\`"
+            echo "- Frontend box: \`$frontend\`"
+            echo "- Backend/API box: \`$backend\`"
+            echo "- AI box: \`$ai\`"
+            echo "- Database (RDS migrations): \`$database\`"
+            echo "- Will run deploy jobs: \`$has_targets\`"
             echo "### Changed Areas On Selected Ref"
-            echo "- Frontend files changed: \`${{ steps.changes.outputs.frontend }}\`"
-            echo "- Backend files changed: \`${{ steps.changes.outputs.backend }}\`"
-            echo "- Database files changed: \`${{ steps.changes.outputs.database }}\`"
+            echo "- Frontend: \`$changed_frontend\`"
+            echo "- Backend (API): \`$changed_backend\`"
+            echo "- AI / Ollama: \`$changed_ai\`"
+            echo "- Database: \`$changed_database\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build_and_audit:
@@ -328,50 +377,56 @@ jobs:
             echo "- Resolved commit: \`$RELEASE_SHA\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  deploy_and_verify:
-    name: 5. Deploy and Verify
+  no_deploy_targets:
+    name: 5. Skip Deploy (No Changes)
+    runs-on: ubuntu-latest
+    needs: authorize_and_prepare
+    if: needs.authorize_and_prepare.outputs.has_targets != 'true'
+    steps:
+      - name: 5. Skip Deploy - Nothing To Deploy
+        run: |
+          {
+            echo "## 5. Skip Deploy"
+            echo "- Mode: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
+            echo "- No frontend, backend, AI, or database paths changed on the selected ref."
+            echo "- All deploy box jobs were skipped."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy_prepare:
+    name: 6. Deploy Prepare (SSH + Logs)
     runs-on: ubuntu-latest
     needs: [authorize_and_prepare, build_and_audit, deployment_approval, resolve_release]
+    if: needs.authorize_and_prepare.outputs.has_targets == 'true'
+    outputs:
+      deploy_log_file: ${{ steps.deploy_log.outputs.deploy_log_file }}
+      frontend_origin: ${{ steps.deploy_log.outputs.frontend_origin }}
     concurrency:
       group: deploy-feature-test-code-db-production
       cancel-in-progress: false
-
     steps:
-      - name: 5. Deploy and Verify - Checkout Selected Branch
+      - name: 6. Deploy Prepare - Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.resolve_release.outputs.release_sha }}
 
-      - name: 5. Deploy and Verify - Download Frontend Build Artifact
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist
-
-      - name: 5. Deploy and Verify - Record Approved Deployment
-        run: |
-          echo "Protected environment approval completed. Starting deployment."
-
-      - name: 5. Deploy and Verify - Setup SSH
+      - name: 6. Deploy Prepare - Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
           {
-            echo "## 5. Deploy and Verify"
-            echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
-            echo "- Selected release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
+            echo "## 6. Deploy Prepare"
+            echo "- Release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
             echo "- Frontend host: \`${{ secrets.FRONTEND_HOST }}\`"
-            echo "- Backend host: \`${{ secrets.BACKEND_HOST }}\`"
-            echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
+            echo "- Backend/API host: \`${{ secrets.BACKEND_HOST }}\`"
+            echo "- AI host: \`${{ secrets.AI_HOST }}\`"
+            echo "- Deploy mode: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
+            echo "- Boxes: frontend=\`${{ needs.authorize_and_prepare.outputs.frontend }}\` backend=\`${{ needs.authorize_and_prepare.outputs.backend }}\` ai=\`${{ needs.authorize_and_prepare.outputs.ai }}\` database=\`${{ needs.authorize_and_prepare.outputs.database }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 5. Deploy and Verify - Define SSH Options
-        run: |
-          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
-
-      - name: 5. Deploy and Verify - Prepare Deployment Log Files
+      - name: 6. Deploy Prepare - Deployment Log
+        id: deploy_log
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
@@ -379,30 +434,54 @@ jobs:
           FRONTEND_DOMAIN="${FRONTEND_DOMAIN#http://}"
           FRONTEND_DOMAIN="${FRONTEND_DOMAIN#https://}"
           FRONTEND_DOMAIN="${FRONTEND_DOMAIN%%/*}"
-
           if [ -n "$FRONTEND_DOMAIN" ]; then
             FRONTEND_ORIGIN="https://$FRONTEND_DOMAIN"
           else
             FRONTEND_ORIGIN="http://$FRONTEND_HOST"
           fi
-
           DEPLOY_LOG_FILE="/apps/logs/live/deploy-${{ github.run_id }}.log"
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "\
             mkdir -p /apps/logs/live /apps/logs/archive /apps/logs/tmp /apps/deployments/runs /apps/deployments/stable /apps/database/backups && \
             touch '$DEPLOY_LOG_FILE' && \
             ln -sfn '$DEPLOY_LOG_FILE' /apps/logs/live/deploy-current.log"
-
+          echo "deploy_log_file=$DEPLOY_LOG_FILE" >> "$GITHUB_OUTPUT"
+          echo "frontend_origin=$FRONTEND_ORIGIN" >> "$GITHUB_OUTPUT"
           echo "DEPLOY_LOG_FILE=$DEPLOY_LOG_FILE" >> "$GITHUB_ENV"
           echo "FRONTEND_ORIGIN=$FRONTEND_ORIGIN" >> "$GITHUB_ENV"
 
-          {
-            echo "- Logs hub: \`$FRONTEND_ORIGIN/logs/\`"
-            echo "- Live deployment log: \`$FRONTEND_ORIGIN/logs/live.html\`"
-            echo "- Admin logs: \`$FRONTEND_ORIGIN/admin/logs?view=live&source=deployment-live\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+  deploy_frontend_box:
+    name: 7. Deploy Frontend Box
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, build_and_audit, resolve_release, deploy_prepare]
+    if: needs.authorize_and_prepare.outputs.frontend == 'true'
+    steps:
+      - name: 7. Frontend Box - Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
 
-      - name: 5. Deploy and Verify - Prepare nginx logs snippet
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+      - name: 7. Frontend Box - SSH + Env
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+          echo "DEPLOY_LOG_FILE=${{ needs.deploy_prepare.outputs.deploy_log_file }}" >> "$GITHUB_ENV"
+          echo "FRONTEND_ORIGIN=${{ needs.deploy_prepare.outputs.frontend_origin }}" >> "$GITHUB_ENV"
+
+      - name: 7. Frontend Box - Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: 7. Frontend Box - Toolchain
+        run: |
+          scp $SSH_OPTS scripts/deploy-host-toolchain.sh ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/deploy-host-toolchain.sh
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} \
+            "NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh"
+
+      - name: 7. Frontend Box - Prepare nginx logs snippet
         run: |
           LOGS_PROXY_HOST="127.0.0.1:5001"
           if [ -n "${{ secrets.API_PRIVATE_IP }}" ]; then
@@ -410,327 +489,31 @@ jobs:
           fi
           BACKEND_PROXY_HOST="$LOGS_PROXY_HOST" bash scripts/nginx-logs-locations.sh > /tmp/nginx-logs.snippet
 
-      - name: 5. Deploy and Verify - Upload nginx logs snippet to frontend
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+      - name: 7. Frontend Box - Upload nginx logs snippet
         run: |
           scp $SSH_OPTS /tmp/nginx-logs.snippet \
             ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/nginx-logs.snippet
 
-      - name: 5. Deploy and Verify - Snapshot stable releases before deploy
+      - name: 7. Frontend Box - Snapshot stable release
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'" 2>/dev/null || true
           }
           {
-            echo "=== Snapshot stable releases (pre-deploy) ==="
-            if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ]; then
-              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
-                set -e
-                APP_ROOT="/apps/backend"
-                STABLE_LINK="$APP_ROOT/stable"
-                CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
-                if [ -z "$(readlink -f "$STABLE_LINK" || true)" ] && [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
-                  ln -sfn "$CURRENT_RELEASE" "$STABLE_LINK"
-                  echo "Recorded backend stable release: $CURRENT_RELEASE"
-                fi
-              '
-            fi
-            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
-              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
-                set -e
-                FRONTEND_ROOT="/var/www/interview"
-                STABLE_LINK="$FRONTEND_ROOT/stable"
-                CURRENT_RELEASE="$(readlink -f "$FRONTEND_ROOT/current" || true)"
-                if [ -z "$(readlink -f "$STABLE_LINK" || true)" ] && [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
-                  sudo ln -sfn "$CURRENT_RELEASE" "$STABLE_LINK"
-                  echo "Recorded frontend stable release: $CURRENT_RELEASE"
-                fi
-              '
-            fi
-          } 2>&1 | tee >(log_to_remote)
-
-      - name: 5. Deploy and Verify - Update OS, Node.js, npm, and PM2 on Target Hosts
-        run: |
-          update_host_toolchain() {
-            host="$1"
-            label="$2"
-
-            if [ -z "$host" ]; then
-              return
-            fi
-
-            {
-              echo "### $label Toolchain Update"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-
-            scp $SSH_OPTS scripts/deploy-host-toolchain.sh ${{ secrets.EC2_USER }}@"$host":/tmp/deploy-host-toolchain.sh
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$host" \
-              "NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh" | tee -a "$GITHUB_STEP_SUMMARY"
-
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          update_host_toolchain "${{ secrets.BACKEND_HOST }}" "Backend Host"
-          if [ "${{ secrets.FRONTEND_HOST }}" != "${{ secrets.BACKEND_HOST }}" ]; then
-            update_host_toolchain "${{ secrets.FRONTEND_HOST }}" "Frontend Host"
-          fi
-
-      - name: 5. Deploy and Verify - Audit Target Versions
-        if: needs.authorize_and_prepare.outputs.version_audit == 'true'
-        run: |
-          {
-            echo "### Target Environment Version Audit"
-            echo "- Node.js and npm are auto-updated before this audit runs."
-            echo "- The rest of this audit is advisory only."
-            echo ""
-            echo "#### Backend Host"
-            echo '```'
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
-              set -e
-              echo "Hostname: $(hostname)"
-              if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds; fi
-              uname -r
-              python3 --version || true
-              node --version || true
-              npm --version || true
-              pm2 --version || true
-              psql --version || true
-              apt list --upgradable 2>/dev/null | sed -n "1,25p" || true
-            ' || true
-            echo '```'
-            echo ""
-            echo "#### Frontend Host"
-            echo '```'
+            echo "=== Snapshot frontend stable (pre-deploy) ==="
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} '
               set -e
-              echo "Hostname: $(hostname)"
-              if command -v lsb_release >/dev/null 2>&1; then lsb_release -ds; fi
-              uname -r
-              node --version || true
-              npm --version || true
-              nginx -v 2>&1 || true
-              apt list --upgradable 2>/dev/null | sed -n "1,25p" || true
-            ' || true
-            echo '```'
-            echo ""
-            echo "#### Database"
-            echo '```'
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
-              set -e
-              export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
-              psql \
-                --host="${{ secrets.DB_HOST }}" \
-                --port="${{ secrets.DB_PORT }}" \
-                --username="${{ secrets.DB_USER }}" \
-                --dbname="${{ secrets.DB_NAME }}" \
-                --tuples-only \
-                --no-align \
-                --command="SHOW server_version; SHOW server_version_num;" || true
-            ' || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 5. Deploy and Verify - Sync Backend Source
-        if: needs.authorize_and_prepare.outputs.backend == 'true'
-        run: |
-          log_to_remote() {
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
-          }
-          {
-            echo "=== Sync backend source ==="
-            BACKEND_RELEASE="/apps/backend/releases/${{ needs.resolve_release.outputs.release_sha }}"
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
-            rsync -avz --delete \
-              -e "ssh $SSH_OPTS" \
-              backend/ \
-              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
-          } 2>&1 | tee >(log_to_remote)
-
-      - name: 5. Deploy and Verify - Configure Backend and Restart
-        if: needs.authorize_and_prepare.outputs.backend == 'true'
-        run: |
-          log_to_remote() {
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
-          }
-          {
-            echo "=== Configure backend and restart ==="
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
-          set -e
-          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
-          APP_ROOT="/apps/backend"
-          RELEASES_DIR="$APP_ROOT/releases"
-          VENV_DIR="$APP_ROOT/venv"
-          STABLE_LINK="$APP_ROOT/stable"
-          NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
-          STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || readlink -f "$APP_ROOT/current" || true)"
-          mkdir -p "$RELEASES_DIR"
-          if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
-          . "$VENV_DIR/bin/activate"
-          pip install --upgrade pip
-          pip install -r "$NEW_RELEASE/requirements.txt"
-          ln -sfn "$NEW_RELEASE" "$APP_ROOT/current"
-          pm2 delete backend >/dev/null 2>&1 || true
-          AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
-            pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
-          pm2 save
-          sleep 5
-          if ! curl -f http://127.0.0.1:5000/api/health; then
-            pm2 status
-            pm2 logs backend --lines 200 --nostream || true
-            if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
-              echo "Rolling back backend to stable release $STABLE_RELEASE"
-              ln -sfn "$STABLE_RELEASE" "$APP_ROOT/current"
-              pm2 delete backend >/dev/null 2>&1 || true
-              AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
-                pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
-              pm2 save
-              sleep 5
-              curl -f http://127.0.0.1:5000/api/health
-            fi
-            exit 1
-          fi
-          EOFSSH
-          } 2>&1 | tee >(log_to_remote)
-
-      - name: 5. Deploy and Verify - Sync Database Source
-        if: needs.authorize_and_prepare.outputs.database == 'true'
-        run: |
-          log_to_remote() {
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
-          }
-          {
-            echo "=== Sync database source ==="
-            DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
-            rsync -avz --delete \
-              -e "ssh $SSH_OPTS" \
-              database/ \
-              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
-          } 2>&1 | tee >(log_to_remote)
-
-      - name: 5. Deploy and Verify - Apply Database Migrations
-        if: needs.authorize_and_prepare.outputs.database == 'true'
-        run: |
-          log_to_remote() {
-            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
-          }
-          {
-            echo "=== Apply database migrations ==="
-          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
-          set -e
-          DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
-          export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
-          if ! command -v psql >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y postgresql-client
-          fi
-          SERVER_MAJOR="$(
-            psql \
-              --host="${{ secrets.DB_HOST }}" \
-              --port="${{ secrets.DB_PORT }}" \
-              --username="${{ secrets.DB_USER }}" \
-              --dbname="${{ secrets.DB_NAME }}" \
-              --tuples-only \
-              --no-align \
-              --command="SHOW server_version;" | cut -d. -f1 | tr -d '[:space:]'
-          )"
-          if [ -z "$SERVER_MAJOR" ]; then
-            echo "Unable to detect PostgreSQL server version"
-            exit 1
-          fi
-          PG_BINDIR="/usr/lib/postgresql/$SERVER_MAJOR/bin"
-          if [ ! -x "$PG_BINDIR/pg_dump" ] || [ ! -x "$PG_BINDIR/psql" ] || [ ! -x "$PG_BINDIR/pg_restore" ]; then
-            sudo apt-get update
-            sudo apt-get install -y ca-certificates curl gnupg lsb-release
-            if [ ! -f /etc/apt/sources.list.d/pgdg.list ]; then
-              echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | \
-                sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-            fi
-            if [ ! -f /usr/share/keyrings/postgresql.gpg ]; then
-              curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | \
-                gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg >/dev/null
-            fi
-            sudo apt-get update
-            sudo apt-get install -y "postgresql-client-$SERVER_MAJOR"
-          fi
-          BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
-          "$PG_BINDIR/pg_dump" \
-            --host="${{ secrets.DB_HOST }}" \
-            --port="${{ secrets.DB_PORT }}" \
-            --username="${{ secrets.DB_USER }}" \
-            --dbname="${{ secrets.DB_NAME }}" \
-            --format=custom \
-            --file="$BACKUP_FILE"
-          restore_database() {
-            echo "Rolling back database from $BACKUP_FILE"
-            "$PG_BINDIR/pg_restore" \
-              --host="${{ secrets.DB_HOST }}" \
-              --port="${{ secrets.DB_PORT }}" \
-              --username="${{ secrets.DB_USER }}" \
-              --dbname="${{ secrets.DB_NAME }}" \
-              --clean \
-              --if-exists \
-              --no-owner \
-              --no-privileges \
-              "$BACKUP_FILE"
-          }
-          trap restore_database ERR
-          "$PG_BINDIR/psql" \
-            --host="${{ secrets.DB_HOST }}" \
-            --port="${{ secrets.DB_PORT }}" \
-            --username="${{ secrets.DB_USER }}" \
-            --dbname="${{ secrets.DB_NAME }}" \
-            --set=ON_ERROR_STOP=1 \
-            --command="
-              CREATE TABLE IF NOT EXISTS schema_migrations (
-                filename TEXT PRIMARY KEY,
-                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-              );
-            "
-          MIGRATIONS_DIR="$DATABASE_RELEASE/migrations"
-          if [ -d "$MIGRATIONS_DIR" ]; then
-            for migration in $(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort); do
-              filename="$(basename "$migration")"
-              already_applied="$(
-                "$PG_BINDIR/psql" \
-                  --host="${{ secrets.DB_HOST }}" \
-                  --port="${{ secrets.DB_PORT }}" \
-                  --username="${{ secrets.DB_USER }}" \
-                  --dbname="${{ secrets.DB_NAME }}" \
-                  --tuples-only \
-                  --no-align \
-                  --command="SELECT 1 FROM schema_migrations WHERE filename = '$filename' LIMIT 1;"
-              )"
-              if [ "$already_applied" = "1" ]; then
-                echo "Skipping already applied migration: $filename"
-                continue
+              FRONTEND_ROOT="/var/www/interview"
+              STABLE_LINK="$FRONTEND_ROOT/stable"
+              CURRENT_RELEASE="$(readlink -f "$FRONTEND_ROOT/current" || true)"
+              if [ -z "$(readlink -f "$STABLE_LINK" || true)" ] && [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                sudo ln -sfn "$CURRENT_RELEASE" "$STABLE_LINK"
+                echo "Recorded frontend stable release: $CURRENT_RELEASE"
               fi
-              echo "Applying migration: $filename"
-              "$PG_BINDIR/psql" \
-                --host="${{ secrets.DB_HOST }}" \
-                --port="${{ secrets.DB_PORT }}" \
-                --username="${{ secrets.DB_USER }}" \
-                --dbname="${{ secrets.DB_NAME }}" \
-                --set=ON_ERROR_STOP=1 \
-                --single-transaction \
-                --file="$migration"
-              "$PG_BINDIR/psql" \
-                --host="${{ secrets.DB_HOST }}" \
-                --port="${{ secrets.DB_PORT }}" \
-                --username="${{ secrets.DB_USER }}" \
-                --dbname="${{ secrets.DB_NAME }}" \
-                --set=ON_ERROR_STOP=1 \
-                --command="INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT (filename) DO NOTHING;"
-            done
-          else
-            echo "No migrations directory found. Skipping database migration step."
-          fi
-          EOFSSH
+            '
           } 2>&1 | tee >(log_to_remote)
 
-      - name: 5. Deploy and Verify - Upload Frontend Build
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+      - name: 7. Frontend Box - Upload build
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
@@ -743,8 +526,7 @@ jobs:
               ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/frontend-dist/
           } 2>&1 | tee >(log_to_remote)
 
-      - name: 5. Deploy and Verify - Publish Frontend
-        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+      - name: 7. Frontend Box - Publish release
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
@@ -1032,7 +814,332 @@ jobs:
           EOFSSH
           } 2>&1 | tee >(log_to_remote)
 
-      - name: 5. Deploy and Verify - Report Deployment Status
+  deploy_backend_box:
+    name: 8. Deploy Backend/API Box
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, resolve_release, deploy_prepare]
+    if: needs.authorize_and_prepare.outputs.backend == 'true'
+    steps:
+      - name: 8. Backend Box - Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
+
+      - name: 8. Backend Box - SSH + Env
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+          echo "DEPLOY_LOG_FILE=${{ needs.deploy_prepare.outputs.deploy_log_file }}" >> "$GITHUB_ENV"
+
+      - name: 8. Backend Box - Toolchain
+        run: |
+          scp $SSH_OPTS scripts/deploy-host-toolchain.sh ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/tmp/deploy-host-toolchain.sh
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+            "NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh"
+
+      - name: 8. Backend Box - Snapshot stable release
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'" 2>/dev/null || true
+          }
+          {
+            echo "=== Snapshot backend stable (pre-deploy) ==="
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} '
+              set -e
+              APP_ROOT="/apps/backend"
+              STABLE_LINK="$APP_ROOT/stable"
+              CURRENT_RELEASE="$(readlink -f "$APP_ROOT/current" || true)"
+              if [ -z "$(readlink -f "$STABLE_LINK" || true)" ] && [ -n "$CURRENT_RELEASE" ] && [ -d "$CURRENT_RELEASE" ]; then
+                ln -sfn "$CURRENT_RELEASE" "$STABLE_LINK"
+                echo "Recorded backend stable release: $CURRENT_RELEASE"
+              fi
+            '
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 8. Backend Box - Sync source
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Sync backend source ==="
+            BACKEND_RELEASE="/apps/backend/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              backend/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$BACKEND_RELEASE/
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 8. Backend Box - Configure and restart
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Configure backend and restart ==="
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          set -e
+          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
+          APP_ROOT="/apps/backend"
+          RELEASES_DIR="$APP_ROOT/releases"
+          VENV_DIR="$APP_ROOT/venv"
+          STABLE_LINK="$APP_ROOT/stable"
+          NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
+          STABLE_RELEASE="$(readlink -f "$STABLE_LINK" || readlink -f "$APP_ROOT/current" || true)"
+          mkdir -p "$RELEASES_DIR"
+          if [ ! -d "$VENV_DIR" ]; then python3 -m venv "$VENV_DIR"; fi
+          . "$VENV_DIR/bin/activate"
+          pip install --upgrade pip
+          pip install -r "$NEW_RELEASE/requirements.txt"
+          ln -sfn "$NEW_RELEASE" "$APP_ROOT/current"
+          pm2 delete backend >/dev/null 2>&1 || true
+          AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+            pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+          pm2 save
+          sleep 5
+          if ! curl -f http://127.0.0.1:5000/api/health; then
+            pm2 status
+            pm2 logs backend --lines 200 --nostream || true
+            if [ -n "$STABLE_RELEASE" ] && [ -d "$STABLE_RELEASE" ]; then
+              echo "Rolling back backend to stable release $STABLE_RELEASE"
+              ln -sfn "$STABLE_RELEASE" "$APP_ROOT/current"
+              pm2 delete backend >/dev/null 2>&1 || true
+              AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
+                pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+              pm2 save
+              sleep 5
+              curl -f http://127.0.0.1:5000/api/health
+            fi
+            exit 1
+          fi
+          EOFSSH
+          } 2>&1 | tee >(log_to_remote)
+
+  deploy_ai_box:
+    name: 9. Deploy AI Box
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, resolve_release, deploy_prepare]
+    if: needs.authorize_and_prepare.outputs.ai == 'true'
+    steps:
+      - name: 9. AI Box - Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
+
+      - name: 9. AI Box - SSH + Env
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+          echo "DEPLOY_LOG_FILE=${{ needs.deploy_prepare.outputs.deploy_log_file }}" >> "$GITHUB_ENV"
+
+      - name: 9. AI Box - Toolchain
+        env:
+          AI_HOST: ${{ secrets.AI_HOST }}
+        run: |
+          if [ -z "$AI_HOST" ]; then
+            echo "AI_HOST GitHub secret is required for AI box deploy. Sync from AWS with scripts/aws-plan-b/sync-github-secrets.sh"
+            exit 1
+          fi
+          scp $SSH_OPTS scripts/deploy-host-toolchain.sh ${{ secrets.EC2_USER }}@"$AI_HOST":/tmp/deploy-host-toolchain.sh
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$AI_HOST" \
+            "NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh"
+
+      - name: 9. AI Box - Refresh Ollama
+        env:
+          AI_HOST: ${{ secrets.AI_HOST }}
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'" 2>/dev/null || true
+          }
+          {
+            echo "=== Deploy AI box (Ollama) ==="
+            scp $SSH_OPTS scripts/deploy-ai-host.sh ${{ secrets.EC2_USER }}@"$AI_HOST":/tmp/deploy-ai-host.sh
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@"$AI_HOST" \
+              "OLLAMA_MODEL=llama3.2:3b OLLAMA_HEALTH_URL=http://127.0.0.1:11434/api/tags bash /tmp/deploy-ai-host.sh"
+          } 2>&1 | tee >(log_to_remote)
+
+  deploy_database_box:
+    name: 10. Deploy Database (RDS)
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, resolve_release, deploy_prepare]
+    if: needs.authorize_and_prepare.outputs.database == 'true'
+    steps:
+      - name: 10. Database - Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release.outputs.release_sha }}
+
+      - name: 10. Database - SSH + Env
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+          echo "DEPLOY_LOG_FILE=${{ needs.deploy_prepare.outputs.deploy_log_file }}" >> "$GITHUB_ENV"
+
+      - name: 10. Database - Sync migration source
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Sync database source ==="
+            DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
+            rsync -avz --delete \
+              -e "ssh $SSH_OPTS" \
+              database/ \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:$DATABASE_RELEASE/
+          } 2>&1 | tee >(log_to_remote)
+
+      - name: 10. Database - Apply migrations
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
+          }
+          {
+            echo "=== Apply database migrations ==="
+          ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
+          set -e
+          DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+          export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+          SERVER_MAJOR="$(
+            psql \
+              --host="${{ secrets.DB_HOST }}" \
+              --port="${{ secrets.DB_PORT }}" \
+              --username="${{ secrets.DB_USER }}" \
+              --dbname="${{ secrets.DB_NAME }}" \
+              --tuples-only \
+              --no-align \
+              --command="SHOW server_version;" | cut -d. -f1 | tr -d '[:space:]'
+          )"
+          if [ -z "$SERVER_MAJOR" ]; then
+            echo "Unable to detect PostgreSQL server version"
+            exit 1
+          fi
+          PG_BINDIR="/usr/lib/postgresql/$SERVER_MAJOR/bin"
+          if [ ! -x "$PG_BINDIR/pg_dump" ] || [ ! -x "$PG_BINDIR/psql" ] || [ ! -x "$PG_BINDIR/pg_restore" ]; then
+            sudo apt-get update
+            sudo apt-get install -y ca-certificates curl gnupg lsb-release
+            if [ ! -f /etc/apt/sources.list.d/pgdg.list ]; then
+              echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | \
+                sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+            fi
+            if [ ! -f /usr/share/keyrings/postgresql.gpg ]; then
+              curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | \
+                gpg --dearmor | sudo tee /usr/share/keyrings/postgresql.gpg >/dev/null
+            fi
+            sudo apt-get update
+            sudo apt-get install -y "postgresql-client-$SERVER_MAJOR"
+          fi
+          BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
+          "$PG_BINDIR/pg_dump" \
+            --host="${{ secrets.DB_HOST }}" \
+            --port="${{ secrets.DB_PORT }}" \
+            --username="${{ secrets.DB_USER }}" \
+            --dbname="${{ secrets.DB_NAME }}" \
+            --format=custom \
+            --file="$BACKUP_FILE"
+          restore_database() {
+            echo "Rolling back database from $BACKUP_FILE"
+            "$PG_BINDIR/pg_restore" \
+              --host="${{ secrets.DB_HOST }}" \
+              --port="${{ secrets.DB_PORT }}" \
+              --username="${{ secrets.DB_USER }}" \
+              --dbname="${{ secrets.DB_NAME }}" \
+              --clean \
+              --if-exists \
+              --no-owner \
+              --no-privileges \
+              "$BACKUP_FILE"
+          }
+          trap restore_database ERR
+          "$PG_BINDIR/psql" \
+            --host="${{ secrets.DB_HOST }}" \
+            --port="${{ secrets.DB_PORT }}" \
+            --username="${{ secrets.DB_USER }}" \
+            --dbname="${{ secrets.DB_NAME }}" \
+            --set=ON_ERROR_STOP=1 \
+            --command="
+              CREATE TABLE IF NOT EXISTS schema_migrations (
+                filename TEXT PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+              );
+            "
+          MIGRATIONS_DIR="$DATABASE_RELEASE/migrations"
+          if [ -d "$MIGRATIONS_DIR" ]; then
+            for migration in $(find "$MIGRATIONS_DIR" -maxdepth 1 -type f -name '*.sql' | sort); do
+              filename="$(basename "$migration")"
+              already_applied="$(
+                "$PG_BINDIR/psql" \
+                  --host="${{ secrets.DB_HOST }}" \
+                  --port="${{ secrets.DB_PORT }}" \
+                  --username="${{ secrets.DB_USER }}" \
+                  --dbname="${{ secrets.DB_NAME }}" \
+                  --tuples-only \
+                  --no-align \
+                  --command="SELECT 1 FROM schema_migrations WHERE filename = '$filename' LIMIT 1;"
+              )"
+              if [ "$already_applied" = "1" ]; then
+                echo "Skipping already applied migration: $filename"
+                continue
+              fi
+              echo "Applying migration: $filename"
+              "$PG_BINDIR/psql" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --set=ON_ERROR_STOP=1 \
+                --single-transaction \
+                --file="$migration"
+              "$PG_BINDIR/psql" \
+                --host="${{ secrets.DB_HOST }}" \
+                --port="${{ secrets.DB_PORT }}" \
+                --username="${{ secrets.DB_USER }}" \
+                --dbname="${{ secrets.DB_NAME }}" \
+                --set=ON_ERROR_STOP=1 \
+                --command="INSERT INTO schema_migrations (filename) VALUES ('$filename') ON CONFLICT (filename) DO NOTHING;"
+            done
+          else
+            echo "No migrations directory found. Skipping database migration step."
+          fi
+          EOFSSH
+          } 2>&1 | tee >(log_to_remote)
+
+
+  deploy_finalize:
+    name: 11. Verify and Finalize
+    runs-on: ubuntu-latest
+    needs:
+      - authorize_and_prepare
+      - resolve_release
+      - deploy_prepare
+      - deploy_frontend_box
+      - deploy_backend_box
+      - deploy_ai_box
+      - deploy_database_box
+    if: always() && needs.deploy_prepare.result == 'success' && needs.authorize_and_prepare.outputs.has_targets == 'true'
+    steps:
+      - name: 11. Finalize - SSH + Env
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 400 ~/.ssh/deploy_key.pem
+          echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
+          echo "DEPLOY_LOG_FILE=${{ needs.deploy_prepare.outputs.deploy_log_file }}" >> "$GITHUB_ENV"
+          echo "FRONTEND_ORIGIN=${{ needs.deploy_prepare.outputs.frontend_origin }}" >> "$GITHUB_ENV"
+
+      - name: 11. Finalize - Report deployment status
         id: report_status
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
@@ -1059,7 +1166,11 @@ jobs:
             echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: 5. Deploy and Verify - Promote Stable Release
+          if [ "${{ needs.authorize_and_prepare.outputs.ai }}" = "true" ]; then
+            echo "- AI box deploy job completed (Ollama refresh)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 11. Finalize - Promote stable release
         if: success()
         continue-on-error: true
         run: |
@@ -1097,6 +1208,7 @@ jobs:
                DEPLOY_TARGET='${{ needs.authorize_and_prepare.outputs.deploy_target }}' \
                DEPLOY_FRONTEND='${{ needs.authorize_and_prepare.outputs.frontend }}' \
                DEPLOY_BACKEND='${{ needs.authorize_and_prepare.outputs.backend }}' \
+               DEPLOY_AI='${{ needs.authorize_and_prepare.outputs.ai }}' \
                DEPLOY_DATABASE='${{ needs.authorize_and_prepare.outputs.database }}' \
                bash -s" <<'EOFSSH'
           set -euo pipefail
@@ -1127,7 +1239,7 @@ jobs:
             fi
           } 2>&1 | tee >(log_to_remote)
 
-      - name: 5. Deploy and Verify - Roll Back To Last Stable Release
+      - name: 11. Finalize - Roll back on failure
         if: failure() && steps.report_status.outcome == 'failure'
         run: |
           log_to_remote() {
@@ -1210,7 +1322,7 @@ jobs:
             EOFSSH
           } 2>&1 | tee >(log_to_remote)
 
-      - name: 5. Deploy and Verify - Maintain Log Archives
+      - name: 11. Finalize - Maintain log archives
         if: always()
         run: |
           log_to_remote() {

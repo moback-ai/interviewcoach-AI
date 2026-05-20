@@ -17,6 +17,7 @@ APPLY=0
 # Keys used by .github/workflows/deploy.yml from GitHub secrets
 GITHUB_KEYS=(
   API_PRIVATE_IP
+  AI_HOST
   BACKEND_HOST
   FRONTEND_HOST
   DB_HOST
