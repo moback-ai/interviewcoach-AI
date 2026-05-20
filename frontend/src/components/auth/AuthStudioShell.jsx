@@ -1,5 +1,6 @@
 import React from 'react';
-import AnimatedWavesLayer from '../common/AnimatedWavesLayer';
+import StyleBackdrop from '../common/StyleBackdrop';
+import { AUTH_BACKGROUND_STYLE_ID } from '../../lib/backgroundStyles';
 
 export default function AuthStudioShell({
   eyebrow,
@@ -13,14 +14,15 @@ export default function AuthStudioShell({
 }) {
   return (
     <div className="auth-studio-page">
+      <StyleBackdrop
+        styleId={AUTH_BACKGROUND_STYLE_ID}
+        deferWaves={false}
+        interactive
+        className="auth-studio-page-backdrop"
+      />
+
       <aside className="auth-studio-hero">
         <div className="auth-studio-hero-backdrop">
-          <AnimatedWavesLayer
-            className="auth-studio-hero-vanta"
-            preset="auth"
-            defer={false}
-            interactive
-          />
           <div className="auth-studio-hero-shade" />
           <div className="auth-studio-hero-grid" />
         </div>

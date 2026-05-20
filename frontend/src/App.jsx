@@ -21,6 +21,7 @@ const InterviewPage       = lazy(() => import('./pages/InterviewPage'));
 const InterviewFeedbackPage = lazy(() => import('./pages/InterviewFeedbackPage'));
 const PaymentSuccessPage  = lazy(() => import('./pages/PaymentSuccess'));
 const FAQPage             = lazy(() => import('./pages/FAQPage'));
+const BackgroundStyleLab  = lazy(() => import('./pages/BackgroundStyleLab'));
 const AdminLogsPage       = lazy(() => import('./pages/AdminLogsPage'));
 
 const LoadingSpinner = () => (
@@ -53,6 +54,7 @@ const pageTransition = {
 function App() {
   const location = useLocation();
   const routeKey = `${location.pathname}${location.search}`;
+  const isStyleLab = location.pathname.startsWith('/style-lab');
 
   return (
     <>
@@ -60,11 +62,11 @@ function App() {
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={routeKey}
-            variants={pageTransition}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={{ duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
+            variants={isStyleLab ? undefined : pageTransition}
+            initial={isStyleLab ? false : 'initial'}
+            animate={isStyleLab ? undefined : 'animate'}
+            exit={isStyleLab ? undefined : 'exit'}
+            transition={isStyleLab ? undefined : { duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
             className="min-h-screen"
           >
             <Routes location={location}>
@@ -77,6 +79,7 @@ function App() {
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/verify-email"  element={<VerifyEmail />} />
               <Route path="/faq"           element={<FAQPage />} />
+              <Route path="/style-lab/backgrounds" element={<BackgroundStyleLab />} />
 
               {/* Protected routes */}
               <Route element={<AuthenticatedShell />}>
