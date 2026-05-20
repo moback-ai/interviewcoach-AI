@@ -37,9 +37,15 @@ export async function apiCall(endpoint, options = {}) {
   try {
     const isFileUpload = options.body instanceof FormData;
     const headers = { ...getHeaders(isFileUpload), ...options.headers };
-    const config = { method: options.method || 'GET', headers, ...options };
-    if (options.body && !isFileUpload) {
-      config.body = JSON.stringify(options.body);
+    const { timeoutMs, signal: callerSignal, ...restOptions } = options;
+    const config = { method: restOptions.method || 'GET', headers, ...restOptions };
+    if (restOptions.body && !isFileUpload) {
+      config.body = JSON.stringify(restOptions.body);
+    }
+    if (timeoutMs && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+      config.signal = AbortSignal.timeout(timeoutMs);
+    } else if (callerSignal) {
+      config.signal = callerSignal;
     }
     const response = await fetch(buildUrl(endpoint), config);
 
@@ -73,6 +79,15 @@ export async function apiCall(endpoint, options = {}) {
 
     if (!response.ok) {
       let msg = `HTTP ${response.status}`;
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        if (response.status === 504) {
+          throw new Error(
+            'The server timed out while processing your request. Try again with a smaller file or paste the job description text manually.'
+          );
+        }
+        throw new Error(`Server error (${response.status}). Please try again in a moment.`);
+      }
       try { const e = await response.json(); msg = e.error || e.message || msg; } catch {}
       throw new Error(msg);
     }

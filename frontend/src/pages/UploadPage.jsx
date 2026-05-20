@@ -46,6 +46,8 @@ function UploadPage() {
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
   const [questionValidationError, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
+  const classifiedFromFileRef = useRef(false);
+  const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
 
   useBodyScrollLock(loading || successModal.isOpen);
 
@@ -53,6 +55,11 @@ function UploadPage() {
 
   // Debounced function to classify technical role when fields change
   useEffect(() => {
+    if (classifiedFromFileRef.current) {
+      classifiedFromFileRef.current = false;
+      return;
+    }
+
     const trimmedTitle = jobTitle.trim();
     const trimmedDescription = jobDescription.trim();
     
@@ -175,7 +182,7 @@ function UploadPage() {
       formData.append('file', file);
 
       // Use the uploadFile helper function with correct endpoint
-      const result = await uploadFile('/parse-job-description', formData);
+      const result = await uploadFile('/parse-job-description', formData, { timeoutMs: 90000 });
 
       if (!result.success) {
         throw new Error(result.message || 'Failed to parse job description');
@@ -184,7 +191,8 @@ function UploadPage() {
       // Populate the fields with parsed data
       setJobTitle(result.data.job_title || '');
       setJobDescription(result.data.job_description || '');
-      setIsTechnical(result.data.is_technical || false); // Add this line
+      setIsTechnical(result.data.is_technical || false);
+      classifiedFromFileRef.current = true;
       setJobDescParsed(true);
       
     } catch (error) {
@@ -192,9 +200,11 @@ function UploadPage() {
       const raw = mapEmptyUploadFileError(
         error instanceof Error ? error.message : String(error || '')
       );
-      const userMessage = /job description must be at least \d+ characters/i.test(raw)
-        ? 'The uploaded job description is too short. Please add more detail about the role and try again.'
-        : raw || 'Could not read that job description file. Try another file or paste the text below.';
+      const userMessage = /timed out|504|gateway time-out/i.test(raw)
+        ? 'Parsing took too long and the server timed out. Try a smaller PDF/DOCX, or paste the job description text in the fields below.'
+        : /job description must be at least \d+ characters/i.test(raw)
+          ? 'The uploaded job description is too short. Please add more detail about the role and try again.'
+          : raw || 'Could not read that job description file. Try another file or paste the text below.';
       setJobDescError(userMessage);
       setJobDescParsed(false);
       setIsTechnical(false); // Reset on error
@@ -476,11 +486,14 @@ function UploadPage() {
           'Authorization': `Bearer ${session.access_token}`,
           'Content-Type': 'application/json'
         },
+        signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(GENERATE_QUESTIONS_TIMEOUT_MS)
+          : undefined,
         body: JSON.stringify({
           resume_url: resumeUrl,
           job_title: jobTitle,
           job_description: jobDescription,
-          // New parameters for question generation
+          prefer_local: true,
           question_counts: {
             beginner: easyQuestions,
             medium: mediumQuestions,
@@ -497,13 +510,32 @@ function UploadPage() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          if (response.status === 504) {
+            throw new Error(
+              'Question generation timed out on the server. Deploy the latest backend or retry with fewer questions.'
+            );
+          }
+          throw new Error(`Server error (${response.status}). Please try again.`);
+        }
+        let errorData = {};
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = {};
+        }
         throw new Error(errorData.message || `Backend API error: ${response.status}`);
       }
 
       return await response.json();
     } catch (error) {
       console.error('Error calling backend API:', error);
+      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+        throw new Error(
+          'Question generation timed out after 3 minutes. The server may still be busy — try again with fewer questions or check backend logs.'
+        );
+      }
       throw error;
     }
   };

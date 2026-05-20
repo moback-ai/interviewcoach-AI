@@ -395,20 +395,20 @@ function DashboardPage() {
         resume_url: pairing.resumeUrl,
         job_title: pairing.jobTitle,
         job_description: pairing.jobDescription,
-        // ✅ FIX: Send question_counts in the correct format that backend expects
+        prefer_local: true,
         question_counts: {
-          beginner: questionSettings.easy || 1,  // ✅ FIX: Use 'beginner' key (not 'easy')
+          beginner: questionSettings.easy || 1,
           medium: questionSettings.medium || 1,
           hard: questionSettings.hard || 1,
           coding: questionSettings.coding || 0
         },
-        split: questionSettings.splitMode || false,  // ✅ FIX: Use 'split' (not 'split_mode')
-        resume_pct: questionSettings.splitResumePercentage || 50,  // ✅ ADD: Missing parameter
-        jd_pct: 100 - (questionSettings.splitResumePercentage || 50),  // ✅ ADD: Missing parameter
-        blend: questionSettings.blendMode || false,  // ✅ FIX: Use 'blend' (not 'blend_mode')
-        blend_pct_resume: questionSettings.blendResumePercentage || 50,  // ✅ ADD: Missing parameter
-        blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50)  // ✅ ADD: Missing parameter
-      });
+        split: questionSettings.splitMode || false,
+        resume_pct: questionSettings.splitResumePercentage || 50,
+        jd_pct: 100 - (questionSettings.splitResumePercentage || 50),
+        blend: questionSettings.blendMode || false,
+        blend_pct_resume: questionSettings.blendResumePercentage || 50,
+        blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50)
+      }, { timeoutMs: 180000 });
 
       return response;
     } catch (error) {
