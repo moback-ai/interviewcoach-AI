@@ -96,6 +96,23 @@ const cancelIdle = (handle) => {
   window.clearTimeout(handle);
 };
 
+const shouldSkipWebGL = () => {
+  if (typeof window === 'undefined') {
+    return true;
+  }
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return true;
+  }
+  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  if (connection?.saveData) {
+    return true;
+  }
+  if (connection?.effectiveType && /^(slow-2g|2g)$/.test(connection.effectiveType)) {
+    return true;
+  }
+  return false;
+};
+
 export default function AnimatedWavesLayer({
   className = '',
   preset = 'subtle',
@@ -109,10 +126,8 @@ export default function AnimatedWavesLayer({
 
   useEffect(() => {
     let cancelled = false;
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
     const mountEffect = async () => {
-      if (!elementRef.current || prefersReducedMotion || cancelled) {
+      if (!elementRef.current || shouldSkipWebGL() || cancelled) {
         return;
       }
 
