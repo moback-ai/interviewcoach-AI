@@ -5010,6 +5010,24 @@ body::after {
   min-height: 12rem;
 }
 
+.landing-shell {
+  position: relative;
+  min-height: 100vh;
+  isolation: isolate;
+}
+
+.landing-shell__bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.landing-shell__main {
+  position: relative;
+  z-index: 1;
+}
+
 /* ── Background style lab + CSS-only presets ── */
 .style-backdrop {
   position: absolute;

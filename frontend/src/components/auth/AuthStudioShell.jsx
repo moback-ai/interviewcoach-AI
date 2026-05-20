@@ -16,7 +16,7 @@ export default function AuthStudioShell({
     <div className="auth-studio-page">
       <StyleBackdrop
         styleId={AUTH_BACKGROUND_STYLE_ID}
-        deferWaves={false}
+        deferWaves
         interactive
         className="auth-studio-page-backdrop"
       />
