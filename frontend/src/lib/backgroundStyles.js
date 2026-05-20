@@ -10,7 +10,7 @@ export const BACKGROUND_STYLES = [
     vantaPreset: 'auth',
     shell: 'auth-studio',
     thumbClass: 'bg-style-thumb-ocean-waves',
-    recommendedFor: 'Login, Sign up',
+    recommendedFor: 'Login, Sign up, Upload, Dashboard, Profile, FAQ, Landing',
   },
   {
     id: 'soft-cloud',
@@ -89,8 +89,13 @@ export const DEFAULT_BACKGROUND_STYLE_ID = 'ocean-waves';
 /** Auth/login/signup — ocean-waves (Vanta auth preset + cursor interaction). */
 export const AUTH_BACKGROUND_STYLE_ID = 'ocean-waves';
 
-/** Protected app pages (upload, dashboard, etc.). */
-export const APP_BACKGROUND_STYLE_ID = 'soft-cloud';
+/** Protected app pages (upload, dashboard, etc.) — same ocean-waves look as auth. */
+export const APP_BACKGROUND_STYLE_ID = 'ocean-waves';
+
+export function isInteractiveWaveStyle(styleId) {
+  const style = getBackgroundStyleById(styleId);
+  return style?.vantaPreset === 'auth';
+}
 
 export function getBackgroundStyleById(styleId) {
   return BACKGROUND_STYLES.find((style) => style.id === styleId)
