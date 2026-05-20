@@ -46,7 +46,7 @@ on:
 
 jobs:
   authorize_and_prepare:
-    name: 1. Authorize and Prepare
+    name: 1. Authorize
     runs-on: ubuntu-latest
     outputs:
       frontend: ${{ steps.targets.outputs.frontend }}
@@ -57,12 +57,18 @@ jobs:
       requested_ref: ${{ github.event.inputs.git_ref }}
       deploy_target: ${{ github.event.inputs.deploy_target }}
       version_audit: ${{ github.event.inputs.version_audit }}
+      deploy_frontend_name: ${{ steps.targets.outputs.deploy_frontend_name }}
+      deploy_backend_name: ${{ steps.targets.outputs.deploy_backend_name }}
+      deploy_ai_name: ${{ steps.targets.outputs.deploy_ai_name }}
+      deploy_database_name: ${{ steps.targets.outputs.deploy_database_name }}
+      deployed_summary_name: ${{ steps.targets.outputs.deployed_summary_name }}
+      deployed_to_list: ${{ steps.targets.outputs.deployed_to_list }}
 
     steps:
-      - name: 1. Authorize and Prepare - Record Request
+      - name: 1. Authorize - Record Request
         run: |
           {
-            echo "## 1. Authorize and Prepare"
+            echo "## 1. Authorize"
             echo "### Deployment Request"
             echo "- Requested by: \`${{ github.actor }}\`"
             echo "- Triggering actor: \`${{ github.triggering_actor || github.actor }}\`"
@@ -70,13 +76,13 @@ jobs:
             echo "- The deployment will resolve the newest commit on the requested ref after approval, so the run always uses the latest approved code at start time."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 1. Authorize and Prepare - Checkout Selected Branch
+      - name: 1. Authorize - Checkout Selected Branch
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.git_ref }}
           fetch-depth: 20
 
-      - name: 1. Authorize and Prepare - Capture Branch Details and Code Review Notes
+      - name: 1. Authorize - Capture Branch Details and Code Review Notes
         run: |
           {
             echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
@@ -86,7 +92,7 @@ jobs:
             echo "- Requested by: \`${{ github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 1. Authorize and Prepare - Detect Changed Areas
+      - name: 1. Authorize - Detect Changed Areas
         id: changes
         uses: dorny/paths-filter@v4
         with:
@@ -108,8 +114,13 @@ jobs:
             database:
               - 'database/**'
 
-      - name: 1. Authorize and Prepare - Resolve Deployment Targets
+      - name: 1. Authorize - Resolve Deployment Targets
         id: targets
+        env:
+          FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
+          BACKEND_HOST: ${{ secrets.BACKEND_HOST }}
+          AI_HOST: ${{ secrets.AI_HOST }}
+          DB_HOST: ${{ secrets.DB_HOST }}
         run: |
           target="${{ github.event.inputs.deploy_target }}"
           changed_frontend="${{ steps.changes.outputs.frontend }}"
@@ -170,15 +181,58 @@ jobs:
           echo "ai=$ai" >> "$GITHUB_OUTPUT"
           echo "database=$database" >> "$GITHUB_OUTPUT"
           echo "has_targets=$has_targets" >> "$GITHUB_OUTPUT"
+
+          deploy_frontend_name=""
+          deploy_backend_name=""
+          deploy_ai_name=""
+          deploy_database_name=""
+          deployed_to_list=""
+          step_num=5
+
+          if [ "$frontend" = "true" ]; then
+            host="${FRONTEND_HOST:-frontend-box}"
+            deploy_frontend_name="${step_num}. Deploying → Frontend (${host})"
+            deployed_to_list="${deployed_to_list}Frontend (${host}), "
+            step_num=$((step_num + 1))
+          fi
+          if [ "$backend" = "true" ]; then
+            host="${BACKEND_HOST:-backend-api-box}"
+            deploy_backend_name="${step_num}. Deploying → Backend/API (${host})"
+            deployed_to_list="${deployed_to_list}Backend/API (${host}), "
+            step_num=$((step_num + 1))
+          fi
+          if [ "$ai" = "true" ]; then
+            host="${AI_HOST:-ai-box}"
+            deploy_ai_name="${step_num}. Deploying → AI / Ollama (${host})"
+            deployed_to_list="${deployed_to_list}AI (${host}), "
+            step_num=$((step_num + 1))
+          fi
+          if [ "$database" = "true" ]; then
+            host="${DB_HOST:-rds}"
+            deploy_database_name="${step_num}. Deploying → Database (RDS ${host})"
+            deployed_to_list="${deployed_to_list}Database (RDS ${host}), "
+            step_num=$((step_num + 1))
+          fi
+
+          deployed_to_list="${deployed_to_list%, }"
+          deployed_summary_name="${step_num}. Deployed to ${deployed_to_list:-nothing}"
+
+          echo "deploy_frontend_name=$deploy_frontend_name" >> "$GITHUB_OUTPUT"
+          echo "deploy_backend_name=$deploy_backend_name" >> "$GITHUB_OUTPUT"
+          echo "deploy_ai_name=$deploy_ai_name" >> "$GITHUB_OUTPUT"
+          echo "deploy_database_name=$deploy_database_name" >> "$GITHUB_OUTPUT"
+          echo "deployed_summary_name=$deployed_summary_name" >> "$GITHUB_OUTPUT"
+          echo "deployed_to_list=$deployed_to_list" >> "$GITHUB_OUTPUT"
+
           echo "Resolved targets -> frontend=$frontend backend=$backend ai=$ai database=$database has_targets=$has_targets"
           {
-            echo "### Selected Components"
-            echo "- Deploy mode: \`$target\`"
-            echo "- Frontend box: \`$frontend\`"
-            echo "- Backend/API box: \`$backend\`"
-            echo "- AI box: \`$ai\`"
-            echo "- Database (RDS migrations): \`$database\`"
-            echo "- Will run deploy jobs: \`$has_targets\`"
+            echo "### Deploy Plan (steps 5+)"
+            echo "- Mode: \`$target\`"
+            if [ -n "$deploy_frontend_name" ]; then echo "- \`$deploy_frontend_name\`"; fi
+            if [ -n "$deploy_backend_name" ]; then echo "- \`$deploy_backend_name\`"; fi
+            if [ -n "$deploy_ai_name" ]; then echo "- \`$deploy_ai_name\`"; fi
+            if [ -n "$deploy_database_name" ]; then echo "- \`$deploy_database_name\`"; fi
+            echo "- Final: \`$deployed_summary_name\`"
             echo "### Changed Areas On Selected Ref"
             echo "- Frontend: \`$changed_frontend\`"
             echo "- Backend (API): \`$changed_backend\`"
@@ -186,27 +240,71 @@ jobs:
             echo "- Database: \`$changed_database\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  build_and_audit:
-    name: 2. Build and Audit
+  deployment_approval:
+    name: 2. Approval
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, deployment_approval, resolve_release]
+    needs: authorize_and_prepare
+    environment:
+      name: production
     steps:
-      - name: 2. Build and Audit - Checkout Selected Branch
+      - name: 2. Approval - Record Protected Approval
+        run: |
+          {
+            echo "## 2. Approval"
+            echo "- Deployment request approved through the protected \`production\` environment."
+            echo "- Requested by: \`${{ github.actor }}\`"
+            echo "- Planned deploy steps appear in job **1. Authorize** summary."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build_and_audit:
+    name: 3. Build and Audit
+    runs-on: ubuntu-latest
+    needs: [authorize_and_prepare, deployment_approval]
+    outputs:
+      release_sha: ${{ steps.resolve.outputs.release_sha }}
+      release_ref: ${{ steps.resolve.outputs.release_ref }}
+    steps:
+      - name: 3. Build and Audit - Checkout Repository
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve_release.outputs.release_sha }}
+          fetch-depth: 0
 
-      - name: 2. Build and Audit - Validate Tooling
+      - name: 3. Build and Audit - Resolve Approved Release
+        id: resolve
+        run: |
+          REQUESTED_REF="${{ needs.authorize_and_prepare.outputs.requested_ref }}"
+          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
+          if [ -n "$REQUESTED_REF" ]; then
+            git fetch --no-tags origin "$REQUESTED_REF" --depth=1 || true
+          fi
+          git fetch --no-tags origin "$DEFAULT_BRANCH" --depth=1 || true
+          if git rev-parse --verify --quiet "origin/$REQUESTED_REF" >/dev/null; then
+            RELEASE_REF="origin/$REQUESTED_REF"
+            RELEASE_SHA="$(git rev-parse "origin/$REQUESTED_REF")"
+          else
+            RELEASE_REF="$REQUESTED_REF"
+            RELEASE_SHA="$(git rev-parse "$REQUESTED_REF")"
+          fi
+          echo "release_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "## 3. Build and Audit"
+            echo "- Resolved commit: \`$RELEASE_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 3. Build and Audit - Checkout Release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.release_sha }}
+
+      - name: 3. Build and Audit - Validate Tooling
         run: |
           python3 --version
           node --version
           npm --version
-          {
-            echo "## 2. Build and Audit"
-            echo "- Python, Node, and npm are available on the runner."
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "- Python, Node, and npm are available on the runner." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Build and Audit - Audit Frontend Dependency Versions
+      - name: 3. Build and Audit - Audit Frontend Dependency Versions
         if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         working-directory: frontend
         run: |
@@ -220,7 +318,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Build and Audit - Audit Backend Dependency Versions
+      - name: 3. Build and Audit - Audit Backend Dependency Versions
         if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           python3 <<'PY'
@@ -261,7 +359,7 @@ jobs:
           PY
           cat "$HOME/backend_version_audit.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Build and Audit - Note Upgrade Policy
+      - name: 3. Build and Audit - Note Upgrade Policy
         if: needs.authorize_and_prepare.outputs.version_audit == 'true'
         run: |
           {
@@ -272,13 +370,13 @@ jobs:
             echo "- Apply infrastructure upgrades in a separate approved maintenance window."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Build and Audit - Setup Node
+      - name: 3. Build and Audit - Setup Node
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION_SPEC }}
 
-      - name: 2. Build and Audit - Update npm
+      - name: 3. Build and Audit - Update npm
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
           NPM_TARGET="${{ env.NPM_VERSION_SPEC }}"
@@ -292,7 +390,7 @@ jobs:
             echo "- Build runner npm: \`$(npm --version)\` (target: ${NPM_TARGET})"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Build and Audit - Build Frontend
+      - name: 3. Build and Audit - Build Frontend
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         working-directory: frontend
         run: |
@@ -304,7 +402,7 @@ jobs:
             echo "- Frontend build completed successfully."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 2. Build and Audit - Upload Frontend Artifact
+      - name: 3. Build and Audit - Upload Frontend Artifact
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -312,7 +410,7 @@ jobs:
           path: frontend/dist
           if-no-files-found: error
 
-      - name: 2. Build and Audit - Skip Frontend Build When Not Requested
+      - name: 3. Build and Audit - Skip Frontend Build When Not Requested
         if: needs.authorize_and_prepare.outputs.frontend != 'true'
         run: |
           echo "Frontend build skipped because deploy target does not include frontend."
@@ -320,82 +418,25 @@ jobs:
             echo "- Frontend build skipped."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  deployment_approval:
-    name: 3. Approval
-    runs-on: ubuntu-latest
-    needs: authorize_and_prepare
-    environment:
-      name: production
-    steps:
-      - name: 3. Approval - Record Protected Approval
-        run: |
-          {
-            echo "## 3. Approval"
-            echo "- Deployment request approved through the protected \`production\` environment."
-            echo "- Requested by: \`${{ github.actor }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  resolve_release:
-    name: 4. Resolve Approved Release
-    runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, deployment_approval]
-    outputs:
-      release_sha: ${{ steps.resolve.outputs.release_sha }}
-      release_ref: ${{ steps.resolve.outputs.release_ref }}
-    steps:
-      - name: 4. Resolve Approved Release - Checkout Repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: 4. Resolve Approved Release - Select Latest Approved Commit
-        id: resolve
-        run: |
-          REQUESTED_REF="${{ needs.authorize_and_prepare.outputs.requested_ref }}"
-          DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
-
-          if [ -n "$REQUESTED_REF" ]; then
-            git fetch --no-tags origin "$REQUESTED_REF" --depth=1 || true
-          fi
-          git fetch --no-tags origin "$DEFAULT_BRANCH" --depth=1 || true
-
-          if git rev-parse --verify --quiet "origin/$REQUESTED_REF" >/dev/null; then
-            RELEASE_REF="origin/$REQUESTED_REF"
-            RELEASE_SHA="$(git rev-parse "origin/$REQUESTED_REF")"
-          else
-            RELEASE_REF="$REQUESTED_REF"
-            RELEASE_SHA="$(git rev-parse "$REQUESTED_REF")"
-          fi
-
-          echo "release_ref=$RELEASE_REF" >> "$GITHUB_OUTPUT"
-          echo "release_sha=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
-
-          {
-            echo "## 4. Resolve Approved Release"
-            echo "- Requested ref: \`$REQUESTED_REF\`"
-            echo "- Resolved ref: \`$RELEASE_REF\`"
-            echo "- Resolved commit: \`$RELEASE_SHA\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   no_deploy_targets:
-    name: 5. Skip Deploy (No Changes)
+    name: 4. Skipped — No Code Changes
     runs-on: ubuntu-latest
     needs: authorize_and_prepare
     if: needs.authorize_and_prepare.outputs.has_targets != 'true'
     steps:
-      - name: 5. Skip Deploy - Nothing To Deploy
+      - name: 4. Skipped — Nothing To Deploy
         run: |
           {
-            echo "## 5. Skip Deploy"
+            echo "## 4. Skipped — No Code Changes"
             echo "- Mode: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
             echo "- No frontend, backend, AI, or database paths changed on the selected ref."
             echo "- All deploy box jobs were skipped."
           } >> "$GITHUB_STEP_SUMMARY"
 
   deploy_prepare:
-    name: 6. Deploy Prepare (SSH + Logs)
+    name: Deploy Prepare (SSH + Logs)
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, build_and_audit, deployment_approval, resolve_release]
+    needs: [authorize_and_prepare, build_and_audit, deployment_approval]
     if: needs.authorize_and_prepare.outputs.has_targets == 'true'
     outputs:
       deploy_log_file: ${{ steps.deploy_log.outputs.deploy_log_file }}
@@ -404,20 +445,20 @@ jobs:
       group: deploy-feature-test-code-db-production
       cancel-in-progress: false
     steps:
-      - name: 6. Deploy Prepare - Checkout
+      - name: 4. Deploy Prepare - Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve_release.outputs.release_sha }}
+          ref: ${{ needs.build_and_audit.outputs.release_sha }}
 
-      - name: 6. Deploy Prepare - Setup SSH
+      - name: 4. Deploy Prepare - Setup SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 400 ~/.ssh/deploy_key.pem
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
           {
-            echo "## 6. Deploy Prepare"
-            echo "- Release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
+            echo "## 4. Deploy Prepare"
+            echo "- Release SHA: \`${{ needs.build_and_audit.outputs.release_sha }}\`"
             echo "- Frontend host: \`${{ secrets.FRONTEND_HOST }}\`"
             echo "- Backend/API host: \`${{ secrets.BACKEND_HOST }}\`"
             echo "- AI host: \`${{ secrets.AI_HOST }}\`"
@@ -425,7 +466,7 @@ jobs:
             echo "- Boxes: frontend=\`${{ needs.authorize_and_prepare.outputs.frontend }}\` backend=\`${{ needs.authorize_and_prepare.outputs.backend }}\` ai=\`${{ needs.authorize_and_prepare.outputs.ai }}\` database=\`${{ needs.authorize_and_prepare.outputs.database }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: 6. Deploy Prepare - Deployment Log
+      - name: 4. Deploy Prepare - Deployment Log
         id: deploy_log
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
@@ -450,15 +491,15 @@ jobs:
           echo "FRONTEND_ORIGIN=$FRONTEND_ORIGIN" >> "$GITHUB_ENV"
 
   deploy_frontend_box:
-    name: 7. Deploy Frontend Box
+    name: ${{ needs.authorize_and_prepare.outputs.deploy_frontend_name }}
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, build_and_audit, resolve_release, deploy_prepare]
+    needs: [authorize_and_prepare, build_and_audit, deploy_prepare]
     if: needs.authorize_and_prepare.outputs.frontend == 'true'
     steps:
       - name: 7. Frontend Box - Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve_release.outputs.release_sha }}
+          ref: ${{ needs.build_and_audit.outputs.release_sha }}
 
       - name: 7. Frontend Box - SSH + Env
         run: |
@@ -535,7 +576,7 @@ jobs:
             echo "=== Publish frontend ==="
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} <<'EOFSSH'
           set -e
-          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
+          RELEASE_ID="${{ needs.build_and_audit.outputs.release_sha }}"
           FRONTEND_ROOT="/var/www/interview"
           RELEASES_DIR="$FRONTEND_ROOT/releases"
           CURRENT_LINK="$FRONTEND_ROOT/current"
@@ -815,15 +856,15 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
   deploy_backend_box:
-    name: 8. Deploy Backend/API Box
+    name: ${{ needs.authorize_and_prepare.outputs.deploy_backend_name }}
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, resolve_release, deploy_prepare]
+    needs: [authorize_and_prepare, build_and_audit, deploy_prepare]
     if: needs.authorize_and_prepare.outputs.backend == 'true'
     steps:
       - name: 8. Backend Box - Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve_release.outputs.release_sha }}
+          ref: ${{ needs.build_and_audit.outputs.release_sha }}
 
       - name: 8. Backend Box - SSH + Env
         run: |
@@ -865,7 +906,7 @@ jobs:
           }
           {
             echo "=== Sync backend source ==="
-            BACKEND_RELEASE="/apps/backend/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            BACKEND_RELEASE="/apps/backend/releases/${{ needs.build_and_audit.outputs.release_sha }}"
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $BACKEND_RELEASE"
             rsync -avz --delete \
               -e "ssh $SSH_OPTS" \
@@ -882,7 +923,7 @@ jobs:
             echo "=== Configure backend and restart ==="
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
-          RELEASE_ID="${{ needs.resolve_release.outputs.release_sha }}"
+          RELEASE_ID="${{ needs.build_and_audit.outputs.release_sha }}"
           APP_ROOT="/apps/backend"
           RELEASES_DIR="$APP_ROOT/releases"
           VENV_DIR="$APP_ROOT/venv"
@@ -919,15 +960,15 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
   deploy_ai_box:
-    name: 9. Deploy AI Box
+    name: ${{ needs.authorize_and_prepare.outputs.deploy_ai_name }}
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, resolve_release, deploy_prepare]
+    needs: [authorize_and_prepare, build_and_audit, deploy_prepare]
     if: needs.authorize_and_prepare.outputs.ai == 'true'
     steps:
       - name: 9. AI Box - Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve_release.outputs.release_sha }}
+          ref: ${{ needs.build_and_audit.outputs.release_sha }}
 
       - name: 9. AI Box - SSH + Env
         run: |
@@ -964,15 +1005,15 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
   deploy_database_box:
-    name: 10. Deploy Database (RDS)
+    name: ${{ needs.authorize_and_prepare.outputs.deploy_database_name }}
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, resolve_release, deploy_prepare]
+    needs: [authorize_and_prepare, build_and_audit, deploy_prepare]
     if: needs.authorize_and_prepare.outputs.database == 'true'
     steps:
       - name: 10. Database - Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve_release.outputs.release_sha }}
+          ref: ${{ needs.build_and_audit.outputs.release_sha }}
 
       - name: 10. Database - SSH + Env
         run: |
@@ -989,7 +1030,7 @@ jobs:
           }
           {
             echo "=== Sync database source ==="
-            DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+            DATABASE_RELEASE="/apps/database/releases/${{ needs.build_and_audit.outputs.release_sha }}"
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "mkdir -p $DATABASE_RELEASE"
             rsync -avz --delete \
               -e "ssh $SSH_OPTS" \
@@ -1006,7 +1047,7 @@ jobs:
             echo "=== Apply database migrations ==="
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} <<'EOFSSH'
           set -e
-          DATABASE_RELEASE="/apps/database/releases/${{ needs.resolve_release.outputs.release_sha }}"
+          DATABASE_RELEASE="/apps/database/releases/${{ needs.build_and_audit.outputs.release_sha }}"
           export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
           if ! command -v psql >/dev/null 2>&1; then
             sudo apt-get update
@@ -1041,7 +1082,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y "postgresql-client-$SERVER_MAJOR"
           fi
-          BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
+          BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.build_and_audit.outputs.release_sha }}.dump"
           "$PG_BINDIR/pg_dump" \
             --host="${{ secrets.DB_HOST }}" \
             --port="${{ secrets.DB_PORT }}" \
@@ -1118,11 +1159,11 @@ jobs:
 
 
   deploy_finalize:
-    name: 11. Verify and Finalize
+    name: ${{ needs.authorize_and_prepare.outputs.deployed_summary_name }}
     runs-on: ubuntu-latest
     needs:
       - authorize_and_prepare
-      - resolve_release
+      - build_and_audit
       - deploy_prepare
       - deploy_frontend_box
       - deploy_backend_box
@@ -1130,7 +1171,7 @@ jobs:
       - deploy_database_box
     if: always() && needs.deploy_prepare.result == 'success' && needs.authorize_and_prepare.outputs.has_targets == 'true'
     steps:
-      - name: 11. Finalize - SSH + Env
+      - name: Deployed — SSH + Env
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key.pem
@@ -1139,17 +1180,19 @@ jobs:
           echo "DEPLOY_LOG_FILE=${{ needs.deploy_prepare.outputs.deploy_log_file }}" >> "$GITHUB_ENV"
           echo "FRONTEND_ORIGIN=${{ needs.deploy_prepare.outputs.frontend_origin }}" >> "$GITHUB_ENV"
 
-      - name: 11. Finalize - Report deployment status
+      - name: Deployed — Summary
         id: report_status
         env:
           FRONTEND_DOMAIN: ${{ secrets.FRONTEND_DOMAIN || 'ugaanlabs.ai' }}
           FRONTEND_HOST: ${{ secrets.FRONTEND_HOST }}
         run: |
           {
-            echo "### Deployment Status"
+            echo "## ${{ needs.authorize_and_prepare.outputs.deployed_summary_name }}"
+            echo "### Deployed to"
+            echo "- **${{ needs.authorize_and_prepare.outputs.deployed_to_list }}**"
+            echo "- Release SHA: \`${{ needs.build_and_audit.outputs.release_sha }}\`"
             echo "- Requested ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
-            echo "- Selected release SHA: \`${{ needs.resolve_release.outputs.release_sha }}\`"
-            echo "- Deploy target: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
+            echo "- Deploy mode: \`${{ needs.authorize_and_prepare.outputs.deploy_target }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
@@ -1203,7 +1246,7 @@ jobs:
             fi
 
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
-              "RELEASE_SHA='${{ needs.resolve_release.outputs.release_sha }}' \
+              "RELEASE_SHA='${{ needs.build_and_audit.outputs.release_sha }}' \
                REQUESTED_REF='${{ needs.authorize_and_prepare.outputs.requested_ref }}' \
                DEPLOY_TARGET='${{ needs.authorize_and_prepare.outputs.deploy_target }}' \
                DEPLOY_FRONTEND='${{ needs.authorize_and_prepare.outputs.frontend }}' \
@@ -1224,6 +1267,7 @@ jobs:
               "deploy_target": os.environ["DEPLOY_TARGET"],
               "frontend": os.environ["DEPLOY_FRONTEND"],
               "backend": os.environ["DEPLOY_BACKEND"],
+              "ai": os.environ.get("DEPLOY_AI", "false"),
               "database": os.environ["DEPLOY_DATABASE"],
               "deployed_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
           }
@@ -1235,7 +1279,7 @@ jobs:
 
             if [ "${{ needs.authorize_and_prepare.outputs.database }}" = "true" ]; then
               ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
-                "rm -f '/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump'"
+                "rm -f '/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.build_and_audit.outputs.release_sha }}.dump'"
             fi
           } 2>&1 | tee >(log_to_remote)
 
@@ -1268,7 +1312,7 @@ jobs:
             CURRENT_LINK="$APP_ROOT/current"
             STABLE_LINK="$APP_ROOT/stable"
             VENV_DIR="$APP_ROOT/venv"
-            BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.resolve_release.outputs.release_sha }}.dump"
+            BACKUP_FILE="/apps/database/backups/deploy-${{ github.run_id }}-${{ needs.build_and_audit.outputs.release_sha }}.dump"
 
             find_pg_bindir() {
               export PGPASSWORD="${{ secrets.DB_PASSWORD }}"
