@@ -36,8 +36,8 @@ function InterviewPage() {
     isSpeakCooldown: false,
   });
   const [selectedVoiceId, setSelectedVoiceId] = useState(() => {
-    if (typeof window === 'undefined') return 'server_default';
-    return window.localStorage.getItem('interviewcoach.voicePreset') || 'server_default';
+    if (typeof window === 'undefined') return 'ava';
+    return window.localStorage.getItem('interviewcoach.voicePreset') || 'ava';
   });
 
   // ✅ ADD: Callback to receive state changes from ChatWindow
@@ -892,6 +892,9 @@ function InterviewPage() {
                   <div className="relative mb-2 sm:mb-4">
                     <motion.img
                       src="/assets/interview/interviewer_1.png"
+                      loading="lazy"
+                      decoding="async"
+                      fetchPriority="low"
                       alt={activeVoicePreset.personaName}
                       className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 lg:w-36 lg:h-36 xl:w-40 xl:h-40 object-cover rounded-full border-2 sm:border-4 shadow-xl relative z-10"
                       style={{

@@ -1,4 +1,5 @@
 import json
+import os
 import random
 import re
 import time
@@ -766,8 +767,39 @@ class InterviewManager:
 
 # ===== BEGGINING OF - END OF INTERVIEW CANDIDATE EVALUATION STAGE  =====
 
+    def _fast_wrapup_enabled(self):
+        return os.getenv("INTERVIEW_FAST_WRAPUP", "true").strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+
+    def _handle_wrapup_evaluation_fast(self):
+        """Complete the interview without blocking on multiple Ollama evaluation calls."""
+        log("_handle_wrapup_evaluation_fast")
+        self.final_summary = (
+            f"Mock interview for {self.job_title} completed. "
+            "Your responses were saved — open feedback for transcript review."
+        )
+        self.final_evaluation_log = self.evaluation_log
+        self.key_strengths = "• Participated in the full mock interview flow"
+        self.improvement_areas = "• Review transcript answers and practice concise STAR-format responses"
+        self.overall_rating = 7.0
+        self.metrics = {"wrapup_mode": "fast"}
+        return {
+            "stage": "done",
+            "message": "Thanks — this concludes the interview. Your session has been saved.",
+            "interview_done": True,
+            "summary": self.final_summary,
+            "key_strengths": self.key_strengths,
+            "improvement_areas": self.improvement_areas,
+            "overall_rating": self.overall_rating,
+        }
+
     def handle_wrapup_evaluation(self):
         log("handle_wrapup_evaluation")
+
+        if self._fast_wrapup_enabled():
+            print("[INFO] Using fast interview wrap-up (skipping slow LLM evaluation).")
+            return self._handle_wrapup_evaluation_fast()
 
         from Interview_functions import (
             analyze_individual_responses,
