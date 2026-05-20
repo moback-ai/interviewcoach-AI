@@ -2,7 +2,8 @@ name: Log Maintenance
 
 on:
   schedule:
-    - cron: '0 4 1 * *'
+    # Every Sunday 04:30 UTC (~10:00 IST) — weekly cleanup, keep 1 day of logs
+    - cron: '30 4 * * 0'
   workflow_dispatch:
 
 permissions:
@@ -27,7 +28,7 @@ jobs:
           chmod 400 ~/.ssh/deploy_key.pem
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
-      - name: Run log maintenance on the log host
+      - name: Run log maintenance on the API host
         run: |
           set -euo pipefail
           chmod +x scripts/log-maintenance.sh
@@ -37,14 +38,14 @@ jobs:
             ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/tmp/log-maintenance.sh
 
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
-            "LOG_ROOT='${{ env.LOG_ROOT }}' SIZE_LIMIT_BYTES='2147483648' RETENTION_DAYS='30' KEEP_RECENT_LOGS='10' KEEP_ARCHIVES='6' bash /tmp/log-maintenance.sh" \
+            "LOG_ROOT='${{ env.LOG_ROOT }}' RETENTION_DAYS='1' FILE_ZIP_THRESHOLD_BYTES='10485760' SIZE_LIMIT_BYTES='2147483648' KEEP_RECENT_LOGS='5' KEEP_ARCHIVES='3' FORCE_SUNDAY_CLEANUP='1' bash /tmp/log-maintenance.sh" \
             | tee "$RUNNER_TEMP/log-maintenance.json"
 
           {
             echo "## Log Maintenance"
             echo "- Log root: \`${{ env.LOG_ROOT }}\`"
-            echo "- Threshold: \`2147483648\` bytes"
-            echo "- Cleanup schedule: monthly"
+            echo "- Retention: 1 day (Sunday weekly cleanup)"
+            echo "- Per-file zip threshold: 10 MB"
             echo ""
             echo '```json'
             cat "$RUNNER_TEMP/log-maintenance.json"

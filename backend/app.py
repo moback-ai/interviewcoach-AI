@@ -31,11 +31,13 @@ from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 from pydub import AudioSegment
 import requests as http_requests
 
 # ── Environment ───────────────────────────────────────────────────────────────
 from common.runtime_config import load_runtime_config, optional_env, require_env
+from common.host_metrics import collect_linux_metrics, collect_via_ssh
 
 load_runtime_config()
 
@@ -93,6 +95,12 @@ EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", 
 ADMIN_LOG_ROOT = os.path.abspath(optional_env("ADMIN_LOG_ROOT", "/apps/logs"))
 ADMIN_LIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_LIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "live")))
 ADMIN_ARCHIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_ARCHIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "archive")))
+ADMIN_SERVER_LOG_DIR = os.path.abspath(os.path.join(ADMIN_LOG_ROOT, "server"))
+SERVER_LOG_CATEGORIES = ("DB", "FRONTEND", "BACKEND", "AI")
+ADMIN_METRICS_SNAPSHOT_FILE = os.path.abspath(
+    os.path.join(ADMIN_SERVER_LOG_DIR, "METRICS", "latest.json")
+)
+API_FAILURES_LOG_FILE = os.path.abspath(os.path.join(ADMIN_SERVER_LOG_DIR, "BACKEND", "api-failures.log"))
 DEPLOYMENT_LIVE_LOG_FILE = os.path.abspath(
     optional_env("DEPLOYMENT_LIVE_LOG_FILE", os.path.join(ADMIN_LIVE_LOG_DIR, "deploy-current.log"))
 )
@@ -138,6 +146,7 @@ def ensure_auth_schema():
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE")
+    execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ")
     execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_sent_at TIMESTAMPTZ")
     execute("""
@@ -168,6 +177,7 @@ _USER_PUBLIC_FIELDS = (
     "nickname",
     "avatar_url",
     "date_of_birth",
+    "gender",
     "plan",
     "created_at",
     "email_verified_at",
@@ -181,10 +191,26 @@ _USER_AUTH_FIELDS = (
     "nickname",
     "avatar_url",
     "date_of_birth",
+    "gender",
     "plan",
     "created_at",
     "email_verified_at",
 )
+
+
+def normalize_gender(value):
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized in {"male", "m", "man"}:
+        return "male"
+    if normalized in {"female", "f", "woman"}:
+        return "female"
+    if normalized in {"other", "non-binary", "nonbinary", "prefer_not_to_say", "prefer-not-to-say"}:
+        return "other"
+    raise ValueError("Gender must be male, female, or other")
 
 
 def build_user_columns(fields, alias: str = "") -> str:
@@ -311,11 +337,13 @@ def serialize_user(user):
     payload["nickname"] = payload.get("nickname") or ""
     payload["avatar_url"] = payload.get("avatar_url") or ""
     payload["date_of_birth"] = serialize_date_value(payload.get("date_of_birth"))
+    payload["gender"] = payload.get("gender") or ""
     payload.setdefault("user_metadata", {})
     payload["user_metadata"]["full_name"] = payload.get("full_name", "")
     payload["user_metadata"]["nickname"] = payload["nickname"]
     payload["user_metadata"]["avatar_url"] = payload["avatar_url"]
     payload["user_metadata"]["date_of_birth"] = payload["date_of_birth"]
+    payload["user_metadata"]["gender"] = payload["gender"]
     return payload
 
 
@@ -799,42 +827,231 @@ def _database_log_snapshot():
     }
 
 
-def _admin_log_sources(line_count: int):
+def _ensure_server_log_dirs():
+    for category in SERVER_LOG_CATEGORIES:
+        os.makedirs(os.path.join(ADMIN_SERVER_LOG_DIR, category), exist_ok=True)
+
+
+def _server_category_path(category: str, filename: str = ""):
+    base = os.path.join(ADMIN_SERVER_LOG_DIR, category)
+    return os.path.join(base, filename) if filename else base
+
+
+def _newest_server_log_file(category: str):
+    directory = _server_category_path(category)
+    if not os.path.isdir(directory):
+        return None
+    candidates = []
+    for filename in os.listdir(directory):
+        if not filename.endswith((".log", ".txt")):
+            continue
+        absolute_path = os.path.join(directory, filename)
+        if os.path.isfile(absolute_path):
+            candidates.append(absolute_path)
+    if not candidates:
+        return None
+    return max(candidates, key=os.path.getmtime)
+
+
+def _tail_server_log(category: str, preferred_names: tuple, line_count: int):
+    for filename in preferred_names:
+        path = _server_category_path(category, filename)
+        result = _tail_text_file(path, line_count)
+        if result["available"]:
+            result["server_category"] = category
+            return result
+
+    newest_path = _newest_server_log_file(category)
+    if newest_path:
+        result = _tail_text_file(newest_path, line_count)
+        result["server_category"] = category
+        return result
+
+    directory = _server_category_path(category)
     return {
-        "backend-error": {
-            "resolver": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-error.log", line_count),
-            "path": "/home/ubuntu/.pm2/logs/backend-error.log",
-            "live_supported": True,
-        },
-        "backend-out": {
-            "resolver": lambda: _tail_text_file("/home/ubuntu/.pm2/logs/backend-out.log", line_count),
-            "path": "/home/ubuntu/.pm2/logs/backend-out.log",
-            "live_supported": True,
-        },
+        "available": False,
+        "path": directory,
+        "lines": [],
+        "server_category": category,
+    }
+
+
+def _persist_database_server_log():
+    snapshot = _database_log_snapshot()
+    _ensure_server_log_dirs()
+    target_path = _server_category_path("DB", "db-snapshot.log")
+    timestamp = datetime.utcnow().isoformat() + "Z"
+    with open(target_path, "w", encoding="utf-8") as handle:
+        handle.write(f"# snapshot_at={timestamp}\n")
+        for line in snapshot.get("lines", []):
+            handle.write(f"{line}\n")
+    return target_path
+
+
+def _database_server_log_snapshot(line_count: int = 200):
+    path = _server_category_path("DB", "db-snapshot.log")
+    if not os.path.exists(path):
+        try:
+            path = _persist_database_server_log()
+        except Exception as exc:
+            return {
+                "available": False,
+                "path": path,
+                "lines": [f"database snapshot unavailable: {exc}"],
+                "server_category": "DB",
+            }
+    result = _tail_text_file(path, line_count)
+    result["server_category"] = "DB"
+    return result
+
+
+def _tail_with_server_fallback(category: str, preferred_names: tuple, legacy_path: str, line_count: int):
+    server_result = _tail_server_log(category, preferred_names, line_count)
+    if server_result.get("available"):
+        return server_result
+    legacy_result = _tail_text_file(legacy_path, line_count)
+    legacy_result["server_category"] = category
+    return legacy_result
+
+
+def _append_api_failure_line(status_code: int, detail: str = ""):
+    if request.path.startswith((
+        "/logs/",
+        "/api/admin/logs",
+        "/api/admin/metrics",
+        "/api/docs",
+        "/api/openapi.json",
+    )):
+        return
+    _ensure_server_log_dirs()
+    timestamp = datetime.utcnow().isoformat() + "Z"
+    query_string = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
+    line = (
+        f"{timestamp} method={request.method} path={request.path}"
+        f" status={status_code} ip={_extract_request_ip()}"
+    )
+    if query_string:
+        line += f" query={query_string[:200]}"
+    if detail:
+        line += f" detail={detail[:500]}"
+    line = _redact_log_text(line) + "\n"
+    with open(API_FAILURES_LOG_FILE, "a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
+def _admin_log_sources(line_count: int):
+    pm2_error = "/home/ubuntu/.pm2/logs/backend-error.log"
+    pm2_out = "/home/ubuntu/.pm2/logs/backend-out.log"
+    legacy_frontend = os.path.join(ADMIN_LIVE_LOG_DIR, "frontend-nginx.log")
+
+    return {
         "deployment-live": {
             "resolver": lambda: _tail_text_file(DEPLOYMENT_LIVE_LOG_FILE, line_count),
             "path": DEPLOYMENT_LIVE_LOG_FILE,
             "live_supported": True,
+            "server_category": None,
         },
-        "frontend-access": {
-            "resolver": lambda: _tail_text_file(
-                os.path.join(ADMIN_LIVE_LOG_DIR, "frontend-nginx.log"),
+        "api-failures": {
+            "resolver": lambda: _tail_text_file(API_FAILURES_LOG_FILE, line_count),
+            "path": API_FAILURES_LOG_FILE,
+            "live_supported": True,
+            "server_category": "BACKEND",
+        },
+        "server-backend": {
+            "resolver": lambda: _tail_server_log(
+                "BACKEND",
+                ("backend-error.log", "backend-out.log", "gunicorn-error.log", "gunicorn-access.log"),
                 line_count,
             ),
-            "path": os.path.join(ADMIN_LIVE_LOG_DIR, "frontend-nginx.log"),
+            "path": _server_category_path("BACKEND"),
             "live_supported": True,
+            "server_category": "BACKEND",
+        },
+        "server-frontend": {
+            "resolver": lambda: _tail_server_log(
+                "FRONTEND",
+                ("nginx-access.log", "nginx-error.log", "frontend-nginx.log"),
+                line_count,
+            ),
+            "path": _server_category_path("FRONTEND"),
+            "live_supported": True,
+            "server_category": "FRONTEND",
+        },
+        "server-ai": {
+            "resolver": lambda: _tail_server_log(
+                "AI",
+                ("ollama-journal.log", "nginx-access.log", "nginx-error.log"),
+                line_count,
+            ),
+            "path": _server_category_path("AI"),
+            "live_supported": True,
+            "server_category": "AI",
+        },
+        "server-db": {
+            "resolver": lambda: _database_server_log_snapshot(line_count),
+            "path": _server_category_path("DB", "db-snapshot.log"),
+            "live_supported": False,
+            "server_category": "DB",
+        },
+        "backend-error": {
+            "resolver": lambda: _tail_with_server_fallback(
+                "BACKEND",
+                ("backend-error.log",),
+                pm2_error,
+                line_count,
+            ),
+            "path": pm2_error,
+            "live_supported": True,
+            "server_category": "BACKEND",
+        },
+        "backend-out": {
+            "resolver": lambda: _tail_with_server_fallback(
+                "BACKEND",
+                ("backend-out.log",),
+                pm2_out,
+                line_count,
+            ),
+            "path": pm2_out,
+            "live_supported": True,
+            "server_category": "BACKEND",
+        },
+        "frontend-access": {
+            "resolver": lambda: _tail_with_server_fallback(
+                "FRONTEND",
+                ("nginx-access.log", "frontend-nginx.log"),
+                legacy_frontend,
+                line_count,
+            ),
+            "path": legacy_frontend,
+            "live_supported": True,
+            "server_category": "FRONTEND",
         },
         "database": {
             "resolver": _database_log_snapshot,
             "path": "database diagnostics",
             "live_supported": False,
+            "server_category": "DB",
         },
         "ai-diagnostics": {
             "resolver": _ollama_diagnostic_snapshot,
             "path": "AI diagnostics",
             "live_supported": False,
+            "server_category": "AI",
         },
     }
+
+
+def _resolve_log_stream_path(source_config):
+    path = source_config.get("path")
+    if path and os.path.isfile(path):
+        return path
+
+    category = source_config.get("server_category")
+    if category:
+        newest = _newest_server_log_file(category)
+        if newest:
+            return newest
+    return None
 
 
 def _admin_log_http_urls(source: str):
@@ -845,6 +1062,7 @@ def _admin_log_http_urls(source: str):
         "http_logs_index": build_public_url("/logs/"),
         "http_logs_api": build_public_url(f"/logs/api/{source}"),
         "http_logs_file": build_public_url("/logs/files/live/deploy-current.log"),
+        "server_log_root": build_public_url("/api/admin/logs/files/server/"),
     }
 
 
@@ -868,6 +1086,8 @@ def _logs_hub_urls():
         "deployment_file_url": build_public_url("/logs/files/live/deploy-current.log"),
         "api_base_url": build_public_url("/logs/api"),
         "admin_url": build_public_url("/admin/logs"),
+        "server_categories": list(SERVER_LOG_CATEGORIES),
+        "server_log_root": ADMIN_SERVER_LOG_DIR,
     }
 
 
@@ -878,6 +1098,95 @@ def _verify_admin_log_access():
     if not _can_view_admin_logs(request.user):
         return None, (jsonify({"error": "Admin access required"}), 403)
     return client_ip, None
+
+
+def _metrics_ssh_key_path():
+    candidates = [
+        optional_env("ADMIN_METRICS_SSH_KEY", ""),
+        os.path.expanduser("~/.ssh/interviewcoach-deploy.pem"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def _collect_database_metrics():
+    snapshot = {
+        "role": "DB",
+        "host": optional_env("DB_HOST", "rds"),
+        "available": False,
+        "note": "RDS CPU/RAM require CloudWatch; showing connection stats only.",
+    }
+    try:
+        rows = query_all(
+            """
+            SELECT coalesce(state, 'unknown') AS state, count(*)::int AS total
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+            GROUP BY state
+            ORDER BY state
+            """
+        ) or []
+        snapshot["available"] = True
+        snapshot["connections"] = [dict(row) for row in rows]
+        snapshot["connection_total"] = sum(row.get("total", 0) for row in snapshot["connections"])
+        size_row = query_one(
+            "SELECT pg_database_size(current_database())::bigint AS size_bytes"
+        )
+        if size_row:
+            snapshot["database_size_bytes"] = int(size_row.get("size_bytes") or 0)
+    except Exception as exc:
+        snapshot["error"] = str(exc)[:300]
+    snapshot["collected_at"] = datetime.utcnow().isoformat() + "Z"
+    return snapshot
+
+
+def _collect_admin_server_metrics():
+    hosts = []
+    backend_label = optional_env("API_PUBLIC_IP", "") or optional_env("BACKEND_HOST", "api")
+    hosts.append(collect_linux_metrics("BACKEND", backend_label))
+
+    ssh_key = _metrics_ssh_key_path()
+    ssh_user = optional_env("ADMIN_METRICS_SSH_USER", "ubuntu")
+    frontend_ip = (optional_env("FRONTEND_PUBLIC_IP", "") or optional_env("FRONTEND_HOST", "")).strip()
+    ai_ip = (optional_env("AI_PUBLIC_IP", "") or optional_env("AI_HOST", "")).strip()
+
+    if frontend_ip and ssh_key:
+        hosts.append(collect_via_ssh("FRONTEND", frontend_ip, ssh_key, ssh_user))
+    else:
+        hosts.append({
+            "role": "FRONTEND",
+            "host": frontend_ip or "unset",
+            "available": False,
+            "error": "FRONTEND_PUBLIC_IP or SSH key not configured",
+        })
+
+    if ai_ip and ssh_key:
+        hosts.append(collect_via_ssh("AI", ai_ip, ssh_key, ssh_user))
+    else:
+        hosts.append({
+            "role": "AI",
+            "host": ai_ip or "unset",
+            "available": False,
+            "error": "AI_PUBLIC_IP or SSH key not configured",
+        })
+
+    hosts.append(_collect_database_metrics())
+
+    payload = {
+        "collected_at": datetime.utcnow().isoformat() + "Z",
+        "hosts": hosts,
+    }
+
+    try:
+        os.makedirs(os.path.dirname(ADMIN_METRICS_SNAPSHOT_FILE), exist_ok=True)
+        with open(ADMIN_METRICS_SNAPSHOT_FILE, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+    except OSError as exc:
+        payload["snapshot_warning"] = f"Could not persist metrics snapshot: {exc}"
+
+    return payload
 
 
 def _stream_text_file(path: str):
@@ -960,11 +1269,20 @@ def _list_admin_log_files(limit: int = 200):
             except (OSError, ValueError):
                 continue
 
-            category = "archive" if absolute_path.startswith(ADMIN_ARCHIVE_LOG_DIR) else "live"
+            if absolute_path.startswith(ADMIN_ARCHIVE_LOG_DIR):
+                category = "archive"
+            elif absolute_path.startswith(ADMIN_SERVER_LOG_DIR):
+                category = "server"
+            else:
+                category = "live"
             entries.append({
                 "name": filename,
                 "relative_path": relative_path,
                 "category": category,
+                "server_category": next(
+                    (item for item in SERVER_LOG_CATEGORIES if f"server/{item}/" in relative_path.replace("\\", "/")),
+                    None,
+                ),
                 "size_bytes": stat_result.st_size,
                 "modified_at": datetime.utcfromtimestamp(stat_result.st_mtime).isoformat() + "Z",
                 "download_url": build_public_url(f"/api/admin/logs/files/{relative_path}"),
@@ -1077,7 +1395,8 @@ def admin_logs_stream():
     if not source_config.get("live_supported"):
         return jsonify({"error": "Selected log source does not support live streaming."}), 400
 
-    response = _stream_text_file(source_config["path"])
+    stream_path = _resolve_log_stream_path(source_config)
+    response = _stream_text_file(stream_path) if stream_path else None
     if response is None:
         return jsonify({
             "error": "Log file is not available yet.",
@@ -1085,6 +1404,44 @@ def admin_logs_stream():
             "client_ip": client_ip,
         }), 404
     return response
+
+
+@app.after_request
+def _record_api_failure_response(response):
+    try:
+        if request.path.startswith("/api/") and response.status_code >= 400:
+            detail = ""
+            if hasattr(response, "get_json"):
+                payload = response.get_json(silent=True) or {}
+                detail = str(payload.get("error") or payload.get("message") or "")
+            _append_api_failure_line(response.status_code, detail=detail)
+    except Exception as exc:
+        print(f"[WARN] Failed to record API failure log: {exc}")
+    return response
+
+
+@app.errorhandler(Exception)
+def _log_unhandled_api_exception(exc):
+    if isinstance(exc, HTTPException):
+        return exc
+    if request.path.startswith("/api/"):
+        _append_api_failure_line(500, detail=str(exc))
+    raise exc
+
+
+@app.route('/api/admin/metrics', methods=['GET'])
+@verify_auth_token
+def admin_metrics():
+    client_ip, error_response = _verify_admin_log_access()
+    if error_response:
+        return error_response
+
+    return jsonify({
+        "success": True,
+        "data": _collect_admin_server_metrics(),
+        "requested_by": request.user.get("email"),
+        "client_ip": client_ip,
+    })
 
 
 @app.route('/api/admin/logs/files', methods=['GET'])
@@ -1120,6 +1477,9 @@ def admin_log_file_download(relative_path):
     directory = os.path.dirname(file_path)
     filename = os.path.basename(file_path)
     return send_from_directory(directory, filename, as_attachment=False)
+
+
+_ensure_server_log_dirs()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
@@ -1315,6 +1675,9 @@ def convert_to_wav(input_path):
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         return wav_path
+    except FileNotFoundError:
+        print("[ERROR] ffmpeg is not installed on this server")
+        return None
     except subprocess.CalledProcessError:
         return None
 
@@ -3366,6 +3729,7 @@ def update_me():
     nickname = data['nickname'] if 'nickname' in data else nested_data.get('nickname', missing)
     avatar_url = data['avatar_url'] if 'avatar_url' in data else nested_data.get('avatar_url', missing)
     date_of_birth = data['date_of_birth'] if 'date_of_birth' in data else nested_data.get('date_of_birth', missing)
+    gender = data['gender'] if 'gender' in data else nested_data.get('gender', missing)
     password = data.get('password')
     try:
         if full_name is not missing:
@@ -3384,6 +3748,9 @@ def update_me():
         if date_of_birth is not missing:
             updates.append('date_of_birth=%s')
             params.append(normalize_date_of_birth(date_of_birth))
+        if gender is not missing:
+            updates.append('gender=%s')
+            params.append(normalize_gender(gender))
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     if password:
