@@ -1398,10 +1398,12 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
-        "api_revision": "fast-upload-v2",
+        "api_revision": "fast-upload-v3",
         "fast_paths": {
             "jd_parse_local_default": not _jd_parse_use_ollama(),
             "question_gen_local_default": _question_gen_force_local(),
+            "interview_server_tts": _env_truthy("INTERVIEW_SERVER_TTS", "false"),
+            "interview_fast_wrapup": _env_truthy("INTERVIEW_FAST_WRAPUP", "true"),
         },
         "services": {
             "ollama": {
@@ -1727,6 +1729,7 @@ def _env_int(name, default):
 
 QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS = _env_int("QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS", 90)
 JD_PARSE_OLLAMA_TIMEOUT_SECONDS = _env_int("JD_PARSE_OLLAMA_TIMEOUT_SECONDS", 25)
+INTERVIEW_RESPONSE_TIMEOUT_SECONDS = _env_int("INTERVIEW_RESPONSE_TIMEOUT_SECONDS", 45)
 
 
 def _env_truthy(name, default="false"):
@@ -2620,7 +2623,21 @@ def generate_response():
             if config_path and os.path.exists(config_path):
                 os.unlink(config_path)
 
-        response = manager.receive_input(user_input)
+        try:
+            response = _run_callable_with_timeout(
+                lambda: manager.receive_input(user_input),
+                INTERVIEW_RESPONSE_TIMEOUT_SECONDS,
+                label="Interview response",
+            )
+        except Exception as interview_error:
+            print(f"[WARN] Interview manager timed out or failed: {interview_error}")
+            response = {
+                "stage": getattr(manager, "stage", "introduction"),
+                "message": (
+                    "Thanks for your answer. The AI is taking longer than usual — "
+                    "please continue, or use End interview when you are ready."
+                ),
+            }
 
         # Persist updated session state
         try:
@@ -2640,9 +2657,17 @@ def generate_response():
             execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
                     (interview_id, 'assistant', response["message"]))
 
-        # Generate audio for interviewer response
+        # Generate audio for interviewer response (skip when client uses browser TTS)
         audio_url = None
-        if response.get("message") and not response.get("interview_done", False):
+        voice_mode = (data.get("voice_mode") or "").strip().lower()
+        prefer_browser_voice = bool(data.get("prefer_browser_voice")) or voice_mode == "browser"
+        server_tts_enabled = _env_truthy("INTERVIEW_SERVER_TTS", "false")
+        if (
+            response.get("message")
+            and not response.get("interview_done", False)
+            and server_tts_enabled
+            and not prefer_browser_voice
+        ):
             try:
                 response_text = response["message"]
                 ts = datetime.now().strftime("%Y%m%dT%H%M%S")
