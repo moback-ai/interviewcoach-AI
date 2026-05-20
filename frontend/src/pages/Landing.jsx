@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import Navbar from '../components/Navbar';
-import Hero from '../components/landing/Hero';
 import { trackEvents } from '../services/mixpanel';
 
+const Hero = lazy(() => import('../components/landing/Hero'));
 const FeatureHighlights = lazy(() => import('../components/landing/FeatureHighlights'));
 const HowItWorks = lazy(() => import('../components/landing/HowItWorks'));
 const UseCases = lazy(() => import('../components/landing/UseCases'));
@@ -52,7 +52,9 @@ function Landing() {
       <div className="landing-shell__bg bg-style-aurora-dream" aria-hidden="true" />
       <Navbar />
       <main className="landing-shell__main relative overflow-hidden">
-        <Hero />
+        <Suspense fallback={<div className="landing-hero-skeleton" aria-hidden="true" />}>
+          <Hero />
+        </Suspense>
         <Suspense fallback={null}>
           <section id="features" className="landing-section">
             <FeatureHighlights />
