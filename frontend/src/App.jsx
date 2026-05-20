@@ -1,6 +1,5 @@
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import './index.css';
 
 import Landing from './pages/Landing';
@@ -26,72 +25,39 @@ const AdminLogsPage       = lazy(() => import('./pages/AdminLogsPage'));
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center min-h-screen">
-    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500" />
   </div>
 );
 
-const pageTransition = {
-  initial: {
-    opacity: 0,
-    y: 16,
-  },
-  animate: {
-    opacity: 1,
-    y: 0,
-  },
-  exit: {
-    opacity: 0,
-    y: -12,
-  },
-};
-
 function App() {
-  const location = useLocation();
-  const routeKey = `${location.pathname}${location.search}`;
-  const isStyleLab = location.pathname.startsWith('/style-lab');
-
   return (
-    <>
-      <Suspense fallback={<LoadingSpinner />}>
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={routeKey}
-            variants={isStyleLab ? undefined : pageTransition}
-            initial={isStyleLab ? false : 'initial'}
-            animate={isStyleLab ? undefined : 'animate'}
-            exit={isStyleLab ? undefined : 'exit'}
-            transition={isStyleLab ? undefined : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="min-h-screen"
-          >
-            <Routes location={location}>
-              {/* Public routes */}
-              <Route path="/"              element={<Landing />} />
-              <Route path="/signup"        element={<Signup />} />
-              <Route path="/login"         element={<Login />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-              <Route path="/forgot-username" element={<ForgotUsername />} />
-              <Route path="/reset-password" element={<ResetPassword />} />
-              <Route path="/verify-email"  element={<VerifyEmail />} />
-              <Route path="/faq"           element={<FAQPage />} />
-              <Route path="/style-lab/backgrounds" element={<BackgroundStyleLab />} />
+    <Suspense fallback={<LoadingSpinner />}>
+      <Routes>
+        {/* Public routes */}
+        <Route path="/"              element={<Landing />} />
+        <Route path="/signup"        element={<Signup />} />
+        <Route path="/login"         element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/forgot-username" element={<ForgotUsername />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/verify-email"  element={<VerifyEmail />} />
+        <Route path="/faq"           element={<FAQPage />} />
+        <Route path="/style-lab/backgrounds" element={<BackgroundStyleLab />} />
 
-              {/* Protected routes */}
-              <Route element={<AuthenticatedShell />}>
-                <Route path="/upload"        element={<UploadPage />} />
-                <Route path="/profile"       element={<ProfilePage />} />
-                <Route path="/dashboard"     element={<DashboardPage />} />
-                <Route path="/questions"     element={<QuestionsPage />} />
-                <Route path="/payment-status" element={<PaymentSuccessPage />} />
-                <Route path="/interview"     element={<InterviewPage />} />
-                <Route path="/interview-feedback" element={<InterviewFeedbackPage />} />
-                <Route path="/admin/logs"    element={<AdminLogsPage />} />
-                <Route path="/admin/logs."   element={<AdminLogsPage />} />
-              </Route>
-            </Routes>
-          </motion.div>
-        </AnimatePresence>
-      </Suspense>
-    </>
+        {/* Protected routes */}
+        <Route element={<AuthenticatedShell />}>
+          <Route path="/upload"        element={<UploadPage />} />
+          <Route path="/profile"       element={<ProfilePage />} />
+          <Route path="/dashboard"     element={<DashboardPage />} />
+          <Route path="/questions"     element={<QuestionsPage />} />
+          <Route path="/payment-status" element={<PaymentSuccessPage />} />
+          <Route path="/interview"     element={<InterviewPage />} />
+          <Route path="/interview-feedback" element={<InterviewFeedbackPage />} />
+          <Route path="/admin/logs"    element={<AdminLogsPage />} />
+          <Route path="/admin/logs."   element={<AdminLogsPage />} />
+        </Route>
+      </Routes>
+    </Suspense>
   );
 }
 
