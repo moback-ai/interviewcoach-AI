@@ -11,7 +11,9 @@ import CodeEditorPopup from './CodeEditorPopup';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaDevices';
 import { canUseBrowserSpeech, chooseBrowserVoice, getInterviewerVoicePreset } from '../../utils/interviewerVoices';
 
-function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange, selectedVoiceId = 'server_default' }) {
+const GENERATE_RESPONSE_TIMEOUT_MS = 120000;
+
+function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange, selectedVoiceId = 'ava' }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isButtonDisabled, setIsButtonDisabled] = useState(false);
   const mediaRecorderRef = useRef(null);
@@ -31,6 +33,27 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
   const [browserVoices, setBrowserVoices] = useState([]);
   const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
+
+  const buildGenerateResponsePayload = useCallback((message) => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const interviewId = urlParams.get('interview_id');
+    return {
+      message,
+      interview_id: interviewId,
+      voice_mode: activeVoicePreset.mode,
+      prefer_browser_voice: activeVoicePreset.mode === 'browser',
+    };
+  }, [activeVoicePreset.mode]);
+
+  const userHasParticipated = conversation.some(
+    (msg) => msg.speaker !== 'interviewer' && !msg.isThinking && (msg.message || '').trim().length > 0
+  );
+
+  useEffect(() => {
+    if (userHasParticipated) {
+      setCanEndInterview(true);
+    }
+  }, [userHasParticipated]);
   
   // ✅ NEW: Add state for timeout modal
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
@@ -244,10 +267,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         return;
       }
       
-      const response = await apiPost('/generate-response', {
-        message: userInput,
-        interview_id: interviewId // ✅ Send interview_id to backend
-      });
+      const response = await apiPost(
+        '/generate-response',
+        buildGenerateResponsePayload(userInput),
+        { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
+      );
 
       console.log('📥 Interview Manager response:', response);
       
@@ -370,10 +394,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         }
         
         // ✅ Use the same apiPost function that works for normal responses
-        const response = await apiPost('/generate-response', {
-          message: 'END_INTERVIEW',
-          interview_id: interviewId
-        });
+        const response = await apiPost(
+          '/generate-response',
+          buildGenerateResponsePayload('END_INTERVIEW'),
+          { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
+        );
         
         console.log('📥 End interview response:', response);
         
@@ -441,8 +466,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         }
       } catch (error) {
         console.error('❌ Error ending interview:', error);
-        // ✅ NEW: Hide loading on error
         setIsEndingInterview(false);
+        const urlParams = new URLSearchParams(window.location.search);
+        const interviewId = urlParams.get('interview_id');
+        if (interviewId && window.confirm(
+          'Ending the interview failed or timed out. Open the feedback page anyway?'
+        )) {
+          window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+        }
       }
     }
   };
@@ -925,10 +956,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       }
       
       // ✅ Use the same apiPost function that works for normal responses
-      const response = await apiPost('/generate-response', {
-        message: 'END_INTERVIEW',
-        interview_id: interviewId
-      });
+      const response = await apiPost(
+        '/generate-response',
+        buildGenerateResponsePayload('END_INTERVIEW'),
+        { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
+      );
       
       // ✅ Now handle the response exactly like handleEndInterview does
       // (Copy all the logic from handleEndInterview starting from line 316)
@@ -1181,19 +1213,20 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           <button
             type="button"
             onClick={handleEndInterview}
-            disabled={!canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress}
+            disabled={(!canEndInterview && !userHasParticipated) || isAudioPlaying || isRecording || isLoading || isResponseInProgress}
             className={`shrink-0 px-3 py-1.5 sm:px-3.5 sm:py-2 text-xs sm:text-sm font-medium rounded-lg border transition-all duration-200 ${
-              !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
+              (!canEndInterview && !userHasParticipated) || isAudioPlaying || isRecording || isLoading || isResponseInProgress
                 ? 'border-[var(--color-border)] text-[var(--color-text-secondary)]/70 bg-[var(--color-input-bg)]/50 cursor-not-allowed'
                 : 'border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] hover:border-red-500/60 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/5'
             }`}
             title={
-              !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
+              (!canEndInterview && !userHasParticipated) || isAudioPlaying || isRecording || isLoading || isResponseInProgress
                 ? (isRecording ? "Wait for recording to finish" : 
                    isLoading ? "Wait for response to generate" : 
                    isResponseInProgress ? "Response in progress..." : 
                    isAudioPlaying ? "Wait for audio to finish" :
-                   interviewStage === 'introduction' ? "Complete the introduction first" : 
+                   !userHasParticipated ? "Speak at least once to end the interview" :
+                   interviewStage === 'introduction' ? "You can end the interview after your first answer" : 
                    interviewStage === 'resume_discussion' && !hasAnsweredResumeQuestion ? "Answer at least one resume & JD related question to end interview" : "Wait for resume questions to begin")
                 : "End interview and save progress"
             }
