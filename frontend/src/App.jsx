@@ -33,22 +33,16 @@ const LoadingSpinner = () => (
 const pageTransition = {
   initial: {
     opacity: 0,
-    y: 34,
-    scale: 0.985,
-    filter: 'blur(10px)'
+    y: 16,
   },
   animate: {
     opacity: 1,
     y: 0,
-    scale: 1,
-    filter: 'blur(0px)'
   },
   exit: {
     opacity: 0,
-    y: -24,
-    scale: 1.01,
-    filter: 'blur(10px)'
-  }
+    y: -12,
+  },
 };
 
 function App() {
@@ -66,7 +60,7 @@ function App() {
             initial={isStyleLab ? false : 'initial'}
             animate={isStyleLab ? undefined : 'animate'}
             exit={isStyleLab ? undefined : 'exit'}
-            transition={isStyleLab ? undefined : { duration: 0.48, ease: [0.16, 1, 0.3, 1] }}
+            transition={isStyleLab ? undefined : { duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="min-h-screen"
           >
             <Routes location={location}>

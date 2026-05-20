@@ -126,8 +126,8 @@ export default function AnimatedWavesLayer({
       const baseOptions = {
         el: elementRef.current,
         THREE,
-        mouseControls: interactive || preset === 'auth',
-        touchControls: interactive || preset === 'auth',
+        mouseControls: interactive,
+        touchControls: interactive,
         gyroControls: false,
         minHeight: 200,
         minWidth: 200,
@@ -189,5 +189,7 @@ export default function AnimatedWavesLayer({
     };
   }, [defer, interactive, preset, theme]);
 
-  return <div ref={elementRef} className={className} aria-hidden="true" />;
+  const layerClass = ['animated-waves-layer', className].filter(Boolean).join(' ');
+
+  return <div ref={elementRef} className={layerClass} aria-hidden="true" />;
 }
