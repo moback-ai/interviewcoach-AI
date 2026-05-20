@@ -213,12 +213,21 @@ function Login() {
         heroTitle="Your AI interview studio."
         heroCopy="Mock interviews tailored to your resume and target role — with voice practice and instant feedback."
         footer={(
-          <p className="auth-simple-footer-copy">
-            Don&apos;t have an account?{' '}
-            <Link to="/signup" className="auth-simple-link">
-              Create one
-            </Link>
-          </p>
+          <>
+            <p className="auth-simple-footer-copy">
+              Don&apos;t have an account?{' '}
+              <Link to="/signup" className="auth-simple-link">
+                Create one
+              </Link>
+            </p>
+            {import.meta.env.DEV ? (
+              <p className="auth-simple-footer-copy" style={{ marginTop: '0.65rem' }}>
+                <Link to="/style-lab/backgrounds" className="auth-simple-link">
+                  Compare background styles →
+                </Link>
+              </p>
+            ) : null}
+          </>
         )}
       >
         {errorMsg ? (
