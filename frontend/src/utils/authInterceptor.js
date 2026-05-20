@@ -51,24 +51,9 @@ export const initAuthInterceptor = () => {
     return;
   }
 
-  const originalFetch = window.fetch.bind(window);
   window.__icAuthInterceptorInitialized = true;
 
-  window.fetch = async (...args) => {
-    const response = await originalFetch(...args);
-
-    if (response.status === 401) {
-      const requestUrl = args[0] ? args[0].toString() : '';
-      const isBypassedAuthRequest = AUTH_BYPASS_MARKERS.some((marker) => requestUrl.includes(marker));
-
-      if (!isBypassedAuthRequest) {
-        console.warn('[AuthInterceptor] 401 detected on protected request. Clearing session.');
-        window.setTimeout(() => {
-          redirectToExpiredLogin();
-        }, 100);
-      }
-    }
-
-    return response;
-  };
+  // Do not patch fetch to auto-redirect on 401.
+  // api.js handles refresh + retry; a global redirect raced refresh-token and
+  // kicked users off mid-interview (e.g. transcribe-audio).
 };

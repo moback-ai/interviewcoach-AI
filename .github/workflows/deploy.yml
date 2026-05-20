@@ -404,7 +404,17 @@ jobs:
       - name: 5. Deploy and Verify - Prepare nginx logs snippet
         if: needs.authorize_and_prepare.outputs.frontend == 'true'
         run: |
-          BACKEND_PROXY_HOST=127.0.0.1:5001 bash scripts/nginx-logs-locations.sh > /tmp/nginx-logs.snippet
+          LOGS_PROXY_HOST="127.0.0.1:5001"
+          if [ -n "${{ secrets.API_PRIVATE_IP }}" ]; then
+            LOGS_PROXY_HOST="${{ secrets.API_PRIVATE_IP }}:5000"
+          fi
+          BACKEND_PROXY_HOST="$LOGS_PROXY_HOST" bash scripts/nginx-logs-locations.sh > /tmp/nginx-logs.snippet
+
+      - name: 5. Deploy and Verify - Upload nginx logs snippet to frontend
+        if: needs.authorize_and_prepare.outputs.frontend == 'true'
+        run: |
+          scp $SSH_OPTS /tmp/nginx-logs.snippet \
+            ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/nginx-logs.snippet
 
       - name: 5. Deploy and Verify - Snapshot stable releases before deploy
         run: |
@@ -753,7 +763,11 @@ jobs:
           APP_DOMAIN="${{ secrets.FRONTEND_DOMAIN }}"
           BACKEND_HOST="${{ secrets.BACKEND_HOST }}"
           BACKEND_TUNNEL_KEY="/tmp/backend-tunnel-key.pem"
+          API_PRIVATE_IP="${{ secrets.API_PRIVATE_IP }}"
           BACKEND_PROXY_HOST="127.0.0.1:5001"
+          if [ -n "$API_PRIVATE_IP" ]; then
+            BACKEND_PROXY_HOST="${API_PRIVATE_IP}:5000"
+          fi
           sudo mkdir -p "$RELEASES_DIR"
           sudo rsync -av --delete /tmp/frontend-dist/ "$NEW_RELEASE/"
           if [ -z "$APP_DOMAIN" ]; then
@@ -783,19 +797,21 @@ jobs:
           ${{ secrets.EC2_SSH_KEY }}
           KEYEOF
           chmod 600 "$BACKEND_TUNNEL_KEY"
-          EXISTING_TUNNEL_PID="$(ss -ltnp 2>/dev/null | awk '/127.0.0.1:5001/ && /ssh/ { if (match($0, /pid=([0-9]+)/, pid)) print pid[1] }' | head -n 1)"
-          if [ -n "$EXISTING_TUNNEL_PID" ]; then
-            kill "$EXISTING_TUNNEL_PID" || true
-            sleep 1
+          if [ "$BACKEND_PROXY_HOST" = "127.0.0.1:5001" ]; then
+            EXISTING_TUNNEL_PID="$(ss -ltnp 2>/dev/null | awk '/127.0.0.1:5001/ && /ssh/ { if (match($0, /pid=([0-9]+)/, pid)) print pid[1] }' | head -n 1)"
+            if [ -n "$EXISTING_TUNNEL_PID" ]; then
+              kill "$EXISTING_TUNNEL_PID" || true
+              sleep 1
+            fi
+            ssh -f -N -L 127.0.0.1:5001:127.0.0.1:5000 \
+              -i "$BACKEND_TUNNEL_KEY" \
+              -o ExitOnForwardFailure=yes \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              ${{ secrets.EC2_USER }}@"$BACKEND_HOST"
           fi
-          ssh -f -N -L 127.0.0.1:5001:127.0.0.1:5000 \
-            -i "$BACKEND_TUNNEL_KEY" \
-            -o ExitOnForwardFailure=yes \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=3 \
-            ${{ secrets.EC2_USER }}@"$BACKEND_HOST"
           for i in $(seq 1 10); do
             if curl -fsS --max-time 5 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
               break
@@ -854,6 +870,9 @@ jobs:
               echo '        add_header Cache-Control "public, immutable" always;'
               echo "    }"
               echo
+              if [ -f /tmp/nginx-logs.snippet ]; then
+                cat /tmp/nginx-logs.snippet
+              fi
               echo "    location / {"
               echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
               echo '        try_files $uri $uri/ /index.html;'
@@ -938,6 +957,9 @@ jobs:
               echo '        add_header Cache-Control "public, immutable" always;'
               echo "    }"
               echo
+              if [ -f /tmp/nginx-logs.snippet ]; then
+                cat /tmp/nginx-logs.snippet
+              fi
               echo "    location / {"
               echo '        add_header Cache-Control "no-store, no-cache, must-revalidate" always;'
               echo '        try_files $uri $uri/ /index.html;'
@@ -1197,6 +1219,6 @@ jobs:
           {
             echo "=== Maintain log archives ==="
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
-              "LOG_ROOT=/apps/logs FORCE_ARCHIVE=0 KEEP_DEPLOY_LOGS=8 KEEP_PM2_LINES=5000 bash -s" \
+              "LOG_ROOT=/apps/logs RETENTION_DAYS=1 FILE_ZIP_THRESHOLD_BYTES=10485760 KEEP_RECENT_LOGS=5 KEEP_ARCHIVES=3 bash -s" \
               < scripts/log-maintenance.sh
           } 2>&1 | tee >(log_to_remote)

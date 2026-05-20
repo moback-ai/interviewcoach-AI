@@ -20,16 +20,16 @@ jobs:
           chmod 400 ~/.ssh/deploy_key.pem
           echo 'SSH_OPTS=-i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15' >> "$GITHUB_ENV"
 
-      - name: Run monthly zipped cleanup
+      - name: Run log cleanup (legacy monthly trigger)
         run: |
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
-            "LOG_ROOT=/apps/logs FORCE_ARCHIVE=1 KEEP_DEPLOY_LOGS=8 KEEP_PM2_LINES=5000 bash -s" \
+            "LOG_ROOT=/apps/logs RETENTION_DAYS=1 FILE_ZIP_THRESHOLD_BYTES=10485760 KEEP_RECENT_LOGS=5 KEEP_ARCHIVES=3 bash -s" \
             < scripts/log-maintenance.sh | tee "$RUNNER_TEMP/log-cleanup.txt"
 
           {
             echo "## Monthly Log Cleanup"
             echo "- Host: \`${{ secrets.BACKEND_HOST }}\`"
-            echo "- Cleanup mode: forced monthly archive"
+            echo "- Retention: 1 day; zip files over 10 MB"
             echo ""
             echo '```'
             cat "$RUNNER_TEMP/log-cleanup.txt"
