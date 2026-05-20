@@ -1,4 +1,3 @@
-import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
@@ -11,15 +10,13 @@ import { initAuthInterceptor } from './utils/authInterceptor';
 initAuthInterceptor();
 
 createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <ThemeProvider>
-      <BrowserRouter>
-        <AuthProvider>
-          <OperationProvider>
-            <App />
-          </OperationProvider>
-        </AuthProvider>
-      </BrowserRouter>
-    </ThemeProvider>
-  </StrictMode>
+  <ThemeProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <OperationProvider>
+          <App />
+        </OperationProvider>
+      </AuthProvider>
+    </BrowserRouter>
+  </ThemeProvider>
 );

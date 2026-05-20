@@ -5028,6 +5028,26 @@ body::after {
   z-index: 1;
 }
 
+.landing-shell .ai-hero-field,
+.landing-shell .floating-card,
+.landing-shell .ambient-orb {
+  animation: none !important;
+}
+
+.landing-hero-skeleton {
+  min-height: 28rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-shell *,
+  .landing-shell *::before,
+  .landing-shell *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ── Background style lab + CSS-only presets ── */
 .style-backdrop {
   position: absolute;

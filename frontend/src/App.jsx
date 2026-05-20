@@ -2,7 +2,8 @@ import { Routes, Route } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
 import './index.css';
 
-import Landing from './pages/Landing';
+// Lazy load pages — keeps home route initial bundle small
+const Landing = lazy(() => import('./pages/Landing'));
 
 // Lazy load heavy pages
 const Signup              = lazy(() => import('./pages/SignUp'));
