@@ -11,6 +11,7 @@ import io
 import secrets
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
 import ipaddress
 from urllib.parse import urlencode
@@ -1397,6 +1398,11 @@ def health_check():
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
+        "api_revision": "fast-upload-v2",
+        "fast_paths": {
+            "jd_parse_local_default": not _jd_parse_use_ollama(),
+            "question_gen_local_default": _question_gen_force_local(),
+        },
         "services": {
             "ollama": {
                 "ready": ollama_diagnostics.get("ready", False),
@@ -1710,6 +1716,161 @@ def get_ollama_diagnostics(timeout_seconds=2):
 
 def ollama_ready(timeout_seconds=2):
     return get_ollama_diagnostics(timeout_seconds=timeout_seconds).get("ready", False)
+
+
+def _env_int(name, default):
+    try:
+        return int(optional_env(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS = _env_int("QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS", 90)
+JD_PARSE_OLLAMA_TIMEOUT_SECONDS = _env_int("JD_PARSE_OLLAMA_TIMEOUT_SECONDS", 25)
+
+
+def _env_truthy(name, default="false"):
+    return (optional_env(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _question_gen_force_local():
+    """Default true on prod so generation finishes in seconds instead of hanging on Ollama."""
+    return _env_truthy("QUESTION_GEN_FORCE_LOCAL", "true")
+
+
+def _use_ollama_question_pipeline(data, ollama_diagnostics):
+    if _question_gen_force_local():
+        return False
+    if data.get("prefer_local") or data.get("fast"):
+        return False
+    if not (data.get("use_ai") or data.get("use_ollama") or _env_truthy("QUESTION_GEN_USE_OLLAMA", "false")):
+        return False
+    return bool(ollama_diagnostics.get("ready"))
+
+
+def _jd_parse_use_ollama():
+    """Ollama JD parsing is opt-in; default is fast local extraction to avoid gateway timeouts."""
+    return _env_truthy("JD_PARSE_USE_OLLAMA", "false")
+
+
+def _parse_job_description_fast(extracted_text, temp_path=None):
+    """Local-only JD parse: completes in milliseconds, no Ollama."""
+    local_result = summarize_job_description_text(extracted_text)
+    job_title = (local_result.get("job_title") or "").strip()
+    job_description = (local_result.get("job_description") or "").strip()
+    is_technical = classify_job_description_is_technical(job_title, job_description)
+    return {
+        "job_title": job_title,
+        "job_description": job_description,
+        "is_technical": is_technical,
+        "parser": "local",
+    }
+
+
+def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
+    """Fast local parse first; optionally refine with Ollama when explicitly enabled."""
+    result = _parse_job_description_fast(extracted_text, temp_path)
+    if not _jd_parse_use_ollama() or _question_gen_force_local() or not ollama_ready():
+        return result
+
+    try:
+        llm_result = _run_callable_with_timeout(
+            lambda: parse_job_description_file(temp_path, model=get_ollama_model_name()),
+            JD_PARSE_OLLAMA_TIMEOUT_SECONDS,
+            label="Job description parsing",
+        )
+        job_title = (llm_result.get("job_title") or "").strip()
+        job_description = (llm_result.get("job_description") or "").strip()
+        if not job_title or not job_description:
+            return result
+
+        is_technical = result["is_technical"]
+        try:
+            is_technical = _run_callable_with_timeout(
+                lambda: classify_if_technical_role(
+                    job_title, job_description, model=get_ollama_model_name()
+                ),
+                10,
+                label="Technical role classification",
+            )
+        except Exception as classify_error:
+            print(f"[WARN] LLM technical classification failed, using heuristic fallback: {classify_error}")
+            is_technical = classify_job_description_is_technical(job_title, job_description)
+
+        return {
+            "job_title": job_title,
+            "job_description": job_description,
+            "is_technical": is_technical,
+            "parser": "ollama",
+        }
+    except Exception as llm_error:
+        print(f"[WARN] Ollama JD enhancement skipped, using local parse: {llm_error}")
+        return result
+
+
+def _run_callable_with_timeout(fn, timeout_seconds, label="operation"):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError as exc:
+            raise TimeoutError(f"{label} timed out after {timeout_seconds}s") from exc
+
+
+def _generate_questions_with_fallback(
+    temp_resume,
+    job_title,
+    job_description,
+    resume_text,
+    question_counts,
+    data,
+    ollama_diagnostics,
+):
+    """Fast local generation by default; Ollama only when explicitly enabled."""
+    if not _use_ollama_question_pipeline(data, ollama_diagnostics):
+        result = build_local_question_set(job_title, job_description, resume_text, question_counts)
+        result["ollama_diagnostics"] = ollama_diagnostics
+        result["generator"] = "local_fallback"
+        return result
+
+    pipeline_kwargs = {
+        "resume_path": temp_resume,
+        "job_title": job_title,
+        "job_description": job_description,
+        "question_counts": question_counts,
+        "include_answers": True,
+        "split": data.get("split", False),
+        "resume_pct": data.get("resume_pct", 50),
+        "jd_pct": data.get("jd_pct", 50),
+        "blend": data.get("blend", False),
+        "blend_pct_resume": data.get("blend_pct_resume", 50),
+        "blend_pct_jd": data.get("blend_pct_jd", 50),
+        "max_retries": 2,
+    }
+
+    try:
+        from INTERVIEW.Resumeparser import run_pipeline_from_api
+
+        result = _run_callable_with_timeout(
+            lambda: run_pipeline_from_api(**pipeline_kwargs),
+            QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS,
+            label="Question generation pipeline",
+        )
+        if result.get("success") and result.get("questions"):
+            result.setdefault("generator", "ollama_pipeline")
+            result["ollama_diagnostics"] = ollama_diagnostics
+            return result
+        raise RuntimeError(result.get("error") or "Pipeline returned no questions")
+    except Exception as pipeline_error:
+        print(
+            "[WARN] Falling back to local question generator: "
+            f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+        )
+        result = build_local_question_set(job_title, job_description, resume_text, question_counts)
+        result["ollama_diagnostics"] = ollama_diagnostics
+        result["pipeline_error"] = str(pipeline_error)
+        result["generator"] = "local_fallback"
+        return result
 
 
 def _ollama_diagnostic_snapshot():
@@ -2201,37 +2362,12 @@ def parse_job_description():
             if not is_valid_jd:
                 return jsonify({"success": False, "message": jd_validation_error}), 400
 
-            job_title = ""
-            job_description = ""
-            is_technical = False
-            # 1) Primary path: LLM JD parsing with technical classification
-            try:
-                if not ollama_ready():
-                    raise RuntimeError("Ollama is unavailable")
-                llm_result = parse_job_description_file(temp_path, model="llama3")
-                job_title = (llm_result.get("job_title") or "").strip()
-                job_description = (llm_result.get("job_description") or "").strip()
-                if job_title and job_description:
-                    try:
-                        is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
-                    except Exception as classify_error:
-                        print(f"[WARN] LLM technical classification failed, using heuristic fallback: {classify_error}")
-                        is_technical = classify_job_description_is_technical(job_title, job_description)
-                else:
-                    raise RuntimeError("LLM parser returned empty title/description")
-            # 2) Fallback path: keep existing extraction + summarization flow
-            except Exception as llm_error:
-                print(f"[WARN] LLM JD parsing failed; falling back to local summarizer: {llm_error}")
-                fallback_result = summarize_job_description_text(
-                    extracted_text
-                )
-                job_title = (fallback_result.get("job_title") or "").strip()
-                job_description = (fallback_result.get("job_description") or "").strip()
-                is_technical = classify_job_description_is_technical(job_title, job_description)
+            parsed = _parse_job_description_with_optional_ollama(extracted_text, temp_path)
             return jsonify({"success": True, "data": {
-                "job_title": job_title,
-                "job_description": job_description,
-                "is_technical": is_technical
+                "job_title": parsed["job_title"],
+                "job_description": parsed["job_description"],
+                "is_technical": parsed["is_technical"],
+                "parser": parsed.get("parser", "local"),
             }})
         finally:
             if os.path.exists(temp_path):
@@ -2255,16 +2391,18 @@ def classify_technical_role():
     if not is_valid_jd:
         return jsonify({"success": False, "message": jd_validation_error}), 400
     try:
-        is_technical = False
-        try:
-            if ollama_ready():
-                from INTERVIEW.Resumeparser import classify_if_technical_role
-                is_technical = classify_if_technical_role(job_title, job_description, model="llama3")
-            else:
-                raise RuntimeError("Ollama is unavailable")
-        except Exception as classify_error:
-            print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
-            is_technical = classify_job_description_is_technical(job_title, job_description)
+        is_technical = classify_job_description_is_technical(job_title, job_description)
+        if _jd_parse_use_ollama() and ollama_ready():
+            try:
+                is_technical = _run_callable_with_timeout(
+                    lambda: classify_if_technical_role(
+                        job_title, job_description, model=get_ollama_model_name()
+                    ),
+                    10,
+                    label="Technical role classification",
+                )
+            except Exception as classify_error:
+                print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
         return jsonify({"success": True, "is_technical": is_technical})
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
@@ -2317,33 +2455,19 @@ def generate_questions():
                 return jsonify({"success": False, "message": resume_validation_error}), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
-            try:
-                if not ollama_diagnostics.get("ready"):
-                    raise RuntimeError(ollama_diagnostics.get("error") or "Ollama is unavailable")
-                from INTERVIEW.Resumeparser import run_pipeline_from_api
-                result = run_pipeline_from_api(
-                    resume_path=temp_resume,
-                    job_title=job_title,
-                    job_description=job_description,
-                    question_counts=question_counts,
-                    include_answers=True,
-                    split=data.get('split', False),
-                    resume_pct=data.get('resume_pct', 50),
-                    jd_pct=data.get('jd_pct', 50),
-                    blend=data.get('blend', False),
-                    blend_pct_resume=data.get('blend_pct_resume', 50),
-                    blend_pct_jd=data.get('blend_pct_jd', 50),
-                    max_retries=1,
-                )
-            except Exception as pipeline_error:
-                print(
-                    "[WARN] Falling back to local question generator: "
-                    f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
-                )
+            result = _generate_questions_with_fallback(
+                temp_resume,
+                job_title,
+                job_description,
+                resume_text,
+                question_counts,
+                data,
+                ollama_diagnostics,
+            )
+            if not result.get('success') or not result.get('questions'):
                 result = build_local_question_set(job_title, job_description, resume_text, question_counts)
                 result["ollama_diagnostics"] = ollama_diagnostics
-            if not result.get('success'):
-                return jsonify({"success": False, "message": result.get('error', 'Pipeline failed')}), 500
+                result["generator"] = "local_fallback"
             return jsonify({"success": True, "data": {
                 "questions": result['questions'],
                 "questions_count": result['questions_count'],
