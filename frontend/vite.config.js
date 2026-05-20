@@ -20,10 +20,22 @@ export default defineConfig(({ mode }) => {
     build: {
       minify: 'esbuild',
       esbuild: {
-        drop: ['console', 'debugger'],
+        drop: ['debugger'],
       },
       chunkSizeWarningLimit: 1000,
       sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/three')) {
+              return 'three';
+            }
+            if (id.includes('node_modules/vanta')) {
+              return 'vanta';
+            }
+          },
+        },
+      },
     },
     server: {
       host: '0.0.0.0',
