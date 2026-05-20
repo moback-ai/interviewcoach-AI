@@ -1,5 +1,5 @@
 import AnimatedWavesLayer from './AnimatedWavesLayer';
-import { getBackgroundStyleById } from '../../lib/backgroundStyles';
+import { getBackgroundStyleById, isInteractiveWaveStyle } from '../../lib/backgroundStyles';
 
 export default function StyleBackdrop({
   styleId,
@@ -9,6 +9,8 @@ export default function StyleBackdrop({
 }) {
   const style = getBackgroundStyleById(styleId);
   const rootClass = ['style-backdrop', className].filter(Boolean).join(' ');
+  const isPageContext = className.includes('style-backdrop--page');
+  const useInteractiveWaves = interactive || isInteractiveWaveStyle(styleId);
 
   if (style.shell === 'css') {
     return (
@@ -18,14 +20,14 @@ export default function StyleBackdrop({
     );
   }
 
-  if (style.shell === 'auth-studio') {
+  if (style.shell === 'auth-studio' && !isPageContext) {
     return (
       <div className={`${rootClass} auth-studio-page-backdrop style-backdrop--auth`} aria-hidden="true">
         <AnimatedWavesLayer
           className="auth-studio-page-vanta"
           preset={style.vantaPreset}
           defer={deferWaves}
-          interactive={interactive}
+          interactive={useInteractiveWaves}
         />
         <div className="auth-studio-page-aurora auth-studio-page-aurora-a" />
         <div className="auth-studio-page-aurora auth-studio-page-aurora-b" />
@@ -44,7 +46,7 @@ export default function StyleBackdrop({
         className="page-waves-shell__backdrop-vanta"
         preset={style.vantaPreset}
         defer={deferWaves}
-        interactive={interactive}
+        interactive={useInteractiveWaves}
       />
       <div className="page-waves-shell__backdrop-grid" />
       <div className="page-waves-shell__backdrop-glow page-waves-shell__backdrop-glow-a" />

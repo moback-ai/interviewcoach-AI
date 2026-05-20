@@ -130,6 +130,14 @@ body::after {
 .page-waves-shell__backdrop-vanta {
   inset: 0;
   opacity: 0.72;
+  pointer-events: auto;
+}
+
+.page-waves-shell__backdrop-fill,
+.page-waves-shell__backdrop-aurora,
+.page-waves-shell__backdrop-grid,
+.page-waves-shell__backdrop-glow {
+  pointer-events: none;
 }
 
 .dark .page-waves-shell__backdrop-vanta {
