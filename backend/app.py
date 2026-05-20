@@ -39,6 +39,10 @@ from common.runtime_config import load_runtime_config, optional_env, require_env
 
 load_runtime_config()
 
+_ollama_host = (optional_env("OLLAMA_HOST", "") or "").strip()
+if _ollama_host:
+    os.environ["OLLAMA_HOST"] = _ollama_host.rstrip("/")
+
 INTERVIEW_PATH = os.path.join(os.path.dirname(__file__), "INTERVIEW")
 if INTERVIEW_PATH not in sys.path:
     sys.path.append(INTERVIEW_PATH)
