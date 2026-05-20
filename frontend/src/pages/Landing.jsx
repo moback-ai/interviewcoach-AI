@@ -55,7 +55,7 @@ function Landing() {
   }, [location.hash]);
 
   return (
-    <PageWavesShell contentClassName="relative overflow-hidden">
+    <PageWavesShell preset="landing" deferWaves contentClassName="relative overflow-hidden">
       <div className="ambient-orb h-72 w-72 left-[-4rem] top-20 opacity-80" />
       <div className="ambient-orb h-80 w-80 right-[-6rem] top-[28rem] opacity-70" />
       <Navbar />
