@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Daily schedule: START 8:00 AM IST (02:30 UTC), STOP 8:00 PM IST (14:30 UTC)
+# Daily schedule: START 10:00 AM IST (04:30 UTC), STOP 8:00 PM IST (14:30 UTC)
 #
 # Usage:
 #   ./setup-daily-schedule.sh           # dry-run
@@ -17,9 +17,9 @@ APPLY=0
 FUNCTION_NAME="${SCHEDULE_LAMBDA_NAME:-interviewcoach-daily-schedule}"
 ROLE_NAME="${SCHEDULE_ROLE_NAME:-interviewcoach-schedule-lambda-role}"
 SCHEDULER_ROLE_NAME="${ROLE_NAME}-invoke"
-START_SCHEDULE="${SCHEDULE_START_NAME:-interviewcoach-start-8am-ist}"
+START_SCHEDULE="${SCHEDULE_START_NAME:-interviewcoach-start-10am-ist}"
 STOP_SCHEDULE="${SCHEDULE_STOP_NAME:-interviewcoach-stop-8pm-ist}"
-CRON_START="cron(30 2 * * ? *)"
+CRON_START="cron(30 4 * * ? *)"
 CRON_STOP="cron(30 14 * * ? *)"
 
 API_ID="${API_INSTANCE_ID:-}"
@@ -33,7 +33,7 @@ log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 run() { if [[ "$APPLY" -eq 1 ]]; then log "RUN: $*"; eval "$@"; else log "DRY-RUN: $*"; fi; }
 
 log "EC2: $EC2_LIST | RDS: $RDS_INSTANCE_ID"
-log "Start 8:00 AM IST = $CRON_START UTC"
+log "Start 10:00 AM IST = $CRON_START UTC"
 log "Stop  8:00 PM IST = $CRON_STOP UTC"
 
 ZIP="${SCRIPT_DIR}/lambda/schedule_handler.zip"
@@ -99,5 +99,5 @@ if [[ "$APPLY" -eq 1 ]]; then
 
   log "Schedules created."
 else
-  log "DRY-RUN: would deploy Lambda + EventBridge Scheduler (8am/8pm IST)"
+  log "DRY-RUN: would deploy Lambda + EventBridge Scheduler (10am/8pm IST)"
 fi

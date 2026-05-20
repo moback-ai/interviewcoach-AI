@@ -11,14 +11,23 @@ import WaveAnimation from '@/components/interview/WaveAnimation';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
-import { INTERVIEWER_VOICE_PRESETS, getInterviewerVoicePreset } from '../utils/interviewerVoices';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  INTERVIEWER_VOICE_PRESETS,
+  getInterviewerVoicePreset,
+  getStoredVoicePresetId,
+  persistVoicePresetChoice,
+  resolveInterviewerImageUrl,
+} from '../utils/interviewerVoices';
 
 /** Header order: Classic → Ava → Mira → Noah (matches product layout). */
 const HEADER_VOICE_IDS = ['server_default', 'ava', 'mira', 'noah'];
 
 function InterviewPage() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const userGender = user?.user_metadata?.gender || user?.gender || '';
   const [isValidated, setIsValidated] = useState(false);
   const [isValidating, setIsValidating] = useState(true); // ✅ RENAMED: Validation loading
   
@@ -35,10 +44,10 @@ function InterviewPage() {
     canEndInterview: true,
     isSpeakCooldown: false,
   });
-  const [selectedVoiceId, setSelectedVoiceId] = useState(() => {
-    if (typeof window === 'undefined') return 'ava';
-    return window.localStorage.getItem('interviewcoach.voicePreset') || 'ava';
-  });
+  const [selectedVoiceId, setSelectedVoiceId] = useState(() => getStoredVoicePresetId(userGender));
+  const [interviewerImageSrc, setInterviewerImageSrc] = useState(
+    () => resolveInterviewerImageUrl(getInterviewerVoicePreset(getStoredVoicePresetId(userGender)), userGender),
+  );
 
   // ✅ ADD: Callback to receive state changes from ChatWindow
   const handleChatStateChange = useCallback((newStates) => {
@@ -96,9 +105,15 @@ function InterviewPage() {
 
   // Initialize camera with retry logic and proper error handling
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('interviewcoach.voicePreset', selectedVoiceId);
-    }
+    const nextVoiceId = getStoredVoicePresetId(userGender);
+    setSelectedVoiceId(nextVoiceId);
+    setInterviewerImageSrc(
+      resolveInterviewerImageUrl(getInterviewerVoicePreset(nextVoiceId), userGender),
+    );
+  }, [userGender]);
+
+  useEffect(() => {
+    persistVoicePresetChoice(selectedVoiceId, { manual: true });
   }, [selectedVoiceId]);
 
   useEffect(() => {
@@ -748,7 +763,7 @@ function InterviewPage() {
         )}
       </AnimatePresence>
       
-      <div className="min-h-screen interview-grid-bg" style={{ backgroundColor: 'var(--color-bg)' }}>
+      <div className="relative min-h-screen interview-page-photo-bg">
         {/* Session header — dark bar, voice pill center, premium + head tracking right */}
         <header
           className="sticky top-0 z-40 border-b border-white/10 bg-[#0a0b12] px-4 py-3 sm:px-6 sm:py-3.5 text-white shadow-[0_4px_24px_rgba(0,0,0,0.35)] backdrop-blur-md"
@@ -891,12 +906,13 @@ function InterviewPage() {
                   {/* Interviewer Image - Circular with Wave Animation */}
                   <div className="relative mb-2 sm:mb-4">
                     <motion.img
-                      src="/assets/interview/interviewer_1.png"
+                      src={interviewerImageSrc}
                       loading="lazy"
                       decoding="async"
                       fetchPriority="low"
                       alt={activeVoicePreset.personaName}
-                      className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 lg:w-36 lg:h-36 xl:w-40 xl:h-40 object-cover rounded-full border-2 sm:border-4 shadow-xl relative z-10"
+                      onError={() => setInterviewerImageSrc('/assets/interview/interviewer_1.png')}
+                      className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 lg:w-36 lg:h-36 xl:w-40 xl:h-40 object-cover object-top rounded-full border-2 sm:border-4 shadow-xl relative z-10"
                       style={{
                         borderColor: isAudioPlaying ? 'var(--color-primary)' : 'white'
                       }}

@@ -1,4 +1,4 @@
-import { getAccessToken, setAccessToken } from './lib/authClient';
+import { getAccessToken, setAccessToken, persistAuth } from './lib/authClient';
 import { redirectToExpiredLogin } from './utils/authInterceptor';
 import { getApiBaseUrl } from './utils/apiConfig';
 
@@ -8,10 +8,30 @@ const API_BASE = getApiBaseUrl();
 export const getToken = () => localStorage.getItem('ic_token');
 export const isLoggedIn = () => !!getToken();
 
-function getHeaders(isFileUpload = false) {
-  const token = getAccessToken();
+function snapshotFormData(formData) {
+  if (!(formData instanceof FormData)) {
+    return null;
+  }
+  return Array.from(formData.entries());
+}
+
+function rebuildFormData(entries) {
+  const formData = new FormData();
+  if (!Array.isArray(entries)) {
+    return formData;
+  }
+  entries.forEach(([key, value]) => {
+    formData.append(key, value);
+  });
+  return formData;
+}
+
+function getHeaders(isFileUpload = false, { allowExpiredToken = false } = {}) {
+  const token = allowExpiredToken
+    ? localStorage.getItem('ic_token')
+    : getAccessToken();
   const headers = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (token) headers.Authorization = `Bearer ${token}`;
   if (!isFileUpload) headers['Content-Type'] = 'application/json';
   return headers;
 }
@@ -32,15 +52,37 @@ function buildUrl(endpoint) {
   return `${normalizedBase}${clean}`;
 }
 
+async function refreshAccessToken() {
+  const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
+    method: 'POST',
+    headers: getHeaders(false, { allowExpiredToken: true }),
+  });
+  if (!refreshRes.ok) {
+    return null;
+  }
+  const refreshData = await refreshRes.json().catch(() => ({}));
+  if (!refreshData.token) {
+    return null;
+  }
+  persistAuth(refreshData.token, refreshData.user || null);
+  setAccessToken(refreshData.token);
+  return refreshData.token;
+}
+
 // ── Core fetch wrapper ────────────────────────────────────────────────────────
 export async function apiCall(endpoint, options = {}) {
   try {
     const isFileUpload = options.body instanceof FormData;
+    const formDataSnapshot = options._formDataSnapshot || (isFileUpload ? snapshotFormData(options.body) : null);
     const headers = { ...getHeaders(isFileUpload), ...options.headers };
-    const { timeoutMs, signal: callerSignal, ...restOptions } = options;
-    const config = { method: restOptions.method || 'GET', headers, ...restOptions };
-    if (restOptions.body && !isFileUpload) {
-      config.body = JSON.stringify(restOptions.body);
+    const { timeoutMs, signal: callerSignal, _retried, _formDataSnapshot, ...restOptions } = options;
+    const requestBody = isFileUpload && formDataSnapshot
+      ? rebuildFormData(formDataSnapshot)
+      : restOptions.body;
+
+    const config = { method: restOptions.method || 'GET', headers, ...restOptions, body: requestBody };
+    if (requestBody && !isFileUpload) {
+      config.body = JSON.stringify(requestBody);
     }
     if (timeoutMs && typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
       config.signal = AbortSignal.timeout(timeoutMs);
@@ -49,23 +91,16 @@ export async function apiCall(endpoint, options = {}) {
     }
     const response = await fetch(buildUrl(endpoint), config);
 
-    // Auto-refresh token on 401
     if (response.status === 401) {
-      if (!options._retried) {
-        try {
-          const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
-            method: 'POST',
-            headers: getHeaders(),
+      if (!_retried) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          return apiCall(endpoint, {
+            ...options,
+            _retried: true,
+            _formDataSnapshot: formDataSnapshot,
+            body: isFileUpload ? rebuildFormData(formDataSnapshot) : restOptions.body,
           });
-          if (refreshRes.ok) {
-            const refreshData = await refreshRes.json();
-            if (refreshData.token) {
-              setAccessToken(refreshData.token);
-              return apiCall(endpoint, { ...options, _retried: true });
-            }
-          }
-        } catch (refreshError) {
-          console.error('Token refresh failed:', refreshError);
         }
       }
 
@@ -105,7 +140,15 @@ export const apiPut    = (ep, data, opts = {}) => apiCall(ep, { method: 'PUT',  
 export const apiDelete = (ep, opts = {})       => apiCall(ep, { method: 'DELETE', ...opts });
 
 export async function uploadFile(endpoint, formData, opts = {}) {
-  return apiCall(endpoint, { method: 'POST', body: formData, ...opts });
+  const normalizedEndpoint = endpoint.startsWith('/api/')
+    ? endpoint
+    : `/api${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  return apiCall(normalizedEndpoint, {
+    method: 'POST',
+    body: formData,
+    _formDataSnapshot: snapshotFormData(formData),
+    ...opts,
+  });
 }
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────

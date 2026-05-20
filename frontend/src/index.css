@@ -1148,6 +1148,22 @@ body::after {
   animation: ai-grid-drift 28s linear infinite;
 }
 
+.interview-page-photo-bg {
+  background-color: #0a0b12;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(10, 11, 18, 0.55) 0%,
+      rgba(10, 11, 18, 0.82) 55%,
+      rgba(10, 11, 18, 0.92) 100%
+    ),
+    url('/assets/backgrounds/interview-page-bg.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
 .ai-hero-field {
   background-image:
     linear-gradient(to right, color-mix(in srgb, var(--color-primary) 12%, transparent) 1px, transparent 1px),

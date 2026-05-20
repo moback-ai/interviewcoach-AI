@@ -1,5 +1,5 @@
 """
-Start/stop InterviewCoach EC2 + RDS on a daily schedule (8am–8pm IST).
+Start/stop InterviewCoach EC2 + RDS on a daily schedule (10am–8pm IST).
 Invoked by EventBridge Scheduler with {"action": "start"} or {"action": "stop"}.
 """
 import json
