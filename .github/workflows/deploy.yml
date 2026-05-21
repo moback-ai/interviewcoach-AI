@@ -435,8 +435,10 @@ jobs:
           echo "VITE_STORAGE_URL=/storage" >> .env
           npm install --legacy-peer-deps
           npm run build
+          bash ../scripts/verify-frontend-login-bundle.sh dist
           {
             echo "- Frontend build completed successfully."
+            echo "- Login bundle guard: passed (no heavy vendor chunks in entry)."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 3. Build and Audit - Upload Frontend Artifact
@@ -872,12 +874,21 @@ jobs:
           sudo nginx -t
           sudo systemctl reload nginx
           frontend_check() {
+            local html=""
             if has_ssl_cert; then
-              curl -kfsS --max-time 10 \
+              html="$(curl -kfsS --max-time 10 \
                 --resolve "$APP_DOMAIN:443:127.0.0.1" \
-                "https://$APP_DOMAIN/index.html" >/dev/null
+                "https://$APP_DOMAIN/login")"
             else
-              curl -fsS --max-time 10 http://127.0.0.1/index.html >/dev/null
+              html="$(curl -fsS --max-time 10 http://127.0.0.1/login)"
+            fi
+            if printf '%s' "$html" | grep -qE 'syntax-highlighter|framer-motion|recharts'; then
+              echo "Login bundle smoke check failed: heavy vendor chunk referenced in HTML"
+              return 1
+            fi
+            if ! printf '%s' "$html" | grep -q '/assets/index-'; then
+              echo "Login bundle smoke check failed: missing entry script"
+              return 1
             fi
           }
           if ! frontend_check || ! curl -fsS --max-time 10 "http://$BACKEND_PROXY_HOST/api/health" >/dev/null; then
@@ -1235,6 +1246,16 @@ jobs:
           if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
             curl -fsS --max-time 15 "$FRONTEND_ORIGIN/" >/dev/null
             echo "- Frontend check: success ($FRONTEND_ORIGIN/)" >> "$GITHUB_STEP_SUMMARY"
+            login_html="$(curl -fsS --max-time 15 "$FRONTEND_ORIGIN/login")"
+            if printf '%s' "$login_html" | grep -qE 'syntax-highlighter|framer-motion|recharts'; then
+              echo "- Login smoke check: failed (entry still preloads heavy vendor chunks)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            if ! printf '%s' "$login_html" | grep -q '/assets/index-'; then
+              echo "- Login smoke check: failed (missing entry script on /login)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "- Login smoke check: success ($FRONTEND_ORIGIN/login)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           if [ "${{ needs.authorize_and_prepare.outputs.backend }}" = "true" ] || [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
