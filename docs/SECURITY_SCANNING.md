@@ -25,7 +25,7 @@ Veracode is **not** enabled by default. To use it:
 2. Add GitHub repository secrets:
    - `VERACODE_API_ID`
    - `VERACODE_API_KEY`
-3. Run **Actions → Veracode Scan (Manual) → Run workflow**.
+3. Run **Actions → Security · Veracode (manual) → Run workflow**.
 
 Results appear in the Veracode portal (policy scans, SCA, etc.). Use this for compliance (SOC2, customer security questionnaires) alongside the free GitHub checks above.
 

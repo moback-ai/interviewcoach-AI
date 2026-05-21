@@ -2,7 +2,7 @@
 #   VERACODE_API_ID, VERACODE_API_KEY
 # See docs/SECURITY_SCANNING.md
 
-name: Veracode Scan (Manual)
+name: Security · Veracode (manual)
 
 on:
   workflow_dispatch:
