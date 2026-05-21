@@ -3,10 +3,10 @@ name: Deploy · Auto (develop)
 # Requires admin-approved PR → dispatches deploy.yml → production environment approval.
 
 on:
+  # Only integration merges — feature work runs Security on the PR, not deploy.
   push:
     branches:
       - develop
-      - 'develop/**'
   workflow_dispatch:
     inputs:
       git_ref:
@@ -24,8 +24,34 @@ permissions:
   pull-requests: read
 
 jobs:
+  deploy_trigger_gate:
+    name: Deploy trigger gate
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Only merged PRs or manual dispatch
+        id: check
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual deploy dispatch."
+            exit 0
+          fi
+          msg="${{ github.event.head_commit.message }}"
+          if printf '%s' "$msg" | grep -qiE 'Merge pull request|\(#[0-9]+\)'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Merged PR commit on develop — continuing."
+            exit 0
+          fi
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+          echo "Skipped: direct push to develop does not deploy. Merge an admin-approved PR (Option A) or use Deploy · Production (Option B)."
+
   validate_admin_pr_approval:
     name: Validate PR approval
+    needs: [deploy_trigger_gate]
+    if: needs.deploy_trigger_gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     outputs:
       source_branch: ${{ steps.meta.outputs.source_branch }}
