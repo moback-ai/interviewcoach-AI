@@ -10,5 +10,5 @@ paths = [
   '''backend/Piper/''',
   '''frontend/dist/''',
   '''package-lock\.json$''',
-  '''scripts/aws-plan-b/config\.env$''',
+  '''scripts/aws-plan-b/''',
 ]
