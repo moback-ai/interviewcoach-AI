@@ -30,11 +30,30 @@ CYAN = "\033[36m"
 RESET = "\033[0m"
 
 
+def _ollama_chat_options():
+    """Cap generation length for faster interview turns (override via OLLAMA_NUM_PREDICT)."""
+    raw = ""
+    try:
+        from common.runtime_config import optional_env as runtime_optional_env
+        raw = runtime_optional_env("OLLAMA_NUM_PREDICT", "384")
+    except Exception:
+        raw = os.getenv("OLLAMA_NUM_PREDICT", "384")
+    try:
+        num_predict = max(64, min(int(raw or 384), 1024))
+    except (TypeError, ValueError):
+        num_predict = 384
+    return {"num_predict": num_predict, "temperature": 0.6}
+
+
 def ollama_chat(*, model, messages):
     if ollama is None:
         raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
     resolved_model = resolve_ollama_model_name(model)
-    return ollama.chat(model=resolved_model, messages=messages)
+    return ollama.chat(
+        model=resolved_model,
+        messages=messages,
+        options=_ollama_chat_options(),
+    )
 
 
 def log(func_name):

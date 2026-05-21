@@ -47,7 +47,7 @@ if SUPPORT_BOT_PATH not in sys.path:
 
 # ── Internal modules ──────────────────────────────────────────────────────────
 from common.auth import verify_auth_token, create_token, hash_password, check_password
-from common.db import query_one, query_all, execute
+from common.db import query_one, query_all, execute, execute_many
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 from common.rate_limit import rate_limit, user_rate_limit
@@ -2928,6 +2928,77 @@ def transcribe_audio():
 #  GENERATE RESPONSE  (main interview AI loop)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _build_core_questions_list(questions_rows):
+    seen = {}
+    for q in questions_rows:
+        question_text = (q.get('question_text') or '').strip()
+        if not question_text:
+            continue
+        key = question_text.lower()
+        if key not in seen:
+            seen[key] = {
+                "question_text": question_text,
+                "requires_code": bool(q.get('requires_code', False)),
+                "difficulty_level": normalize_question_difficulty(
+                    q.get('difficulty_level') or q.get('difficulty_category')
+                ),
+            }
+    return list(seen.values())
+
+
+def _fetch_interview_question_rows(interview_row, interview_id, user_id):
+    questions_rows = query_all(
+        f"SELECT * FROM questions WHERE interview_id=%s ORDER BY {QUESTION_ORDER_SQL}",
+        (interview_id,),
+    )
+    if (
+        not questions_rows
+        and interview_row.get('resume_id')
+        and interview_row.get('jd_id')
+        and interview_row.get('question_set') is not None
+    ):
+        questions_rows = query_all(
+            f"""
+            SELECT q.*
+            FROM questions q
+            JOIN resumes r ON r.id = q.resume_id
+            JOIN job_descriptions jd ON jd.id = q.jd_id
+            WHERE q.resume_id=%s
+              AND q.jd_id=%s
+              AND q.question_set=%s
+              AND r.user_id=%s
+              AND jd.user_id=%s
+            ORDER BY {QUESTION_ORDER_SQL_Q_ALIAS}
+            """,
+            (
+                interview_row['resume_id'],
+                interview_row['jd_id'],
+                int(interview_row['question_set']),
+                user_id,
+                user_id,
+            ),
+        )
+    return questions_rows
+
+
+def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state):
+    if saved_state:
+        cached_id = saved_state.get('_config_interview_id')
+        cached_config = saved_state.get('_dynamic_config')
+        if cached_id == interview_id and isinstance(cached_config, dict):
+            return cached_config
+
+    questions_rows = _fetch_interview_question_rows(interview_row, interview_id, user_id)
+    return {
+        "job_title": interview_row.get('title') or '',
+        "job_description": interview_row.get('description') or '',
+        "core_questions": _build_core_questions_list(questions_rows),
+        "coding_requirement": [],
+        "time_limit_minutes": 150,
+        "custom_questions": [],
+    }
+
+
 @app.route('/api/generate-response', methods=['POST'])
 @verify_auth_token
 @user_rate_limit(max_calls=60, window_seconds=60)
@@ -2951,78 +3022,20 @@ def generate_response():
         )
         if not interview_row:
             return jsonify({"success": False, "message": "Interview not found"}), 404
-        questions_rows = query_all(
-            f"SELECT * FROM questions WHERE interview_id=%s ORDER BY {QUESTION_ORDER_SQL}", (interview_id,)
-        )
-        if not questions_rows and interview_row.get('resume_id') and interview_row.get('jd_id') and interview_row.get('question_set') is not None:
-            questions_rows = query_all(
-                f"""
-                SELECT q.*
-                FROM questions q
-                JOIN resumes r ON r.id = q.resume_id
-                JOIN job_descriptions jd ON jd.id = q.jd_id
-                WHERE q.resume_id=%s
-                  AND q.jd_id=%s
-                  AND q.question_set=%s
-                  AND r.user_id=%s
-                  AND jd.user_id=%s
-                ORDER BY {QUESTION_ORDER_SQL_Q_ALIAS}
-                """,
-                (
-                    interview_row['resume_id'],
-                    interview_row['jd_id'],
-                    int(interview_row['question_set']),
-                    request.user['id'],
-                    request.user['id'],
-                )
-            )
-        job_title = interview_row['title'] or ''
-        job_description = interview_row['description'] or ''
-        questions = [dict(q) for q in questions_rows]
-
-        seen = {}
-        for q in questions:
-            question_text = (q.get('question_text') or '').strip()
-            if not question_text:
-                continue
-            key = question_text.lower()
-            if key not in seen:
-                seen[key] = {
-                    "question_text": question_text,
-                    "requires_code": bool(q.get('requires_code', False)),
-                    "difficulty_level": normalize_question_difficulty(q.get('difficulty_level') or q.get('difficulty_category')),
-                }
-        core_questions = list(seen.values())
-
-        dynamic_config = {
-            "job_title": job_title,
-            "job_description": job_description,
-            "core_questions": core_questions,
-            "coding_requirement": [],
-            "time_limit_minutes": 150,
-            "custom_questions": []
-        }
 
         user_id = request.user['id']
         instance_key = f"{interview_id}:{user_id}"
+        saved_state = load_session(instance_key)
+        dynamic_config = _interview_dynamic_config(
+            interview_row, interview_id, user_id, saved_state
+        )
 
-        # Load or create manager using DB-backed session store
-        config_path = None
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tf:
-                json.dump(dynamic_config, tf)
-                config_path = tf.name
-
-            saved_state = load_session(instance_key)
-            manager = InterviewManager(config_path=config_path)
-            if saved_state:
-                manager.__dict__.update({
-                    k: v for k, v in saved_state.items()
-                    if not callable(v) and k not in ('model',)
-                })
-        finally:
-            if config_path and os.path.exists(config_path):
-                os.unlink(config_path)
+        manager = InterviewManager.from_config(dynamic_config)
+        if saved_state:
+            manager.__dict__.update({
+                k: v for k, v in saved_state.items()
+                if not callable(v) and k not in ('model',)
+            })
 
         try:
             response = _run_callable_with_timeout(
@@ -3046,17 +3059,19 @@ def generate_response():
                 k: v for k, v in manager.__dict__.items()
                 if isinstance(v, (str, int, float, bool, list, dict, type(None)))
             }
+            serializable['_config_interview_id'] = interview_id
+            serializable['_dynamic_config'] = dynamic_config
             save_session(instance_key, serializable)
         except Exception as se:
             print(f"[WARN] Session save failed: {se}")
 
-        # Save to chat history
-        execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-                (interview_id, 'user', user_input))
-
+        chat_rows = [(interview_id, 'user', user_input)]
         if response.get("message"):
-            execute("INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-                    (interview_id, 'assistant', response["message"]))
+            chat_rows.append((interview_id, 'assistant', response["message"]))
+        execute_many(
+            "INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
+            chat_rows,
+        )
 
         # Generate audio for interviewer response (skip when client uses browser TTS)
         audio_url = None
