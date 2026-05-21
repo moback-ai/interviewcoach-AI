@@ -1,13 +1,19 @@
 # Workflows
 
+Five workflows (not counting Dependabot). Fewer **runs**: feature branches only trigger **Security** on the PR; deploy runs after a **merged PR** to `develop` or manual dispatch.
+
 | Workflow | When it runs | What you do |
 |----------|----------------|-------------|
-| **Security** | Every PR + push to `develop` | Nothing — automatic |
-| **Deploy · Auto (develop)** | Push / merge to `develop` (with admin-approved PR) | Quality gate runs first; then approve `production` in deploy |
-| **Deploy · Production** | Manual, or triggered by Auto | Quality gate → approve `production` → deploy (rejected if gate fails) |
-| **Maintenance · Scheduled** | Weekly / monthly cron | Nothing — automatic |
+| **Security** | PR to `develop` / `main`; push to `develop` after merge; weekly cron | Nothing — automatic |
+| **Deploy · Auto (develop)** | **Merged PR** to `develop`, or **Run workflow** (Option A) | Quality gate → approve `production` |
+| **Deploy · Production** | Manual or triggered by Auto (Option B) | Quality gate → approve `production` |
+| **Maintenance · Scheduled** | Weekly / monthly cron, or manual | Nothing — automatic |
 | **Security · Veracode** | Manual only | Add Veracode secrets, then Run |
 
-`main` is **not** deployed. Use **Deploy · Production** from `develop` only.
+Direct pushes to `develop` do **not** deploy (use one merged PR or Option B).
+
+Clear old runs: `./scripts/cleanup-github-actions-runs.sh --keep 10`
+
+`main` is **not** deployed.
 
 Simple steps: [docs/DEPLOY.md](../../docs/DEPLOY.md)

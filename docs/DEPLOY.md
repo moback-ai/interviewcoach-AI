@@ -6,7 +6,19 @@ Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
 
 ---
 
-## Normal release (no manual button)
+## One PR per release (recommended)
+
+Put **all** changes for a release in **one** PR: `develop/<feature>` → `develop`.
+
+1. Investigate and test on the PR (Security runs on the PR).
+2. Get **admin approval** on that PR.
+3. **Merge once** → one auto-deploy (Option A) or use manual deploy (Option B) for the same commit.
+
+Avoid direct pushes to `develop` and avoid many small merges — each merge triggers deploy workflows.
+
+---
+
+## Normal release — Option A (no manual button)
 
 1. Open PR: `develop/<your-feature>` → **`develop`**
 2. Get **admin approval** on the PR (@govardhanreddy66 or @KFKishore23)
@@ -23,7 +35,7 @@ Do **not** merge PRs labeled `deploy-failed`.
 
 ---
 
-## When you need the manual button
+## Option B — manual deploy button
 
 GitHub → **Actions** → **Deploy · Production** → **Run workflow** (top right)
 
