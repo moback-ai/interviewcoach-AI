@@ -12,9 +12,14 @@ on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: Branch or tag to deploy
+        description: Commit SHA or ref to deploy
         required: true
-        default: main
+        default: develop
+        type: string
+      source_branch:
+        description: Source branch name (develop or develop/feature-name) for merge governance
+        required: false
+        default: develop
         type: string
       branch_details:
         description: Branch details or release notes
@@ -86,6 +91,7 @@ jobs:
         run: |
           {
             echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
+            echo "- Source branch: \`${{ github.event.inputs.source_branch }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
             echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
             echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
@@ -96,7 +102,7 @@ jobs:
         id: changes
         uses: dorny/paths-filter@v4
         with:
-          base: ${{ github.event.repository.default_branch }}
+          base: develop
           ref: ${{ github.event.inputs.git_ref }}
           filters: |
             frontend:
@@ -1209,9 +1215,133 @@ jobs:
             echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [ "${{ needs.authorize_and_prepare.outputs.ai }}" = "true" ]; then
-            echo "- AI box deploy job completed (Ollama refresh)." >> "$GITHUB_STEP_SUMMARY"
-          fi
+            if [ "${{ needs.authorize_and_prepare.outputs.ai }}" = "true" ]; then
+              echo "- AI box deploy job completed (Ollama refresh)." >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+      - name: 11. Finalize - Feature branch deploy succeeded (admin merge gate)
+        if: >-
+          success()
+          && startsWith(github.event.inputs.source_branch, 'develop/')
+          && github.event.inputs.source_branch != 'develop'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sourceBranch = '${{ github.event.inputs.source_branch }}';
+            const sha = '${{ needs.build_and_audit.outputs.release_sha }}';
+            const admins = ['govardhanreddy66', 'KFKishore23'];
+
+            const pulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${sourceBranch}`,
+              base: 'develop',
+            });
+
+            const body = [
+              '✅ **Production deploy succeeded** for this feature branch.',
+              '',
+              `- Source branch: \`${sourceBranch}\``,
+              `- Release SHA: \`${sha}\``,
+              '',
+              'An **admin** may now merge this pull request into `develop`.',
+              'Automatic merges are disabled. If deploy had failed, do not merge.',
+            ].join('\n');
+
+            if (pulls.data.length === 0) {
+              const { data: created } = await github.rest.pulls.create({
+                owner,
+                repo,
+                title: `[deploy-verified] Merge ${sourceBranch} into develop`,
+                head: sourceBranch,
+                base: 'develop',
+                draft: true,
+                body,
+              });
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: created.number,
+                labels: ['deploy-verified', 'admin-merge-required'],
+              });
+              core.info(`Created draft PR #${created.number} for admin merge.`);
+              return;
+            }
+
+            const pullRequest = pulls.data[0];
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              body,
+            });
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              labels: ['deploy-verified', 'admin-merge-required'],
+            });
+            await github.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              name: 'deploy-failed',
+            }).catch(() => {});
+
+            core.info(`Marked PR #${pullRequest.number} as deploy-verified. Admins: ${admins.join(', ')}`);
+
+      - name: 11. Finalize - Feature branch deploy failed (block merge)
+        if: >-
+          failure()
+          && startsWith(github.event.inputs.source_branch, 'develop/')
+          && github.event.inputs.source_branch != 'develop'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sourceBranch = '${{ github.event.inputs.source_branch }}';
+
+            const pulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${sourceBranch}`,
+              base: 'develop',
+            });
+
+            if (pulls.data.length === 0) {
+              core.info(`No open PR found for ${sourceBranch}; nothing to mark as failed.`);
+              return;
+            }
+
+            const pullRequest = pulls.data[0];
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              body: [
+                '❌ **Production deploy failed** for this feature branch.',
+                '',
+                `Do **not** merge into \`develop\` until deploy is fixed and succeeds.`,
+                'Merges require admin approval and a successful deploy.',
+              ].join('\n'),
+            });
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              labels: ['deploy-failed'],
+            });
+            await github.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              name: 'deploy-verified',
+            }).catch(() => {});
 
       - name: 11. Finalize - Promote stable release
         if: success()
