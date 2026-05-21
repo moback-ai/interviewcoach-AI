@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react';
 import {
+  clearStoredAuth,
   getAccessToken,
   getStoredUser,
   signIn,
@@ -9,6 +10,7 @@ import {
   resendVerification,
   updateCurrentUser,
 } from '../lib/authClient';
+import { redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getApiBaseUrl } from '../utils/apiConfig';
 
 const AuthContext = createContext();
@@ -22,7 +24,10 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const storedUser = getStoredUser();
     const token = getAccessToken();
-    if (storedUser && token) {
+    if (storedUser && !token) {
+      clearStoredAuth();
+      setUser(null);
+    } else if (storedUser && token) {
       setUser(storedUser);
     }
     setLoading(false);
@@ -52,9 +57,13 @@ export const AuthProvider = ({ children }) => {
 
   const resendVerificationEmail = async (email) => resendVerification(email);
 
-  const logout = async () => {
+  const logout = async ({ expired = false } = {}) => {
     await signOut();
     setUser(null);
+    if (expired) {
+      redirectToExpiredLogin();
+      return;
+    }
     window.location.href = '/login';
   };
 

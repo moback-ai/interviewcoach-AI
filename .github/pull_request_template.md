@@ -1,21 +1,15 @@
-## Summary
+## What changed
 
-- Describe the change.
+-
 
-## Branch
+## Checklist
 
-- [ ] Source branch uses `develop/<feature-name>` (not `feature/` or `main`)
-- [ ] Target branch is `develop`
+- [ ] Target branch is `develop` (feature PR) or `main` (release PR from `develop` only)
+- [ ] Tested locally
+- [ ] Security workflow green (if code changed)
 
-## Testing
+## Deploy
 
-- Describe what was tested.
+**Feature PRs:** merge to `develop` → deploy runs automatically (admin approves production in Actions).
 
-## Governance Checklist
-
-- [ ] Admin approval requested from @govardhanreddy66 or @KFKishore23 before merge into `develop`
-- [ ] Admin approved this PR before deploy
-- [ ] Admin approved the `production` environment in the deploy workflow
-- [ ] Wait for production deploy of this branch to succeed (`deploy-verified` label)
-- [ ] Do **not** merge if deploy failed (`deploy-failed` label)
-- [ ] Deployment impact has been reviewed
+**Release PR (`develop` → `main`):** one PR only; see [docs/DEPLOY.md](../docs/DEPLOY.md).

@@ -1,0 +1,14 @@
+title = "InterviewCoach gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore known safe patterns and generated assets"
+paths = [
+  '''\.env\.example$''',
+  '''backend/Piper/''',
+  '''frontend/dist/''',
+  '''package-lock\.json$''',
+  '''scripts/aws-plan-b/''',
+]

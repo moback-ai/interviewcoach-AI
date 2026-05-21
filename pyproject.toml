@@ -1,0 +1,34 @@
+[tool.pip-audit]
+# Vulnerabilities with no fix release on PyPI yet (mostly ML transitive deps).
+# Core API packages (Flask, Werkzeug, Pillow, requests, PyJWT) are pinned to patched versions.
+# Re-review when ollama/torch/transformers publish fixes: https://github.com/moback-ai/interviewcoach-AI/security
+ignore-vulns = [
+  "PYSEC-2024-271",
+  "PYSEC-2025-183",
+  "PYSEC-2025-146",
+  "PYSEC-2025-144",
+  "PYSEC-2025-147",
+  "PYSEC-2025-145",
+  "PYSEC-2026-102",
+  "PYSEC-2026-101",
+  "PYSEC-2025-211",
+  "PYSEC-2025-212",
+  "PYSEC-2025-215",
+  "PYSEC-2025-213",
+  "PYSEC-2025-214",
+  "PYSEC-2025-217",
+  "PYSEC-2025-218",
+  "PYSEC-2025-216",
+  "PYSEC-2024-277",
+  "PYSEC-2025-210",
+  "PYSEC-2025-194",
+  "PYSEC-2025-196",
+  "PYSEC-2025-195",
+  "PYSEC-2025-193",
+  "PYSEC-2025-192",
+  "PYSEC-2026-139",
+  "PYSEC-2025-191",
+  "PYSEC-2025-197",
+  "PYSEC-2025-189",
+  "PYSEC-2025-190",
+]

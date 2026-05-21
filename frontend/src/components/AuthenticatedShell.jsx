@@ -18,10 +18,7 @@ function AuthenticatedShell() {
   const location = useLocation();
   const isOnInterviewPage = location.pathname === '/interview';
 
-  const { showWarning, timeRemaining, resetTimer } = useIdleTimeout(
-    isOnInterviewPage ? null : 1440,
-    30
-  );
+  const { showWarning, timeRemaining, resetTimer } = useIdleTimeout(10, 30);
 
   useEffect(() => {
     const verifySession = async () => {
@@ -39,7 +36,7 @@ function AuthenticatedShell() {
   }, [location.pathname, isOnInterviewPage]);
 
   const handleIdleLogout = () => {
-    logout();
+    logout({ expired: true });
   };
 
   return (
@@ -51,14 +48,12 @@ function AuthenticatedShell() {
             <SupportBot />
           </Suspense>
         )}
-        {!isOnInterviewPage && (
-          <IdleTimeoutModal
-            isOpen={showWarning}
-            timeRemaining={timeRemaining}
-            onStayLoggedIn={resetTimer}
-            onLogout={handleIdleLogout}
-          />
-        )}
+        <IdleTimeoutModal
+          isOpen={showWarning}
+          timeRemaining={timeRemaining}
+          onStayLoggedIn={resetTimer}
+          onLogout={handleIdleLogout}
+        />
       </>
     </ProtectedRoute>
   );
