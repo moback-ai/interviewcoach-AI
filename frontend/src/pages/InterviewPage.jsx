@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Sparkles, Waves, Crown } from 'lucide-react';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
 import ChatWindow from '@/components/interview/ChatWindow';
+import ServiceHoursNotice from '@/components/interview/ServiceHoursNotice';
 import { trackEvents } from '../services/mixpanel';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
@@ -667,6 +668,7 @@ function InterviewPage() {
   // Original interview page content
   return (
     <>
+      <ServiceHoursNotice />
       {/* Head Tracking Alert */}
       <HeadTrackingAlert 
         isCalibrated={isCalibrated}

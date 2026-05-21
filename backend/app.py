@@ -52,6 +52,9 @@ from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
+from common.interview_capacity import interview_turn_slot, InterviewCapacityError
+from common.service_hours import service_hours_status
+from common.transcribe_remote import transcribe_via_remote_service
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -1708,7 +1711,11 @@ def _transcribe(wav_path):
     segs, info = whisper_model.transcribe(wav_path, beam_size=beam_size, language="en", task="transcribe")
     return " ".join(s.text for s in list(segs))
 
-def process_audio_file(file):
+def process_audio_file(file, auth_header=None, *, _local_only=False):
+    remote_url = (optional_env("TRANSCRIBE_SERVICE_URL", "") or "").strip()
+    if remote_url and not _local_only:
+        return transcribe_via_remote_service(file, remote_url, auth_header=auth_header)
+
     global whisper_model
     if whisper_model is None:
         initialize_whisper()
@@ -2892,6 +2899,25 @@ def generate_questions():
 #  TRANSCRIBE AUDIO
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.route('/api/internal/transcribe-audio', methods=['POST'])
+def transcribe_audio_internal():
+    """Whisper-only endpoint for TRANSCRIBE_SERVICE_URL forwarding (token required)."""
+    expected = (optional_env("TRANSCRIBE_INTERNAL_TOKEN", "") or "").strip()
+    if not expected or request.headers.get("X-Internal-Token") != expected:
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    if "audio" not in request.files:
+        return jsonify({"success": False, "message": "No audio file"}), 400
+    result = process_audio_file(request.files["audio"], _local_only=True)
+    if not result.get("success"):
+        return jsonify({"success": False, "message": result.get("error")}), 500
+    return jsonify({"success": True, "transcription": result.get("transcription", "")})
+
+
+@app.route('/api/service-hours', methods=['GET'])
+def api_service_hours():
+    return jsonify({"success": True, "data": service_hours_status()})
+
+
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @verify_auth_token
@@ -2902,7 +2928,7 @@ def transcribe_audio():
     if 'audio' not in request.files:
         return jsonify({"success": False, "message": "No audio file"}), 400
     file = request.files['audio']
-    result = process_audio_file(file)
+    result = process_audio_file(file, auth_header=request.headers.get("Authorization"))
     if not result.get('success'):
         return jsonify({"success": False, "message": result.get('error')}), 500
     transcription = result.get('transcription', '')
@@ -2999,183 +3025,256 @@ def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state)
     }
 
 
+def _build_generate_response_payload(user, data):
+    user_input = data.get('message', '').strip()
+    interview_id = data.get('interview_id')
+
+    # Fetch interview data directly (no loopback HTTP call)
+    interview_row = query_one(
+        "SELECT i.*, jd.title, jd.description FROM interviews i "
+        "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s AND i.user_id=%s",
+        (interview_id, user['id'])
+    )
+    if not interview_row:
+        return {"success": False, "message": "Interview not found"}, 404
+
+    user_id = user['id']
+    instance_key = f"{interview_id}:{user_id}"
+    saved_state = load_session(instance_key)
+    dynamic_config = _interview_dynamic_config(
+        interview_row, interview_id, user_id, saved_state
+    )
+
+    manager = InterviewManager.from_config(dynamic_config)
+    if saved_state:
+        manager.__dict__.update({
+            k: v for k, v in saved_state.items()
+            if not callable(v) and k not in ('model',)
+        })
+
+    try:
+        response = _run_callable_with_timeout(
+            lambda: manager.receive_input(user_input),
+            INTERVIEW_RESPONSE_TIMEOUT_SECONDS,
+            label="Interview response",
+        )
+    except Exception as interview_error:
+        print(f"[WARN] Interview manager timed out or failed: {interview_error}")
+        response = {
+            "stage": getattr(manager, "stage", "introduction"),
+            "message": (
+                "Thanks for your answer. The AI is taking longer than usual — "
+                "please continue, or use End interview when you are ready."
+            ),
+        }
+
+    # Persist updated session state
+    try:
+        serializable = {
+            k: v for k, v in manager.__dict__.items()
+            if isinstance(v, (str, int, float, bool, list, dict, type(None)))
+        }
+        serializable['_config_interview_id'] = interview_id
+        serializable['_dynamic_config'] = dynamic_config
+        save_session(instance_key, serializable)
+    except Exception as se:
+        print(f"[WARN] Session save failed: {se}")
+
+    chat_rows = [(interview_id, 'user', user_input)]
+    if response.get("message"):
+        chat_rows.append((interview_id, 'assistant', response["message"]))
+    execute_many(
+        "INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
+        chat_rows,
+    )
+
+    # Generate audio for interviewer response (skip when client uses browser TTS)
+    audio_url = None
+    voice_mode = (data.get("voice_mode") or "").strip().lower()
+    prefer_browser_voice = bool(data.get("prefer_browser_voice")) or voice_mode == "browser"
+    server_tts_enabled = _env_truthy("INTERVIEW_SERVER_TTS", "false")
+    if (
+        response.get("message")
+        and not response.get("interview_done", False)
+        and server_tts_enabled
+        and not prefer_browser_voice
+    ):
+        try:
+            response_text = response["message"]
+            ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+            text_hash = hashlib.sha256(response_text.encode()).hexdigest()[:8]
+            filename = f"interviewer_{text_hash}_{ts}.wav"
+            folder = f"audio/{user_id}/{interview_id}"
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tf2:
+                temp_audio = tf2.name
+            audio_path = synthesize_text_to_wav(response_text, temp_audio)
+            with open(audio_path, 'rb') as af:
+                audio_data = af.read()
+            storage_result = save_bytes(audio_data, folder, filename)
+            audio_url = storage_result['public_url']
+            if os.path.exists(temp_audio):
+                os.unlink(temp_audio)
+        except Exception as ae:
+            print(f"[WARN] Audio generation failed: {ae}")
+        finally:
+            pass
+
+    # Handle timeout (flag from InterviewManager)
+    if response.get("timeout_detected", False):
+        response["interview_done"] = True
+
+    # Handle interview completion - direct DB writes, no loopback HTTP
+    feedback_saved = False
+    if response.get("interview_done", False):
+        merged_path = None
+        merged_url = None
+        try:
+            merged_path = _merge_interview_audio(user_id, interview_id)
+            merged_url = public_url(merged_path) if merged_path else None
+        except Exception as audio_exc:
+            print(f"[WARN] Audio merge failed; saving text feedback without merged audio: {audio_exc}")
+
+        try:
+            # Save transcript directly
+            execute(
+                "INSERT INTO transcripts (interview_id, full_transcript, evaluation_data) "
+                "VALUES (%s, %s, %s) ON CONFLICT (interview_id) DO UPDATE "
+                "SET full_transcript=EXCLUDED.full_transcript, evaluation_data=EXCLUDED.evaluation_data",
+                (interview_id,
+                 json.dumps(manager.conversation_history),
+                 json.dumps(getattr(manager, 'final_evaluation_log', None)))
+            )
+
+            # Save feedback directly
+            execute(
+                "INSERT INTO interview_feedback (interview_id, summary, key_strengths, improvement_areas, metrics, audio_url) "
+                "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (interview_id) DO UPDATE "
+                "SET summary=EXCLUDED.summary, key_strengths=EXCLUDED.key_strengths, "
+                "improvement_areas=EXCLUDED.improvement_areas, metrics=EXCLUDED.metrics, audio_url=EXCLUDED.audio_url",
+                (interview_id,
+                 getattr(manager, 'final_summary', None),
+                 format_feedback_text(getattr(manager, 'key_strengths', [])),
+                 format_feedback_text(getattr(manager, 'improvement_areas', [])),
+                 json.dumps(getattr(manager, 'metrics', {})),
+                 merged_url)
+            )
+
+            execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
+
+            # Remove session from store
+            delete_session(instance_key)
+            feedback_saved = True
+        except Exception as se:
+            print(f"[ERROR] Save on completion failed: {se}")
+
+        # Clean up per-turn audio files only after feedback has been persisted.
+        if feedback_saved and merged_path:
+            try:
+                per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
+                            if f['name'].startswith(('interviewer_', 'user_'))]
+                delete_files([f['relative_path'] for f in per_turn])
+            except Exception as cleanup_exc:
+                print(f"[WARN] Audio cleanup failed after feedback save: {cleanup_exc}")
+
+    return {
+        "success": True,
+        "data": {
+            "response": response.get("message", "Sorry, something went wrong."),
+            "stage": response.get("stage", "unknown"),
+            "interview_done": response.get("interview_done", False),
+            "feedback_saved_successfully": feedback_saved,
+            "audio_url": audio_url,
+            "should_delete_audio": bool(audio_url),
+            "requires_code": response.get("requires_code"),
+            "code_language": response.get("code_language"),
+        },
+    }, 200
+
+
 @app.route('/api/generate-response', methods=['POST'])
 @verify_auth_token
 @user_rate_limit(max_calls=60, window_seconds=60)
 def generate_response():
     try:
         data = request.get_json() or {}
-        user_input = data.get('message', '').strip()
-        interview_id = data.get('interview_id')
-        if not user_input:
+        if not data.get('message', '').strip():
             return jsonify({"success": False, "message": "Message required"}), 400
-        if not interview_id:
+        if not data.get('interview_id'):
             return jsonify({"success": False, "message": "interview_id required"}), 400
 
-        auth_token = request.headers.get('Authorization', '').split(' ')[-1]
+        if _env_truthy("ENFORCE_SERVICE_HOURS", "true"):
+            hours = service_hours_status()
+            if not hours.get("is_open"):
+                return jsonify({
+                    "success": False,
+                    "closed": True,
+                    "message": hours.get("message") or "Service is outside operating hours.",
+                    "service_hours": hours,
+                }), 503
 
-        # Fetch interview data directly (no loopback HTTP call)
-        interview_row = query_one(
-            "SELECT i.*, jd.title, jd.description FROM interviews i "
-            "LEFT JOIN job_descriptions jd ON jd.id = i.jd_id WHERE i.id=%s AND i.user_id=%s",
-            (interview_id, request.user['id'])
-        )
-        if not interview_row:
-            return jsonify({"success": False, "message": "Interview not found"}), 404
-
-        user_id = request.user['id']
-        instance_key = f"{interview_id}:{user_id}"
-        saved_state = load_session(instance_key)
-        dynamic_config = _interview_dynamic_config(
-            interview_row, interview_id, user_id, saved_state
-        )
-
-        manager = InterviewManager.from_config(dynamic_config)
-        if saved_state:
-            manager.__dict__.update({
-                k: v for k, v in saved_state.items()
-                if not callable(v) and k not in ('model',)
-            })
-
-        try:
-            response = _run_callable_with_timeout(
-                lambda: manager.receive_input(user_input),
-                INTERVIEW_RESPONSE_TIMEOUT_SECONDS,
-                label="Interview response",
-            )
-        except Exception as interview_error:
-            print(f"[WARN] Interview manager timed out or failed: {interview_error}")
-            response = {
-                "stage": getattr(manager, "stage", "introduction"),
-                "message": (
-                    "Thanks for your answer. The AI is taking longer than usual — "
-                    "please continue, or use End interview when you are ready."
-                ),
-            }
-
-        # Persist updated session state
-        try:
-            serializable = {
-                k: v for k, v in manager.__dict__.items()
-                if isinstance(v, (str, int, float, bool, list, dict, type(None)))
-            }
-            serializable['_config_interview_id'] = interview_id
-            serializable['_dynamic_config'] = dynamic_config
-            save_session(instance_key, serializable)
-        except Exception as se:
-            print(f"[WARN] Session save failed: {se}")
-
-        chat_rows = [(interview_id, 'user', user_input)]
-        if response.get("message"):
-            chat_rows.append((interview_id, 'assistant', response["message"]))
-        execute_many(
-            "INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-            chat_rows,
-        )
-
-        # Generate audio for interviewer response (skip when client uses browser TTS)
-        audio_url = None
-        voice_mode = (data.get("voice_mode") or "").strip().lower()
-        prefer_browser_voice = bool(data.get("prefer_browser_voice")) or voice_mode == "browser"
-        server_tts_enabled = _env_truthy("INTERVIEW_SERVER_TTS", "false")
-        if (
-            response.get("message")
-            and not response.get("interview_done", False)
-            and server_tts_enabled
-            and not prefer_browser_voice
-        ):
-            try:
-                response_text = response["message"]
-                ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-                text_hash = hashlib.sha256(response_text.encode()).hexdigest()[:8]
-                filename = f"interviewer_{text_hash}_{ts}.wav"
-                folder = f"audio/{user_id}/{interview_id}"
-
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tf2:
-                    temp_audio = tf2.name
-                audio_path = synthesize_text_to_wav(response_text, temp_audio)
-                with open(audio_path, 'rb') as af:
-                    audio_data = af.read()
-                storage_result = save_bytes(audio_data, folder, filename)
-                audio_url = storage_result['public_url']
-                if os.path.exists(temp_audio):
-                    os.unlink(temp_audio)
-            except Exception as ae:
-                print(f"[WARN] Audio generation failed: {ae}")
-            finally:
-                pass
-
-        # Handle timeout (flag from InterviewManager)
-        if response.get("timeout_detected", False):
-            response["interview_done"] = True
-
-        # Handle interview completion - direct DB writes, no loopback HTTP
-        feedback_saved = False
-        if response.get("interview_done", False):
-            merged_path = None
-            merged_url = None
-            try:
-                merged_path = _merge_interview_audio(user_id, interview_id)
-                merged_url = public_url(merged_path) if merged_path else None
-            except Exception as audio_exc:
-                print(f"[WARN] Audio merge failed; saving text feedback without merged audio: {audio_exc}")
-
-            try:
-                # Save transcript directly
-                execute(
-                    "INSERT INTO transcripts (interview_id, full_transcript, evaluation_data) "
-                    "VALUES (%s, %s, %s) ON CONFLICT (interview_id) DO UPDATE "
-                    "SET full_transcript=EXCLUDED.full_transcript, evaluation_data=EXCLUDED.evaluation_data",
-                    (interview_id,
-                     json.dumps(manager.conversation_history),
-                     json.dumps(getattr(manager, 'final_evaluation_log', None)))
-                )
-
-                # Save feedback directly
-                execute(
-                    "INSERT INTO interview_feedback (interview_id, summary, key_strengths, improvement_areas, metrics, audio_url) "
-                    "VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (interview_id) DO UPDATE "
-                    "SET summary=EXCLUDED.summary, key_strengths=EXCLUDED.key_strengths, "
-                    "improvement_areas=EXCLUDED.improvement_areas, metrics=EXCLUDED.metrics, audio_url=EXCLUDED.audio_url",
-                    (interview_id,
-                     getattr(manager, 'final_summary', None),
-                     format_feedback_text(getattr(manager, 'key_strengths', [])),
-                     format_feedback_text(getattr(manager, 'improvement_areas', [])),
-                     json.dumps(getattr(manager, 'metrics', {})),
-                     merged_url)
-                )
-
-                execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
-
-                # Remove session from store
-                delete_session(instance_key)
-                feedback_saved = True
-            except Exception as se:
-                print(f"[ERROR] Save on completion failed: {se}")
-
-            # Clean up per-turn audio files only after feedback has been persisted.
-            if feedback_saved and merged_path:
-                try:
-                    per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
-                                if f['name'].startswith(('interviewer_', 'user_'))]
-                    delete_files([f['relative_path'] for f in per_turn])
-                except Exception as cleanup_exc:
-                    print(f"[WARN] Audio cleanup failed after feedback save: {cleanup_exc}")
-
+        with interview_turn_slot():
+            payload, status_code = _build_generate_response_payload(request.user, data)
+        return jsonify(payload), status_code
+    except InterviewCapacityError as exc:
         return jsonify({
-            "success": True,
-            "data": {
-                "response": response.get("message", "Sorry, something went wrong."),
-                "stage": response.get("stage", "unknown"),
-                "interview_done": response.get("interview_done", False),
-                "feedback_saved_successfully": feedback_saved,
-                "audio_url": audio_url,
-                "requires_code": response.get("requires_code")
-            }
-        })
+            "success": False,
+            "busy": True,
+            "message": str(exc),
+            "retry_after": exc.retry_after,
+        }), 503
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/generate-response-stream', methods=['POST'])
+@verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
+def generate_response_stream():
+    data = request.get_json() or {}
+
+    def sse_events():
+        yield "event: started\ndata: {}\n\n"
+        try:
+            if not data.get('message', '').strip():
+                err = {"success": False, "message": "Message required"}
+                yield f"event: error\ndata: {json.dumps(err)}\n\n"
+                return
+            if not data.get('interview_id'):
+                err = {"success": False, "message": "interview_id required"}
+                yield f"event: error\ndata: {json.dumps(err)}\n\n"
+                return
+            if _env_truthy("ENFORCE_SERVICE_HOURS", "true"):
+                hours = service_hours_status()
+                if not hours.get("is_open"):
+                    err = {
+                        "success": False,
+                        "closed": True,
+                        "message": hours.get("message"),
+                        "service_hours": hours,
+                    }
+                    yield f"event: error\ndata: {json.dumps(err)}\n\n"
+                    return
+            with interview_turn_slot():
+                payload, _status = _build_generate_response_payload(request.user, data)
+            yield f"event: complete\ndata: {json.dumps(payload)}\n\n"
+        except InterviewCapacityError as exc:
+            err = {
+                "success": False,
+                "busy": True,
+                "message": str(exc),
+                "retry_after": exc.retry_after,
+            }
+            yield f"event: error\ndata: {json.dumps(err)}\n\n"
+        except Exception as exc:
+            yield f"event: error\ndata: {json.dumps({'success': False, 'message': str(exc)})}\n\n"
+
+    return Response(
+        stream_with_context(sse_events()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUDIO MERGE HELPER

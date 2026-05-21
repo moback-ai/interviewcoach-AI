@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useContext, useCallback } from 'rea
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, Square, Code } from 'lucide-react'; // ✅ Add Square icon for end button
 import { uploadFile, apiPost, apiDelete } from '../../api';
+import { apiPostInterviewStream } from '../../api/interviewStream';
 import { useAuth } from '../../contexts/AuthContext'; // ✅ Use useAuth hook
 
 import { useChatHistory } from '../../hooks/useChatHistory';
@@ -268,11 +269,33 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         return;
       }
       
-      const response = await apiPost(
-        '/generate-response',
-        buildGenerateResponsePayload(userInput),
-        { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
-      );
+      let response = null;
+      try {
+        response = await apiPostInterviewStream(
+          '/generate-response-stream',
+          buildGenerateResponsePayload(userInput),
+          {
+            onEvent: (eventName) => {
+              if (eventName === 'started') {
+                devLog('Interview stream started');
+              }
+            },
+          },
+        );
+      } catch (streamErr) {
+        if (streamErr.busy || streamErr.closed) {
+          throw streamErr;
+        }
+        devLog('Stream unavailable, falling back to POST', streamErr.message);
+      }
+
+      if (!response) {
+        response = await apiPost(
+          '/generate-response',
+          buildGenerateResponsePayload(userInput),
+          { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
+        );
+      }
 
       devLog('📥 Interview Manager response:', response);
       
@@ -365,6 +388,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       }
     } catch (error) {
       console.error('❌ Error calling Interview Manager:', error);
+      if (error.busy) {
+        await addMessageToConversation(
+          'interviewer',
+          error.message || 'The interview AI is busy. Please wait a few seconds and try again.',
+        );
+      } else if (error.closed) {
+        await addMessageToConversation('interviewer', error.message || 'Service is outside operating hours.');
+      }
       setConversation(prev => prev.filter(msg => !msg.isThinking));
       setIsResponseInProgress(false);
     }

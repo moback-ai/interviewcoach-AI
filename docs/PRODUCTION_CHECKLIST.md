@@ -172,7 +172,11 @@ curl -s https://ugaanlabs.ai/api/health | python3 -m json.tool
 | `InterviewManager.from_config` | No temp JSON file per interview turn |
 | Session caches question config | Skips repeat DB question queries |
 | `OLLAMA_NUM_PREDICT` | Caps LLM length → faster replies |
-| Intro stage skips duplicate `assess_intro` | One fewer Ollama call when job Q&A done |
+| `generate_intro_turn` | One Ollama call for intro (not two) |
+| `INTERVIEW_MAX_CONCURRENT` | Queue when too many live interviews |
+| `/api/generate-response-stream` | SSE + fallback POST |
+| `TRANSCRIBE_SERVICE_URL` | Optional Whisper on second host |
+| `ENFORCE_SERVICE_HOURS` | Block API outside 10am–8pm IST |
 | Browser voice default (Ava) | No server TTS wait |
 
 ---

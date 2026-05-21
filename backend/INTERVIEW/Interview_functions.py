@@ -56,6 +56,21 @@ def ollama_chat(*, model, messages):
     )
 
 
+def ollama_chat_stream(*, model, messages):
+    if ollama is None:
+        raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
+    resolved_model = resolve_ollama_model_name(model)
+    for chunk in ollama.chat(
+        model=resolved_model,
+        messages=messages,
+        stream=True,
+        options=_ollama_chat_options(),
+    ):
+        part = (chunk.get("message") or {}).get("content") or ""
+        if part:
+            yield part
+
+
 def log(func_name):
     if func_name.startswith("handle_"):
         color_code = (
@@ -172,6 +187,67 @@ def generate_contextual_intro_reply(job_title, job_description, conversation_his
         if _is_substantive_response(user_input):
             return {"message": "Thanks for sharing that.", "job_explained": False}
         return {"message": "Could you tell me a bit about yourself?", "job_explained": False}
+
+
+def _parse_intro_turn_payload(raw_text):
+    text = (raw_text or "").strip()
+    job_flag = "[[job_explained]]" in text
+    text = text.replace("[[job_explained]]", "").strip()
+    intro_status = "wait"
+    try:
+        if "{" in text and "}" in text:
+            blob = text[text.index("{") : text.rindex("}") + 1]
+            parsed = json.loads(blob)
+            reply = (parsed.get("message") or parsed.get("reply") or "").strip()
+            status = (parsed.get("intro_status") or parsed.get("status") or "wait").strip().lower()
+            if reply:
+                text = reply
+            if status in {"continue", "wait", "retry"}:
+                intro_status = status
+            job_flag = bool(parsed.get("job_explained")) or job_flag
+    except Exception:
+        pass
+    return {"message": text or "Could you tell me a bit about yourself?", "job_explained": job_flag, "intro_status": intro_status}
+
+
+def generate_intro_turn(job_title, job_description, conversation_history, user_input, job_qna_done=False):
+    """Single Ollama call for intro reply + progress (faster than two separate calls)."""
+    log("generate_intro_turn")
+    status_hint = "continue" if job_qna_done else "decide"
+    prompt = f"""
+You are an AI interviewer for the role of: {job_title}.
+
+Job description:
+{job_description}
+
+Reply to the candidate in 1-2 natural sentences (no markdown). If they asked about the role, explain it briefly in your own words and add [[job_explained]] at the end of the reply (hidden tag).
+
+Also decide intro progress. job_qna_done={str(job_qna_done).lower()}.
+
+Return ONLY valid JSON:
+{{"message": "your reply", "job_explained": true/false, "intro_status": "continue"|"wait"|"retry"}}
+
+intro_status rules:
+- "continue" if they introduced themselves (name/background/experience) or job Q&A is done
+- "wait" if they are mid-intro
+- "retry" if off-topic or non-answer
+Current hint: {status_hint}
+"""
+    messages = [{"role": "system", "content": prompt}]
+    messages.extend(conversation_history)
+    messages.append({"role": "user", "content": user_input})
+    try:
+        response = ollama_chat(model="llama3", messages=messages)
+        return _parse_intro_turn_payload(response["message"]["content"])
+    except Exception as exc:
+        print(f"[ERROR] generate_intro_turn failed: {exc}")
+        fallback = generate_contextual_intro_reply(job_title, job_description, conversation_history, user_input)
+        intro_status = "continue" if job_qna_done else assess_intro_progress(conversation_history)
+        return {
+            "message": fallback["message"],
+            "job_explained": fallback.get("job_explained", False),
+            "intro_status": intro_status,
+        }
 
 
 def assess_intro_progress(conversation_history):
