@@ -38,7 +38,7 @@ jobs:
     steps:
       - name: Resolve branch, SHA, and admin approval
         id: meta
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           ADMINS: '["govardhanreddy66","KFKishore23"]'
           INPUT_REF: ${{ github.event.inputs.git_ref }}
@@ -198,7 +198,7 @@ jobs:
     needs: [validate_admin_pr_approval]
     steps:
       - name: Dispatch deploy workflow
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const owner = context.repo.owner;
