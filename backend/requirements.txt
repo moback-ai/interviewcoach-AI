@@ -31,7 +31,7 @@ pydub==0.25.1
 
 # Computer Vision
 opencv-python-headless==4.10.0.84
-mediapipe==0.10.14
+mediapipe==0.10.35
 
 # Document parsing
 PyPDF2==3.0.1
