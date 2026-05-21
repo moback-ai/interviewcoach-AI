@@ -270,14 +270,47 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       }
       
       let response = null;
+      const liveStreamId = 'interview-live-stream';
       try {
         response = await apiPostInterviewStream(
           '/generate-response-stream',
           buildGenerateResponsePayload(userInput),
           {
-            onEvent: (eventName) => {
+            onEvent: (eventName, payload) => {
               if (eventName === 'started') {
                 devLog('Interview stream started');
+                return;
+              }
+              if (eventName === 'queued') {
+                setConversation((prev) => {
+                  const base = prev.filter((msg) => !msg.isThinking && msg.id !== liveStreamId);
+                  return [
+                    ...base,
+                    {
+                      speaker: 'interviewer',
+                      message: payload.message || 'Waiting for interview AI…',
+                      isThinking: true,
+                      id: liveStreamId,
+                    },
+                  ];
+                });
+                return;
+              }
+              if (eventName === 'token' && payload.text) {
+                setConversation((prev) => {
+                  const base = prev.filter((msg) => !msg.isThinking && msg.id !== liveStreamId);
+                  const existing = prev.find((msg) => msg.id === liveStreamId);
+                  const accumulated = `${existing?.message || ''}${payload.text}`;
+                  return [
+                    ...base,
+                    {
+                      speaker: 'interviewer',
+                      message: accumulated,
+                      isThinking: true,
+                      id: liveStreamId,
+                    },
+                  ];
+                });
               }
             },
           },

@@ -10,6 +10,7 @@ import base64
 import io
 import secrets
 import uuid
+import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
@@ -3025,7 +3026,7 @@ def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state)
     }
 
 
-def _build_generate_response_payload(user, data):
+def _build_generate_response_payload(user, data, on_token=None):
     user_input = data.get('message', '').strip()
     interview_id = data.get('interview_id')
 
@@ -3053,8 +3054,11 @@ def _build_generate_response_payload(user, data):
         })
 
     try:
+        def _receive():
+            return manager.receive_input(user_input, on_token=on_token)
+
         response = _run_callable_with_timeout(
-            lambda: manager.receive_input(user_input),
+            _receive,
             INTERVIEW_RESPONSE_TIMEOUT_SECONDS,
             label="Interview response",
         )
@@ -3256,9 +3260,42 @@ def generate_response_stream():
                     }
                     yield f"event: error\ndata: {json.dumps(err)}\n\n"
                     return
-            with interview_turn_slot():
-                payload, _status = _build_generate_response_payload(request.user, data)
-            yield f"event: complete\ndata: {json.dumps(payload)}\n\n"
+
+            event_q = queue.Queue()
+
+            def on_token(text):
+                if text:
+                    event_q.put(("token", {"text": text}))
+
+            def worker():
+                try:
+                    with interview_turn_slot() as slot:
+                        if slot and slot.get("queue_position", 0) > 0:
+                            event_q.put((
+                                "queued",
+                                {"position": slot["queue_position"], "message": "Waiting for AI capacity…"},
+                            ))
+                        payload, _status = _build_generate_response_payload(
+                            request.user, data, on_token=on_token
+                        )
+                    event_q.put(("complete", payload))
+                except InterviewCapacityError as exc:
+                    event_q.put(("error", {
+                        "success": False,
+                        "busy": True,
+                        "message": str(exc),
+                        "retry_after": exc.retry_after,
+                    }))
+                except Exception as exc:
+                    traceback.print_exc()
+                    event_q.put(("error", {"success": False, "message": str(exc)}))
+
+            threading.Thread(target=worker, daemon=True).start()
+            while True:
+                kind, payload = event_q.get()
+                yield f"event: {kind}\ndata: {json.dumps(payload)}\n\n"
+                if kind in ("complete", "error"):
+                    break
         except InterviewCapacityError as exc:
             err = {
                 "success": False,

@@ -57,6 +57,19 @@ updates = {
     "AWS_REGION": os.environ["AWS_REGION"],
     "INFRA_LAYOUT": "split-api",
     "INFRA_UPDATED_AT": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "TRANSCRIBE_SERVICE_URL": f"http://{os.environ['AI_PRIVATE_IP']}:5001",
+    "INTERVIEW_UNIFIED_TURNS": "true",
+    "INTERVIEW_FAST_WRAPUP": "true",
+    "INTERVIEW_SERVER_TTS": "false",
+    "INTERVIEW_MAX_CONCURRENT": "12",
+    "INTERVIEW_QUEUE_WAIT_SECONDS": "90",
+    "INTERVIEW_RESPONSE_TIMEOUT_SECONDS": "90",
+    "OLLAMA_MODEL": os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
+    "OLLAMA_NUM_PREDICT": "384",
+    "ENFORCE_SERVICE_HOURS": "true",
+    "SERVICE_HOURS_TZ": "Asia/Kolkata",
+    "SERVICE_HOURS_START": "10:00",
+    "SERVICE_HOURS_END": "20:00",
 }
 data.update({k: v for k, v in updates.items() if v})
 with open(path, "w") as f:

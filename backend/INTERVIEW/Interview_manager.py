@@ -210,7 +210,7 @@ class InterviewManager:
         return elapsed >= self.time_limit_seconds
 
 
-    def receive_input(self, user_input: str):
+    def receive_input(self, user_input: str, on_token=None):
         self._ensure_runtime_state()
         self.api_call_count += 1
         print(f"[INFO] API call #{self.api_call_count} | Stage: {self.stage}")
@@ -237,6 +237,14 @@ class InterviewManager:
                 "message": "We've reached the time limit for this interview.",
                 "timeout_detected": True  # ✅ Flag for frontend to handle
             }
+
+        try:
+            from unified_turn import receive_input_unified, unified_turns_enabled
+
+            if unified_turns_enabled():
+                return receive_input_unified(self, user_input, on_token=on_token)
+        except Exception as unified_exc:
+            print(f"[WARN] Unified interview turn failed, using legacy handlers: {unified_exc}")
 
         if not self.intro_done:
             return self.handle_intro_stage(user_input)
