@@ -3,10 +3,10 @@ name: Security
 on:
   pull_request:
     branches: [main, develop]
+  # After merge to develop only — feature branches are scanned on the PR.
   push:
     branches:
       - develop
-      - 'develop/**'
   workflow_dispatch:
   schedule:
     # Weekly security pass (Monday 06:00 UTC)

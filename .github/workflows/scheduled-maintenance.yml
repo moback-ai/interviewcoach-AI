@@ -28,10 +28,21 @@ permissions:
   pull-requests: write
 
 jobs:
+  # GitHub validates workflow files on push; without this job, all conditional jobs skip → false failure.
+  workflow_file_push_guard:
+    if: github.event_name == 'push'
+    name: Workflow file push (no-op)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not a maintenance run
+        run: |
+          echo "Maintenance runs on schedule or workflow_dispatch only."
+          echo "No host or git tasks ran for this push."
+
   logs:
     name: Logs · archive and trim
     if: >-
-      (github.event_name == 'workflow_dispatch' && (inputs.task == 'all' || inputs.task == 'logs'))
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.task == 'all' || github.event.inputs.task == 'logs'))
       || github.event.schedule == '30 4 * * 0'
     runs-on: ubuntu-latest
     steps:
@@ -60,11 +71,11 @@ jobs:
   host-cleanup:
     name: Hosts · prune old releases
     if: >-
-      (github.event_name == 'workflow_dispatch' && (inputs.task == 'all' || inputs.task == 'host-cleanup'))
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.task == 'all' || github.event.inputs.task == 'host-cleanup'))
       || github.event.schedule == '0 4 * * 0'
     runs-on: ubuntu-latest
     env:
-      DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '0' }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -100,7 +111,7 @@ jobs:
   branch-cleanup:
     name: Git · delete stale merged branches
     if: >-
-      (github.event_name == 'workflow_dispatch' && (inputs.task == 'all' || inputs.task == 'branch-cleanup'))
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.task == 'all' || github.event.inputs.task == 'branch-cleanup'))
       || github.event.schedule == '0 3 1 * *'
     runs-on: ubuntu-latest
     steps:
@@ -170,7 +181,7 @@ jobs:
   sync-main:
     name: Git · monthly develop → main
     if: >-
-      (github.event_name == 'workflow_dispatch' && (inputs.task == 'all' || inputs.task == 'sync-main'))
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.task == 'all' || github.event.inputs.task == 'sync-main'))
       || github.event.schedule == '0 5 1 * *'
     runs-on: ubuntu-latest
     steps:
