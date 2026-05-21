@@ -53,6 +53,16 @@ Nothing is copied to servers until both gates pass.
 - `production` environment: required reviewers = admins only
 - Labels: `deploy-verified`, `deploy-failed`, `admin-merge-required`
 
+## Host artifact cleanup (releases, dist, logs)
+
+- `scripts/cleanup-host-artifacts.sh` keeps **2** release trees (`current` / `stable` + latest backup), archives older dirs as `<name>_DD_MM_YYYY`, removes stale `/tmp` build folders, and runs log maintenance.
+- Runs after each **successful** deploy and weekly via `host-artifact-cleanup.yml`.
+
+## RAM / performance (API)
+
+- `ENABLE_AI_WARMUP=false` (default) — Whisper/head-tracking load on first interview use, not at startup.
+- Gunicorn `--max-requests` recycles the worker to prevent slow memory growth.
+
 ## Logs, rollback detail, toolchain
 
 HTTP logs, per-step rollback, host toolchain updates, and log retention behave as documented in the deploy workflow (`deploy.yml`).

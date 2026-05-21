@@ -42,7 +42,9 @@ def query_one(sql, params=None):
     try:
         cur = conn.cursor()
         cur.execute(sql, params or ())
-        return cur.fetchone()
+        row = cur.fetchone()
+        conn.commit()
+        return row
     except Exception:
         conn.rollback()
         raise
@@ -55,7 +57,9 @@ def query_all(sql, params=None):
     try:
         cur = conn.cursor()
         cur.execute(sql, params or ())
-        return cur.fetchall()
+        rows = cur.fetchall()
+        conn.commit()
+        return rows
     except Exception:
         conn.rollback()
         raise

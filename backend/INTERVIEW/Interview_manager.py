@@ -269,14 +269,16 @@ class InterviewManager:
             print("[DEBUG] Job explanation confirmed by LLM. Resetting retry count and setting job_description_shown = True")
 
 
+        intro_status = None
         if self.job_description_shown and not self.job_qna_done:
             job_done_check = assess_intro_progress(self.conversation_history)
             if job_done_check == "continue":
                 self.job_qna_done = True
+                intro_status = "continue"
                 print("[DEBUG] Job Q&A finished. Marking job_qna_done = True")
 
-        # === If job is fully done, assess intro normally ===
-        intro_status = assess_intro_progress(self.conversation_history)
+        if intro_status is None:
+            intro_status = assess_intro_progress(self.conversation_history)
         print(f"[DEBUG] assess_intro_progress → {intro_status}")
 
         if intro_status == "continue":

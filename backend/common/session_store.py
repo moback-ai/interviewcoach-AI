@@ -19,10 +19,19 @@ def _ensure_table():
     execute("CREATE INDEX IF NOT EXISTS idx_interview_sessions_updated ON interview_sessions(updated_at)")
 
 
-_ensure_table()
+_table_ready = False
+
+
+def _ensure_table_once():
+    global _table_ready
+    if _table_ready:
+        return
+    _ensure_table()
+    _table_ready = True
 
 
 def load_session(session_key: str) -> dict | None:
+    _ensure_table_once()
     row = query_one("SELECT state_json FROM interview_sessions WHERE session_key = %s", (session_key,))
     if row:
         return row["state_json"]
@@ -30,6 +39,7 @@ def load_session(session_key: str) -> dict | None:
 
 
 def save_session(session_key: str, state: dict):
+    _ensure_table_once()
     execute("""
         INSERT INTO interview_sessions (session_key, state_json, updated_at)
         VALUES (%s, %s, now())
@@ -40,10 +50,12 @@ def save_session(session_key: str, state: dict):
 
 
 def delete_session(session_key: str):
+    _ensure_table_once()
     execute("DELETE FROM interview_sessions WHERE session_key = %s", (session_key,))
 
 
 def purge_old_sessions(hours: int = 24):
+    _ensure_table_once()
     """Remove sessions older than `hours` hours (call periodically)."""
     execute(
         "DELETE FROM interview_sessions WHERE updated_at < now() - (%s || ' hours')::interval",
