@@ -9,6 +9,7 @@ import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import InterviewHistoryCard from '../components/InterviewHistoryCard';
 import SuccessModal from '../components/SuccessModal';
+import NoticeModal from '../components/common/NoticeModal';
 import { apiPost } from '../api';
 import { trackEvents } from '../services/mixpanel';
 import PerformanceGraph from '../components/PerformanceGraph';
@@ -57,6 +58,7 @@ function DashboardPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [regeneratingQuestions, setRegeneratingQuestions] = useState(new Set());
   const [successModal, setSuccessModal] = useState({ isOpen: false, title: '', message: '', details: null });
+  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   const [downloadingResume, setDownloadingResume] = useState(new Set());
   const [downloadSuccess, setDownloadSuccess] = useState(null);
   // ✅ ADD: State for question generation modal
@@ -168,7 +170,12 @@ function DashboardPage() {
     const latestCompleted = completedInterviews[0];
 
     if (!latestCompleted?.id) {
-      alert('No completed interview summary is available for this question set yet.');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Summary not ready',
+        message: 'No completed interview summary is available for this question set yet.',
+        variant: 'info',
+      });
       return;
     }
 
@@ -295,7 +302,12 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error in regenerate questions workflow:', error);
-      alert(`Error: ${error.message}`);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Could not generate questions',
+        message: error.message,
+        variant: 'error',
+      });
     } finally {
       // Clear loading state for this specific pairing
       setRegeneratingQuestions(prev => {
@@ -309,8 +321,27 @@ function DashboardPage() {
   };
 
   const handleScheduleInterview = (pairingId) => {
-    // TODO: Navigate to interview scheduling page
-    alert('Interview scheduling feature coming soon!');
+    const pairing = resumeJobPairings.find((item) => item.id === pairingId);
+    if (!pairing) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Pairing not found',
+        message: 'Refresh the dashboard and try again.',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const questionSets = pairing.questionSets || [];
+    if (!questionSets.length) {
+      navigate(`/questions?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}`);
+      return;
+    }
+
+    const latestSet = [...questionSets].sort(
+      (a, b) => Number(b.questionSetNumber) - Number(a.questionSetNumber)
+    )[0];
+    handleViewQuestions(`set-${latestSet.questionSetNumber}`, pairing);
   };
 
   const handleDownloadResume = async (pairing, e) => {
@@ -355,8 +386,13 @@ function DashboardPage() {
       setTimeout(() => setDownloadSuccess(null), 3000); // Clear after 3 seconds
 
     } catch (error) {
-      console.error('Error downloading resume:', error)
-      alert('Failed to download resume. Please try again.')
+      console.error('Error downloading resume:', error);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Download failed',
+        message: 'Could not download the resume. Please try again.',
+        variant: 'error',
+      });
     } finally {
       // Clear loading state for this specific pairing
       setDownloadingResume(prev => {
@@ -1162,6 +1198,13 @@ function DashboardPage() {
         title={successModal.title}
         message={successModal.message}
         details={successModal.details}
+      />
+      <NoticeModal
+        isOpen={noticeModal.isOpen}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        variant={noticeModal.variant}
       />
     </>
   );

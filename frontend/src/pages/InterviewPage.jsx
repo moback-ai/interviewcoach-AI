@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Sparkles, Waves, Crown } from 'lucide-react';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
 import ChatWindow from '@/components/interview/ChatWindow';
+import ServiceHoursNotice from '@/components/interview/ServiceHoursNotice';
 import { trackEvents } from '../services/mixpanel';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
@@ -20,6 +21,7 @@ import {
   persistVoicePresetChoice,
   resolveInterviewerImageUrl,
 } from '../utils/interviewerVoices';
+import { devLog } from '../utils/devLog';
 
 /** Header order: Classic → Ava → Mira → Noah (matches product layout). */
 const HEADER_VOICE_IDS = ['server_default', 'ava', 'mira', 'noah'];
@@ -129,7 +131,7 @@ function InterviewPage() {
       try {
         // Wait for video element to be mounted
         if (!videoRef.current) {
-          console.log('⏳ Waiting for video element to mount...');
+          devLog('⏳ Waiting for video element to mount...');
           // Retry after a short delay
           setTimeout(() => {
             if (retryCount < MAX_RETRIES) {
@@ -142,7 +144,7 @@ function InterviewPage() {
           return;
         }
 
-        console.log('🎥 Requesting camera access...');
+        devLog('🎥 Requesting camera access...');
         setIsCameraLoading(true);
         setCameraError(null);
 
@@ -182,7 +184,7 @@ function InterviewPage() {
           const handleLoadedMetadata = () => {
             video.removeEventListener('loadedmetadata', handleLoadedMetadata);
             video.removeEventListener('error', handleError);
-            console.log('✅ Camera stream loaded successfully');
+            devLog('✅ Camera stream loaded successfully');
             setIsCameraLoading(false);
             setCameraError(null);
             cameraRetryCountRef.current = 0;
@@ -235,7 +237,7 @@ function InterviewPage() {
           setIsCameraLoading(false);
         } else if (retryCount < MAX_RETRIES) {
           // Retry for other errors
-          console.log(`🔄 Retrying camera access (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+          devLog(`🔄 Retrying camera access (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
           setTimeout(() => {
             startCamera(retryCount + 1);
           }, 1000 * (retryCount + 1)); // Exponential backoff
@@ -272,7 +274,7 @@ function InterviewPage() {
     }
     // Reset the calibration progress flag
     calibrationInProgressRef.current = false;
-    console.log('🎉 Calibration completed successfully');
+    devLog('🎉 Calibration completed successfully');
     
     // Auto-hide success message after 3 seconds
     setTimeout(() => {
@@ -321,19 +323,19 @@ function InterviewPage() {
     const timeoutId = setTimeout(() => {
       // Eye tracking warnings - show immediately when not looking
       const warningConditionMet = isCalibrated && !isLooking;
-      console.log(`🔍 Warning condition check: isCalibrated=${isCalibrated}, !isLooking=${!isLooking}, conditionMet=${warningConditionMet}`);
+      devLog(`🔍 Warning condition check: isCalibrated=${isCalibrated}, !isLooking=${!isLooking}, conditionMet=${warningConditionMet}`);
       
       if (warningConditionMet) {
-        console.log('🚨 Showing head tracking warning (eye contact)');
+        devLog('🚨 Showing head tracking warning (eye contact)');
         setWarningType('eye_contact');
         setShowWarningModal(true);
         setCurrentMode('head_tracking');
         // Pause monitoring while warning is shown
         pauseFrameSending();
       } else if (isCalibrated && isLooking) {
-        console.log('✅ User is looking at camera, no warning needed');
+        devLog('✅ User is looking at camera, no warning needed');
       } else if (!isCalibrated) {
-        console.log('⚠️ Not calibrated yet, skipping warning check');
+        devLog('⚠️ Not calibrated yet, skipping warning check');
       }
     }, 500); // 500ms delay to allow backend to process new frames
 
@@ -346,13 +348,13 @@ function InterviewPage() {
       // Switching to head tracking mode
       if (currentMode !== 'head_tracking') {
         setCurrentMode('head_tracking');
-        console.log('🔄 Switched to head tracking mode');
+        devLog('🔄 Switched to head tracking mode');
       }
     } else {
       // No monitoring when head tracking is disabled
       if (currentMode !== 'disabled') {
         setCurrentMode('disabled');
-        console.log('🔄 Disabled monitoring');
+        devLog('🔄 Disabled monitoring');
       }
     }
   }, [headTrackingEnabled, currentMode]);
@@ -367,11 +369,11 @@ function InterviewPage() {
 
   // Start monitoring when video is ready and monitoring is confirmed
   useEffect(() => {
-    console.log(`🔍 Monitoring check: videoRef=${!!videoRef.current}, isConnected=${isConnected}, headTrackingStarted=${headTrackingStarted}, showHeadTrackingPopup=${showHeadTrackingPopup}`);
+    devLog(`🔍 Monitoring check: videoRef=${!!videoRef.current}, isConnected=${isConnected}, headTrackingStarted=${headTrackingStarted}, showHeadTrackingPopup=${showHeadTrackingPopup}`);
     
     if (videoRef.current && headTrackingStarted && !showHeadTrackingPopup) {
       const handleVideoReady = () => {
-        console.log('🎥 Video ready, starting monitoring...');
+        devLog('🎥 Video ready, starting monitoring...');
         startMonitoring();
         
         // Don't start calibration immediately - wait for user to be ready
@@ -393,31 +395,31 @@ function InterviewPage() {
   const startCalibrationCheck = useCallback(() => {
     // Prevent multiple calibration checks from running simultaneously
     if (calibrationInProgressRef.current) {
-      console.log('⚠️ Calibration check already in progress, skipping...');
+      devLog('⚠️ Calibration check already in progress, skipping...');
       return;
     }
     
-    console.log('🔍 Starting 5-second calibration check...');
+    devLog('🔍 Starting 5-second calibration check...');
     calibrationInProgressRef.current = true;
     setCalibrationState('checking');
     
     // Check for 5 seconds
     const timer = setTimeout(() => {
-      console.log('⏰ 5-second check completed');
+      devLog('⏰ 5-second check completed');
       // Get the current readyForCalibration value at the time of check
       const currentReadyForCalibration = readyForCalibrationRef.current;
-      console.log(`🔍 Current readyForCalibration state: ${currentReadyForCalibration}`);
+      devLog(`🔍 Current readyForCalibration state: ${currentReadyForCalibration}`);
       
       if (currentReadyForCalibration && !isCalibrated) {
-        console.log('✅ User is ready, starting calibration');
+        devLog('✅ User is ready, starting calibration');
         setCalibrationState('ready');
         startCalibration();
       } else if (currentReadyForCalibration && isCalibrated) {
-        console.log('✅ User is ready but already calibrated, skipping calibration');
+        devLog('✅ User is ready but already calibrated, skipping calibration');
         setCalibrationState('idle');
         calibrationInProgressRef.current = false;
       } else {
-        console.log('❌ User not ready, showing warning modal');
+        devLog('❌ User not ready, showing warning modal');
         setCalibrationState('error');
         setShowCalibrationWarning(true);
         pauseFrameSending(); // Stop sending frames
@@ -429,28 +431,28 @@ function InterviewPage() {
 
   // Handle calibration warning modal close
   const handleCalibrationWarningClose = useCallback(() => {
-    console.log('🔄 User acknowledged warning, restarting check...');
+    devLog('🔄 User acknowledged warning, restarting check...');
     setShowCalibrationWarning(false);
     setCalibrationState('checking');
     resumeFrameSending(); // Resume sending frames
     
     // Start another 5-second check
     const timer = setTimeout(() => {
-      console.log('⏰ Second 5-second check completed');
+      devLog('⏰ Second 5-second check completed');
       // Get the current readyForCalibration value at the time of check
       const currentReadyForCalibration = readyForCalibrationRef.current;
-      console.log(`🔍 Current readyForCalibration state: ${currentReadyForCalibration}`);
+      devLog(`🔍 Current readyForCalibration state: ${currentReadyForCalibration}`);
       
       if (currentReadyForCalibration && !isCalibrated) {
-        console.log('✅ User is now ready, starting calibration');
+        devLog('✅ User is now ready, starting calibration');
         setCalibrationState('ready');
         startCalibration();
       } else if (currentReadyForCalibration && isCalibrated) {
-        console.log('✅ User is ready but already calibrated, skipping calibration');
+        devLog('✅ User is ready but already calibrated, skipping calibration');
         setCalibrationState('idle');
         calibrationInProgressRef.current = false;
       } else {
-        console.log('❌ User still not ready, showing warning again');
+        devLog('❌ User still not ready, showing warning again');
         setCalibrationState('error');
         setShowCalibrationWarning(true);
         pauseFrameSending(); // Stop sending frames again
@@ -493,17 +495,17 @@ function InterviewPage() {
         const interviewId = searchParams.get('interview_id');
         
         if (!interviewId) {
-          console.log('❌ No interview_id provided');
+          devLog('❌ No interview_id provided');
           navigate('/upload');
           return;
         }
         
-        console.log('🔍 Validating interview:', interviewId);
+        devLog('🔍 Validating interview:', interviewId);
         
         // Get user session
         const session = await getSession();
         if (!session?.access_token) {
-          console.log('❌ No session found');
+          devLog('❌ No session found');
           navigate('/upload');
           return;
         }
@@ -517,10 +519,10 @@ function InterviewPage() {
         
         const result = await response.json();
         
-        console.log('📋 Interview validation result:', result);
+        devLog('📋 Interview validation result:', result);
         
         if (!response.ok || !result.success) {
-          console.log('❌ Interview not found or access denied');
+          devLog('❌ Interview not found or access denied');
           navigate('/upload');
           return;
         }
@@ -529,7 +531,7 @@ function InterviewPage() {
         
         // ✅ UPDATED: Handle PENDING status
         if (interview.status === 'PENDING') {
-          console.log('⏳ Interview is pending payment confirmation...');
+          devLog('⏳ Interview is pending payment confirmation...');
           // Show loading state while waiting for payment confirmation
           setIsValidating(true);
           // You could add polling here or just show a message
@@ -537,18 +539,18 @@ function InterviewPage() {
         }
 
         if (interview.status === 'ENDED') {
-          console.log('✅ Interview already completed, redirecting to feedback page');
+          devLog('✅ Interview already completed, redirecting to feedback page');
           navigate(`/interview-feedback?interview_id=${interviewId}`);
           return;
         }
 
         if (interview.status !== 'STARTED') {
-          console.log('❌ Interview status is not STARTED:', interview.status);
+          devLog('❌ Interview status is not STARTED:', interview.status);
           navigate('/upload');
           return;
         }
         
-        console.log('✅ Interview validated successfully:', interview);
+        devLog('✅ Interview validated successfully:', interview);
         setIsValidated(true);
         
       } catch (error) {
@@ -566,11 +568,11 @@ function InterviewPage() {
   const confirmHeadTracking = () => {
     setShowHeadTrackingPopup(false);
     setHeadTrackingStarted(true);
-    console.log('🚀 Head tracking confirmed and started');
+    devLog('🚀 Head tracking confirmed and started');
     
     // Start calibration check after a short delay to allow monitoring to start
     setTimeout(() => {
-      console.log('⏰ Starting calibration check process...');
+      devLog('⏰ Starting calibration check process...');
       startCalibrationCheck();
     }, 1000);
   };
@@ -578,12 +580,12 @@ function InterviewPage() {
   // Toggle head tracking on/off
   const toggleHeadTracking = () => {
     const newMode = !headTrackingEnabled;
-    console.log(`🔄 Toggle requested: ${headTrackingEnabled} → ${newMode}`);
+    devLog(`🔄 Toggle requested: ${headTrackingEnabled} → ${newMode}`);
     setHeadTrackingEnabled(newMode);
     
     if (newMode) {
       // Switching TO head tracking - start fresh calibration session
-      console.log('🔄 Setting up head tracking mode...');
+      devLog('🔄 Setting up head tracking mode...');
       setCurrentMode('head_tracking');
       setHeadTrackingStarted(false); // Reset to show popup again
       setCalibrationState('idle'); // Reset calibration state
@@ -598,7 +600,7 @@ function InterviewPage() {
         setCalibrationCheckTimer(null);
       }
       
-      console.log('🔄 Toggled to head tracking - will show popup for calibration');
+      devLog('🔄 Toggled to head tracking - will show popup for calibration');
     } else {
       // Switching OFF head tracking - stop all monitoring
       setCurrentMode('disabled');
@@ -613,7 +615,7 @@ function InterviewPage() {
       // Reset calibration progress flag
       calibrationInProgressRef.current = false;
       
-      console.log('🔄 Toggled off head tracking - stopped all monitoring');
+      devLog('🔄 Toggled off head tracking - stopped all monitoring');
     }
   };
 
@@ -626,7 +628,7 @@ function InterviewPage() {
       resumeFrameSending();
     }, 1000); // Small delay to ensure user has time to adjust
     
-    console.log(`✅ Monitoring resumed for ${currentMode} mode`);
+    devLog(`✅ Monitoring resumed for ${currentMode} mode`);
   };
 
   const endInterview = () => {
@@ -666,6 +668,7 @@ function InterviewPage() {
   // Original interview page content
   return (
     <>
+      <ServiceHoursNotice />
       {/* Head Tracking Alert */}
       <HeadTrackingAlert 
         isCalibrated={isCalibrated}

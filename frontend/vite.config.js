@@ -12,6 +12,16 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'react-router-dom',
+        'framer-motion',
+        'react-syntax-highlighter',
+        'react-syntax-highlighter/dist/esm/styles/prism',
+      ],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

@@ -1,14 +1,12 @@
-name: Auto Deploy Develop
+name: Deploy · Auto (develop)
 
-# All production deploys (develop + develop/*) require admin PR approval before dispatch.
-# deploy.yml then requires protected `production` environment approval before any server change.
-# Failed deploys never stay live — deploy.yml rolls back to the last stable release.
+# Requires admin-approved PR → dispatches deploy.yml → production environment approval.
 
 on:
+  # Only integration merges — feature work runs Security on the PR, not deploy.
   push:
     branches:
       - develop
-      - 'develop/**'
   workflow_dispatch:
     inputs:
       git_ref:
@@ -26,8 +24,36 @@ permissions:
   pull-requests: read
 
 jobs:
+  deploy_trigger_gate:
+    name: Deploy trigger gate
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Only merged PRs or manual dispatch
+        id: check
+        env:
+          DEPLOY_COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Manual deploy dispatch."
+            exit 0
+          fi
+          msg="${DEPLOY_COMMIT_MSG}"
+          if printf '%s' "$msg" | grep -qiE 'Merge pull request|\(#[0-9]+\)'; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            echo "Merged PR commit on develop — continuing."
+            exit 0
+          fi
+          echo "proceed=false" >> "$GITHUB_OUTPUT"
+          echo "Skipped: direct push to develop does not deploy. Merge an admin-approved PR (Option A) or use Deploy · Production (Option B)."
+
   validate_admin_pr_approval:
-    name: Validate admin PR approval
+    name: Validate PR approval
+    needs: [deploy_trigger_gate]
+    if: needs.deploy_trigger_gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     outputs:
       source_branch: ${{ steps.meta.outputs.source_branch }}
@@ -189,13 +215,28 @@ jobs:
               .addBreak()
               .addRaw(`Admin approval: ${approvedBy}`)
               .addBreak()
-              .addRaw(`Next: an admin must approve the \`production\` environment in deploy.yml.`)
+              .addRaw(`Next: quality gate (lint, build, tests, merge conflicts), then production approval.`)
               .write();
 
-  dispatch_production_deploy:
-    name: Dispatch production deploy
+  pre_deploy_quality:
+    name: Quality gate
     runs-on: ubuntu-latest
     needs: [validate_admin_pr_approval]
+    steps:
+      - name: Gate · Checkout (required for local composite action)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}
+          fetch-depth: 0
+      - name: Gate · Scan, test, and conflict check
+        uses: ./.github/actions/pre-deploy-quality-gate
+        with:
+          git_ref: ${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}
+
+  dispatch_production_deploy:
+    name: Dispatch deploy
+    runs-on: ubuntu-latest
+    needs: [validate_admin_pr_approval, pre_deploy_quality]
     steps:
       - name: Dispatch deploy workflow
         uses: actions/github-script@v7
@@ -231,5 +272,5 @@ jobs:
               .addBreak()
               .addRaw(`PR approved by: ${approvedBy}`)
               .addBreak()
-              .addRaw(`Waiting for production environment approval in deploy.yml.`)
+              .addRaw(`Quality gate passed. Waiting for production environment approval in deploy.yml.`)
               .write();

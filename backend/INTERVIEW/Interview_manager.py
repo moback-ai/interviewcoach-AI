@@ -9,6 +9,7 @@ from Interview_functions import (
     log,
     assess_intro_progress,
     generate_contextual_intro_reply,
+    generate_intro_turn,
     generate_icebreaker_question,
     assess_icebreaker_response,
     generate_icebreaker_question,
@@ -27,15 +28,23 @@ from Interview_functions import (
 
 
 class InterviewManager:
+    @classmethod
+    def from_config(cls, config, model="llama3"):
+        """Build manager without writing a temp JSON file (faster per /generate-response)."""
+        instance = cls.__new__(cls)
+        instance._init_new_session(model, config)
+        return instance
+
     def __init__(self, model="llama3", config_path="interview_config.json"):
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        self._init_new_session(model, config)
+
+    def _init_new_session(self, model, config):
         self.model = model
         self.api_call_count = 0
         self.stage = "introduction"
         self.conversation_history = []
-
-        # Load config
-        with open(config_path, "r") as f:
-            config = json.load(f)
 
         self.job_title = config.get("job_title", "this role")
         self.job_description = config.get("job_description", "")
@@ -201,7 +210,7 @@ class InterviewManager:
         return elapsed >= self.time_limit_seconds
 
 
-    def receive_input(self, user_input: str):
+    def receive_input(self, user_input: str, on_token=None):
         self._ensure_runtime_state()
         self.api_call_count += 1
         print(f"[INFO] API call #{self.api_call_count} | Stage: {self.stage}")
@@ -228,6 +237,14 @@ class InterviewManager:
                 "message": "We've reached the time limit for this interview.",
                 "timeout_detected": True  # ✅ Flag for frontend to handle
             }
+
+        try:
+            from unified_turn import receive_input_unified, unified_turns_enabled
+
+            if unified_turns_enabled():
+                return receive_input_unified(self, user_input, on_token=on_token)
+        except Exception as unified_exc:
+            print(f"[WARN] Unified interview turn failed, using legacy handlers: {unified_exc}")
 
         if not self.intro_done:
             return self.handle_intro_stage(user_input)
@@ -258,28 +275,25 @@ class InterviewManager:
 
         self.conversation_history.append({"role": "user", "content": user_input})
 
-        # === Always generate contextual reply (handles job + intro flow) ===
-        result = generate_contextual_intro_reply(self.job_title,self.job_description,self.conversation_history,user_input)
+        result = generate_intro_turn(
+            self.job_title,
+            self.job_description,
+            self.conversation_history,
+            user_input,
+            job_qna_done=self.job_qna_done,
+        )
         reply = result["message"]
         self.conversation_history.append({"role": "assistant", "content": reply})
 
-        if result["job_explained"]:
+        if result.get("job_explained"):
             self.job_description_shown = True
             self.intro_retry_count = 0
             print("[DEBUG] Job explanation confirmed by LLM. Resetting retry count and setting job_description_shown = True")
 
-
-        intro_status = None
-        if self.job_description_shown and not self.job_qna_done:
-            job_done_check = assess_intro_progress(self.conversation_history)
-            if job_done_check == "continue":
-                self.job_qna_done = True
-                intro_status = "continue"
-                print("[DEBUG] Job Q&A finished. Marking job_qna_done = True")
-
-        if intro_status is None:
-            intro_status = assess_intro_progress(self.conversation_history)
-        print(f"[DEBUG] assess_intro_progress → {intro_status}")
+        intro_status = (result.get("intro_status") or "wait").strip().lower()
+        if intro_status == "continue":
+            self.job_qna_done = True
+        print(f"[DEBUG] generate_intro_turn intro_status → {intro_status}")
 
         if intro_status == "continue":
             self.intro_done = True
