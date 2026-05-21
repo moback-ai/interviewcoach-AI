@@ -103,6 +103,36 @@ jobs:
           npm run build
           bash ../scripts/verify-frontend-login-bundle.sh dist
 
+      - name: Install Playwright browser
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
+        working-directory: frontend
+        run: npx playwright install chromium --with-deps
+
+      - name: E2E smoke — login and forgot-password
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
+        working-directory: frontend
+        env:
+          CI: true
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:4173
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 4173 &
+          preview_pid=$!
+          for attempt in $(seq 1 45); do
+            if curl -fsS "$PLAYWRIGHT_BASE_URL/login" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS "$PLAYWRIGHT_BASE_URL/login" >/dev/null
+          npm run test:e2e
+          kill "$preview_pid" || true
+
       - name: Setup Python
         if: >-
           github.event_name == 'workflow_dispatch'
@@ -155,7 +185,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -170,7 +200,7 @@ jobs:
         run: pip install -r backend/requirements.txt
 
       - name: Analyze
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
 

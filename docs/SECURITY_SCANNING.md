@@ -14,6 +14,7 @@ This repo runs automated security checks on every PR and push to `develop`. Opti
 | **Semgrep** | OWASP-style patterns (SAST) | `semgrep` |
 | **Gitleaks** | Secrets committed to git | `secret-scan` |
 | **Login bundle guard** | Broken login after bad Vite chunk splits | `lint-and-scan` |
+| **Playwright** | `/login` and `/forgot-password` smoke tests | `lint-and-scan` |
 | **Dependabot** | Weekly PRs for outdated npm/pip/actions | (bot) |
 
 ## Veracode (optional — requires license)
