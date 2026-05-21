@@ -21,7 +21,9 @@ const InterviewPage       = lazy(() => import('./pages/InterviewPage'));
 const InterviewFeedbackPage = lazy(() => import('./pages/InterviewFeedbackPage'));
 const PaymentSuccessPage  = lazy(() => import('./pages/PaymentSuccess'));
 const FAQPage             = lazy(() => import('./pages/FAQPage'));
-const BackgroundStyleLab  = lazy(() => import('./pages/BackgroundStyleLab'));
+const BackgroundStyleLab  = import.meta.env.DEV
+  ? lazy(() => import('./pages/BackgroundStyleLab'))
+  : null;
 const AdminLogsPage       = lazy(() => import('./pages/AdminLogsPage'));
 
 const LoadingSpinner = () => (
@@ -43,7 +45,9 @@ function App() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/verify-email"  element={<VerifyEmail />} />
         <Route path="/faq"           element={<FAQPage />} />
-        <Route path="/style-lab/backgrounds" element={<BackgroundStyleLab />} />
+        {import.meta.env.DEV && BackgroundStyleLab ? (
+          <Route path="/style-lab/backgrounds" element={<BackgroundStyleLab />} />
+        ) : null}
 
         {/* Protected routes */}
         <Route element={<AuthenticatedShell />}>
@@ -55,7 +59,6 @@ function App() {
           <Route path="/interview"     element={<InterviewPage />} />
           <Route path="/interview-feedback" element={<InterviewFeedbackPage />} />
           <Route path="/admin/logs"    element={<AdminLogsPage />} />
-          <Route path="/admin/logs."   element={<AdminLogsPage />} />
         </Route>
       </Routes>
     </Suspense>

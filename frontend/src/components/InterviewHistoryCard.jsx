@@ -5,11 +5,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
 import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
+import NoticeModal from './common/NoticeModal';
 
 const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegenerating, isAnyRegenerating = false }) => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [retakeModalOpen, setRetakeModalOpen] = useState(false);
+  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '' });
 
   useEffect(() => {
     if (!retakeModalOpen) return;
@@ -151,7 +153,11 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
       
     } catch (error) {
       console.error('Error initiating retake:', error);
-      alert(`Error: ${error.message}`);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Could not start retake',
+        message: error.message,
+      });
     } finally {
       setLoading(false);
     }
@@ -268,7 +274,11 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
                     
                   } catch (error) {
                     console.error('Error creating payment:', error);
-                    alert(`Error: ${error.message}`);
+                    setNoticeModal({
+                      isOpen: true,
+                      title: 'Could not schedule interview',
+                      message: error.message,
+                    });
                   }
                 }}
                 disabled={isDisabled}
@@ -462,6 +472,13 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
         </div>,
           document.body
         )}
+      <NoticeModal
+        isOpen={noticeModal.isOpen}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '' })}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        variant="error"
+      />
     </>
   );
 };
