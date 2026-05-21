@@ -3,7 +3,7 @@ name: Maintenance · Scheduled
 on:
   push:
     paths:
-      - '.github/workflows/scheduled-maintenance.yml'
+      - '.github/workflows/maintenance-scheduled.yml'
       - '.github/actions/setup-deploy-ssh/**'
   schedule:
     - cron: '30 4 * * 0'   # Sunday — log cleanup
