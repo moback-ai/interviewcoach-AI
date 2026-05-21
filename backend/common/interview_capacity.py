@@ -17,6 +17,7 @@ class InterviewCapacityError(Exception):
 
 _lock = threading.Lock()
 _semaphore = None
+_waiting = 0
 
 
 def _get_semaphore():
@@ -34,12 +35,33 @@ def _get_semaphore():
         return _semaphore
 
 
+def _queue_wait_seconds() -> int:
+    try:
+        return max(5, min(int(optional_env("INTERVIEW_QUEUE_WAIT_SECONDS", "90")), 300))
+    except (TypeError, ValueError):
+        return 90
+
+
 @contextmanager
 def interview_turn_slot():
+    global _waiting
     sem = _get_semaphore()
-    if not sem.acquire(blocking=False):
-        raise InterviewCapacityError()
+    wait_s = _queue_wait_seconds()
+    with _lock:
+        position = _waiting
+        _waiting += 1
+    acquired = False
     try:
-        yield
+        acquired = sem.acquire(blocking=True, timeout=wait_s)
+        if not acquired:
+            msg = (
+                f"Interview AI is busy ({position} request(s) ahead). "
+                "Please wait and try again."
+            )
+            raise InterviewCapacityError(msg, retry_after=20)
+        yield {"queue_position": position}
     finally:
-        sem.release()
+        with _lock:
+            _waiting = max(0, _waiting - 1)
+        if acquired:
+            sem.release()
