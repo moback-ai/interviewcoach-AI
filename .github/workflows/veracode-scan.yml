@@ -38,7 +38,7 @@ jobs:
           ls -lh veracode-app.zip
 
       - name: Veracode Upload and Scan
-        uses: veracode/veracode-uploadandscan-action@0.2.7
+        uses: veracode/veracode-uploadandscan-action@0.2.11
         with:
           vid: ${{ secrets.VERACODE_API_ID }}
           vkey: ${{ secrets.VERACODE_API_KEY }}
