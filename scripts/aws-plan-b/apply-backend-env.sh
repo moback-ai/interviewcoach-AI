@@ -41,6 +41,8 @@ updates = {
     "JD_PARSE_OLLAMA_TIMEOUT_SECONDS": "25",
     "OLLAMA_MODEL": "llama3.2:3b",
     "ENABLE_AI_WARMUP": "false",
+    "WHISPER_BEAM_SIZE": "1",
+    "OLLAMA_DIAGNOSTICS_CACHE_SECONDS": "30",
 }
 if OLLAMA_HOST := __import__("os").environ.get("OLLAMA_HOST", "").strip():
     updates["OLLAMA_HOST"] = OLLAMA_HOST

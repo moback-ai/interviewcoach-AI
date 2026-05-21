@@ -16,15 +16,6 @@ import re
 import ipaddress
 from urllib.parse import urlencode
 
-import soundfile as sf
-import cv2
-import numpy as np
-try:
-    import mediapipe as mp
-except Exception as mediapipe_import_error:
-    mp = None
-    print(f"[WARN] MediaPipe import failed: {mediapipe_import_error}")
-
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -32,12 +23,13 @@ from PIL import Image, UnidentifiedImageError
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import HTTPException
-from pydub import AudioSegment
 import requests as http_requests
 
 # ── Environment ───────────────────────────────────────────────────────────────
 from common.runtime_config import load_runtime_config, optional_env, require_env
 from common.host_metrics import collect_linux_metrics, collect_via_ssh
+from common.lazy_deps import get_cv2, get_numpy, get_soundfile, get_pydub, get_mediapipe, get_inference_device
+from common.ttl_cache import cached
 
 load_runtime_config()
 
@@ -54,14 +46,12 @@ if SUPPORT_BOT_PATH not in sys.path:
     sys.path.append(SUPPORT_BOT_PATH)
 
 # ── Internal modules ──────────────────────────────────────────────────────────
-from common.GPU_Check import get_device
 from common.auth import verify_auth_token, create_token, hash_password, check_password
 from common.db import query_one, query_all, execute
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
-from INTERVIEW.Resumeparser import parse_job_description_file, classify_if_technical_role
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -84,7 +74,9 @@ except Exception as voice_import_error:
 
     print(f"[WARN] Voice cloning unavailable: {voice_import_error}")
 
-device = get_device()
+_TIMEOUT_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="api-timeout")
+_schemas_initialized = False
+_server_log_dirs_ready = False
 
 # ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -113,6 +105,11 @@ CORS(app,
 
 _ALLOWED_ORIGINS = [DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"]
 socketio = SocketIO(app, cors_allowed_origins=_ALLOWED_ORIGINS, async_mode="threading")
+
+
+@app.before_request
+def _bootstrap_app_once():
+    _ensure_app_schemas_once()
 
 
 def get_public_origin():
@@ -408,8 +405,14 @@ def get_user_for_auth(identifier: str):
     )
 
 
-ensure_auth_schema()
-ensure_questions_schema()
+def _ensure_app_schemas_once():
+    global _schemas_initialized
+    if _schemas_initialized:
+        return
+    ensure_auth_schema()
+    ensure_questions_schema()
+    _schemas_initialized = True
+
 
 PUBLIC_DOC_ENDPOINTS = {
     "/api/health",
@@ -828,8 +831,12 @@ def _database_log_snapshot():
 
 
 def _ensure_server_log_dirs():
+    global _server_log_dirs_ready
+    if _server_log_dirs_ready:
+        return
     for category in SERVER_LOG_CATEGORIES:
         os.makedirs(os.path.join(ADMIN_SERVER_LOG_DIR, category), exist_ok=True)
+    _server_log_dirs_ready = True
 
 
 def _server_category_path(category: str, filename: str = ""):
@@ -1479,16 +1486,13 @@ def admin_log_file_download(relative_path):
     return send_from_directory(directory, filename, as_attachment=False)
 
 
-_ensure_server_log_dirs()
-
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING
 # ─────────────────────────────────────────────────────────────────────────────
 
 class EyeContactDetector_Callib:
     def __init__(self):
-        if mp is None:
-            raise RuntimeError("mediapipe is not installed")
+        mp = get_mediapipe()
         if not hasattr(mp, "solutions") or not hasattr(mp.solutions, "face_mesh"):
             raise RuntimeError("mediapipe face mesh support is unavailable in this environment")
         self.FACE_3D_IDX = [1, 33, 263, 61, 291, 199]
@@ -1503,10 +1507,10 @@ class EyeContactDetector_Callib:
         self.vertical_eye_limits = (0.2, 0.8)
         self.baseline = {"left_eye": None, "right_eye": None, "yaw": None, "pitch": None}
         self.last_process_time = 0
-        self.min_frame_interval = 0.1
+        self.min_frame_interval = 0.12
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=True, max_num_faces=1,
+            static_image_mode=False, max_num_faces=1,
             refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5
         )
 
@@ -1536,6 +1540,8 @@ class EyeContactDetector_Callib:
                 x, y = int(lm.x * w), int(lm.y * h)
                 face_2d.append([x, y])
                 face_3d.append([x, y, lm.z * 3000])
+            np = get_numpy()
+            cv2 = get_cv2()
             face_2d = np.array(face_2d, dtype=np.float64)
             face_3d = np.array(face_3d, dtype=np.float64)
             cam_matrix = np.array([[w, 0, w / 2], [0, w, h / 2], [0, 0, 1]])
@@ -1569,6 +1575,7 @@ class EyeContactDetector_Callib:
         le = self.get_eye_ratios(landmarks, self.left_eye_idx, self.left_iris_idx, w, h)
         re = self.get_eye_ratios(landmarks, self.right_eye_idx, self.right_iris_idx, w, h)
         yaw, pitch = self.get_head_pose(landmarks, w, h)
+        np = get_numpy()
         ld = np.sqrt((le[0] - self.baseline["left_eye"][0])**2 + (le[1] - self.baseline["left_eye"][1])**2)
         rd = np.sqrt((re[0] - self.baseline["right_eye"][0])**2 + (re[1] - self.baseline["right_eye"][1])**2)
         return bool(ld < self.eye_threshold and rd < self.eye_threshold
@@ -1581,6 +1588,7 @@ class EyeContactDetector_Callib:
             return {"looking": False, "message": "Frame rate limited"}
         self.last_process_time = now
         h, w = frame.shape[:2]
+        cv2 = get_cv2()
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.face_mesh.process(rgb)
         if not results.multi_face_landmarks:
@@ -1629,6 +1637,8 @@ def decode_image(img_data):
         _, encoded = img_data.split(",", 1)
         img_bytes = base64.b64decode(encoded)
         img = Image.open(io.BytesIO(img_bytes))
+        cv2 = get_cv2()
+        np = get_numpy()
         return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
     except Exception as e:
         print(f"decode_image error: {e}")
@@ -1647,8 +1657,9 @@ def initialize_whisper():
         return
     from faster_whisper import WhisperModel
 
-    model_size = optional_env("WHISPER_MODEL", "large-v3")
-    whisper_device = "cpu" if device == "mps" else device
+    model_size = optional_env("WHISPER_MODEL", "base")
+    inference_device = get_inference_device()
+    whisper_device = "cpu" if inference_device == "mps" else inference_device
     print(f"[INFO] Loading Whisper {model_size} on {whisper_device}...")
     try:
         whisper_model = WhisperModel(model_size, device=whisper_device)
@@ -1683,6 +1694,8 @@ def convert_to_wav(input_path):
 
 def is_blank_audio(audio_path, rms_threshold=0.005):
     try:
+        sf = get_soundfile()
+        np = get_numpy()
         audio, _ = sf.read(audio_path)
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
@@ -1691,7 +1704,8 @@ def is_blank_audio(audio_path, rms_threshold=0.005):
         return False
 
 def _transcribe(wav_path):
-    segs, info = whisper_model.transcribe(wav_path, beam_size=5, language="en", task="transcribe")
+    beam_size = max(1, int(optional_env("WHISPER_BEAM_SIZE", "1")))
+    segs, info = whisper_model.transcribe(wav_path, beam_size=beam_size, language="en", task="transcribe")
     return " ".join(s.text for s in list(segs))
 
 def process_audio_file(file):
@@ -2035,7 +2049,7 @@ def _normalize_model_aliases(name: str):
     return {normalized, base}
 
 
-def get_ollama_diagnostics(timeout_seconds=2):
+def _fetch_ollama_diagnostics(timeout_seconds=2):
     health_url = optional_env("OLLAMA_HEALTH_URL", "http://127.0.0.1:11434/api/tags")
     configured_model = get_ollama_model_name()
     diagnostics = {
@@ -2081,6 +2095,15 @@ def get_ollama_diagnostics(timeout_seconds=2):
     except Exception as exc:
         diagnostics["error"] = str(exc)
         return diagnostics
+
+
+def get_ollama_diagnostics(timeout_seconds=2):
+    ttl = max(5.0, float(optional_env("OLLAMA_DIAGNOSTICS_CACHE_SECONDS", "30")))
+    return cached(
+        f"ollama_diag:{timeout_seconds}",
+        ttl,
+        lambda: _fetch_ollama_diagnostics(timeout_seconds=timeout_seconds),
+    )
 
 
 def ollama_ready(timeout_seconds=2):
@@ -2145,7 +2168,7 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
 
     try:
         llm_result = _run_callable_with_timeout(
-            lambda: parse_job_description_file(temp_path, model=get_ollama_model_name()),
+            lambda: _parse_job_description_file(temp_path, model=get_ollama_model_name()),
             JD_PARSE_OLLAMA_TIMEOUT_SECONDS,
             label="Job description parsing",
         )
@@ -2157,7 +2180,7 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
         is_technical = result["is_technical"]
         try:
             is_technical = _run_callable_with_timeout(
-                lambda: classify_if_technical_role(
+                lambda: _classify_if_technical_role(
                     job_title, job_description, model=get_ollama_model_name()
                 ),
                 10,
@@ -2179,12 +2202,23 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
 
 
 def _run_callable_with_timeout(fn, timeout_seconds, label="operation"):
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(fn)
-        try:
-            return future.result(timeout=timeout_seconds)
-        except FuturesTimeoutError as exc:
-            raise TimeoutError(f"{label} timed out after {timeout_seconds}s") from exc
+    future = _TIMEOUT_EXECUTOR.submit(fn)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FuturesTimeoutError as exc:
+        raise TimeoutError(f"{label} timed out after {timeout_seconds}s") from exc
+
+
+def _parse_job_description_file(path, model=None):
+    from INTERVIEW.Resumeparser import parse_job_description_file
+
+    return parse_job_description_file(path, model=model)
+
+
+def _classify_if_technical_role(job_title, job_description, model=None):
+    from INTERVIEW.Resumeparser import classify_if_technical_role
+
+    return classify_if_technical_role(job_title, job_description, model=model)
 
 
 def _generate_questions_with_fallback(
@@ -2765,7 +2799,7 @@ def classify_technical_role():
         if _jd_parse_use_ollama() and ollama_ready():
             try:
                 is_technical = _run_callable_with_timeout(
-                    lambda: classify_if_technical_role(
+                    lambda: _classify_if_technical_role(
                         job_title, job_description, model=get_ollama_model_name()
                     ),
                     10,
@@ -3149,7 +3183,7 @@ def _merge_interview_audio(user_id, interview_id):
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tf:
                 tf.write(data)
                 temp_files.append(tf.name)
-            segments.append(AudioSegment.from_wav(tf.name))
+            segments.append(get_pydub().from_wav(tf.name))
         if not segments:
             return None
         merged = segments[0]
