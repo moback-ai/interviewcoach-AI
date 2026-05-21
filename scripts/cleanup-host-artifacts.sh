@@ -71,11 +71,11 @@ prune_release_directory() {
   [[ -n "$current_path" ]] && protected+=("$current_path")
   [[ -n "$stable_path" && "$stable_path" != "$current_path" ]] && protected+=("$stable_path")
 
-  mkdir -p "$archive_dir"
   local sudo_prefix=()
   if [[ "$use_sudo" == "1" ]]; then
     sudo_prefix=(sudo)
   fi
+  "${sudo_prefix[@]}" mkdir -p "$archive_dir"
 
   mapfile -t sorted_dirs < <(
     find "$releases_dir" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null |
