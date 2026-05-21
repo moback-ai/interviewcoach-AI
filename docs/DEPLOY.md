@@ -9,7 +9,7 @@ Production site: **https://ugaanlabs.ai**
 1. **Merge your feature PR into `develop`** (one PR per feature).
 
 2. **Run deploy**  
-   GitHub → **Actions** → **Deploy** → **Run workflow**
+   GitHub → **Actions** → **Deploy · Production** → **Run workflow**
    - Branch: `develop`
    - Deploy target: `auto`
    - Click **Run workflow**
@@ -59,6 +59,8 @@ Use **one PR: `develop` → `main`** when you want `main` to match what is live.
 ## Security scans
 
 Run automatically on every PR to `develop`.  
-Manual: **Actions** → **Code Quality & Security** → Run workflow.
+Manual: **Actions** → **Security** → Run workflow.
+
+Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
 
 Details: [SECURITY_SCANNING.md](SECURITY_SCANNING.md)
