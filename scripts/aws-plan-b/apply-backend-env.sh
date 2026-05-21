@@ -36,19 +36,32 @@ updates = {
     "JD_PARSE_USE_OLLAMA": "false",
     "INTERVIEW_SERVER_TTS": "false",
     "INTERVIEW_FAST_WRAPUP": "true",
-    "INTERVIEW_RESPONSE_TIMEOUT_SECONDS": "45",
+    "INTERVIEW_UNIFIED_TURNS": "true",
+    "INTERVIEW_RESPONSE_TIMEOUT_SECONDS": "90",
+    "INTERVIEW_QUEUE_WAIT_SECONDS": "90",
+    "INTERVIEW_MAX_CONCURRENT": "12",
+    "OLLAMA_NUM_PREDICT": "384",
     "QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS": "90",
     "JD_PARSE_OLLAMA_TIMEOUT_SECONDS": "25",
     "OLLAMA_MODEL": "llama3.2:3b",
     "ENABLE_AI_WARMUP": "false",
     "WHISPER_BEAM_SIZE": "1",
     "OLLAMA_DIAGNOSTICS_CACHE_SECONDS": "30",
+    "ENFORCE_SERVICE_HOURS": "true",
+    "SERVICE_HOURS_TZ": "Asia/Kolkata",
+    "SERVICE_HOURS_START": "10:00",
+    "SERVICE_HOURS_END": "20:00",
 }
-if OLLAMA_HOST := __import__("os").environ.get("OLLAMA_HOST", "").strip():
+import os as _os
+if OLLAMA_HOST := _os.environ.get("OLLAMA_HOST", "").strip():
     updates["OLLAMA_HOST"] = OLLAMA_HOST
-    updates["OLLAMA_HEALTH_URL"] = __import__("os").environ.get(
+    updates["OLLAMA_HEALTH_URL"] = _os.environ.get(
         "OLLAMA_HEALTH_URL", f"{OLLAMA_HOST}/api/tags"
     )
+if TRANSCRIBE_URL := _os.environ.get("TRANSCRIBE_SERVICE_URL", "").strip():
+    updates["TRANSCRIBE_SERVICE_URL"] = TRANSCRIBE_URL
+elif AI_IP := _os.environ.get("AI_PRIVATE_IP", "").strip():
+    updates["TRANSCRIBE_SERVICE_URL"] = f"http://{AI_IP}:5001"
 data.update(updates)
 with open(path, "w") as f:
     json.dump(data, f)

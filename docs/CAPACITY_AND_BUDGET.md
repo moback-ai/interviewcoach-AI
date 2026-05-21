@@ -47,6 +47,11 @@ To approach 100 parallel interviews you would need **multiple AI instances + a j
 | DB | `ThreadedConnectionPool` — `DB_POOL_MIN` / `DB_POOL_MAX` (default 2–20) |
 | API | gunicorn `1` worker, `8` threads, 300s timeout |
 | AI warmup | `ENABLE_AI_WARMUP=false` on API (saves RAM) |
+| Interview | `INTERVIEW_UNIFIED_TURNS=true` — one Ollama call per turn |
+| Streaming | `/api/generate-response-stream` — SSE `token` events while model writes |
+| Capacity | `INTERVIEW_MAX_CONCURRENT=12`, `INTERVIEW_QUEUE_WAIT_SECONDS=90` |
+| Whisper | `TRANSCRIBE_SERVICE_URL` → AI sidecar (`setup-transcribe-on-ai.sh`) |
+| Hours | `ENFORCE_SERVICE_HOURS=true`, Asia/Kolkata 10:00–20:00 |
 | Frontend | Lazy routes, lazy syntax highlighter, prod strips `console` |
 
 ### If you split API from Ollama (Plan B)

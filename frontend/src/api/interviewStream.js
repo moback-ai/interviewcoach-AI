@@ -11,7 +11,7 @@ function buildUrl(endpoint) {
 }
 
 /**
- * SSE interview response: events started | complete | error
+ * SSE interview response: started | queued | token | complete | error
  * Falls back to null on failure so caller can use apiPost.
  */
 export async function apiPostInterviewStream(endpoint, body, { onEvent, signal } = {}) {
