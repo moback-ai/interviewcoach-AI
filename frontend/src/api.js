@@ -112,6 +112,25 @@ export async function apiCall(endpoint, options = {}) {
       throw new Error('Too many requests. Please wait a moment and try again.');
     }
 
+    if (response.status === 503) {
+      try {
+        const payload = await response.json();
+        if (payload.busy) {
+          const err = new Error(payload.message || 'Interview AI is busy. Please try again.');
+          err.busy = true;
+          err.retryAfter = payload.retry_after;
+          throw err;
+        }
+        if (payload.closed) {
+          const err = new Error(payload.message || 'Service is outside operating hours.');
+          err.closed = true;
+          throw err;
+        }
+      } catch (parseErr) {
+        if (parseErr.busy || parseErr.closed) throw parseErr;
+      }
+    }
+
     if (!response.ok) {
       let msg = `HTTP ${response.status}`;
       const contentType = response.headers.get('content-type') || '';
