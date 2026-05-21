@@ -104,7 +104,7 @@ jobs:
                 branch_details: `Automatic deployment after merge of PR #${mergedPullRequest.number} (${mergedPullRequest.head.ref})`,
                 code_review_notes: `Merged PR #${mergedPullRequest.number} approved by ${approvedBy}. Head commit: ${commitMessage}`,
                 version_audit: 'true',
-                deploy_target: 'all',
+                deploy_target: 'auto',
               },
             });
 
