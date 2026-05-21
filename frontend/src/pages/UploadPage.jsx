@@ -8,6 +8,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
+import NoticeModal from '../components/common/NoticeModal';
 import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
@@ -31,6 +32,7 @@ function UploadPage() {
   const [jobDescParsed, setJobDescParsed] = useState(false);
   const [clearCounter, setClearCounter] = useState(0);
   const [successModal, setSuccessModal] = useState({ isOpen: false, title: '', message: '', details: null });
+  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
 
   // New state for question generation settings
@@ -326,7 +328,12 @@ function UploadPage() {
     e.preventDefault();
     
     if (!resume || !jobTitle.trim() || !jobDescription.trim()) {
-      alert('Please upload a resume and ensure job title and description are filled.');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Missing information',
+        message: 'Please upload a resume and ensure job title and description are filled.',
+        variant: 'info',
+      });
       return;
     }
 
@@ -463,7 +470,12 @@ function UploadPage() {
     } catch (error) {
       console.error('Error in complete workflow:', error);
       const msg = error instanceof Error ? error.message : String(error || '');
-      alert(mapEmptyUploadFileError(msg));
+      setNoticeModal({
+        isOpen: true,
+        title: 'Upload failed',
+        message: mapEmptyUploadFileError(msg),
+        variant: 'error',
+      });
     } finally {
       setLoading(false);
       setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
@@ -1152,6 +1164,13 @@ function UploadPage() {
           label: 'View Questions',
           onClick: handleNavigateToQuestions
         }}
+      />
+      <NoticeModal
+        isOpen={noticeModal.isOpen}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        variant={noticeModal.variant}
       />
     </>
   );
