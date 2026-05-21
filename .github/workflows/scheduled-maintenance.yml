@@ -28,6 +28,17 @@ permissions:
   pull-requests: write
 
 jobs:
+  # GitHub validates workflow files on push; without this job, all conditional jobs skip → false failure.
+  workflow_file_push_guard:
+    if: github.event_name == 'push'
+    name: Workflow file push (no-op)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Not a maintenance run
+        run: |
+          echo "Maintenance runs on schedule or workflow_dispatch only."
+          echo "No host or git tasks ran for this push."
+
   logs:
     name: Logs · archive and trim
     if: >-
