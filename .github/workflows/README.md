@@ -12,7 +12,7 @@ Five workflows (not counting Dependabot). Fewer **runs**: feature branches only 
 
 Direct pushes to `develop` do **not** deploy (use one merged PR or Option B).
 
-Clear old runs: `./scripts/cleanup-github-actions-runs.sh --keep 10`
+Clear old runs: `./scripts/cleanup-github-actions-runs.sh --max 10 --days 2` (also daily via **Maintenance · Scheduled**)
 
 `main` is **not** deployed.
 
