@@ -6,6 +6,7 @@ on:
       - '.github/workflows/maintenance-scheduled.yml'
       - '.github/actions/setup-deploy-ssh/**'
   schedule:
+    - cron: '0 2 * * *'    # Daily — prune GitHub Actions runs
     - cron: '30 4 * * 0'   # Sunday — log cleanup
     - cron: '0 4 * * 0'    # Sunday — host artifact cleanup
     - cron: '0 3 1 * *'    # 1st of month — stale branches
@@ -21,6 +22,7 @@ on:
           - host-cleanup
           - branch-cleanup
           - sync-main
+          - actions-cleanup
         default: all
       dry_run:
         description: Host cleanup dry run (no deletes)
@@ -30,6 +32,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   # GitHub validates workflow files on push; without this job, all conditional jobs skip → false failure.
@@ -42,6 +45,24 @@ jobs:
         run: |
           echo "Maintenance runs on schedule or workflow_dispatch only."
           echo "No host or git tasks ran for this push."
+
+  actions-runs-cleanup:
+    name: GitHub Actions · prune runs
+    if: >-
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.task == 'all' || github.event.inputs.task == 'actions-cleanup'))
+      || github.event.schedule == '0 2 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prune old and failed runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          chmod +x scripts/cleanup-github-actions-runs.sh
+          ./scripts/cleanup-github-actions-runs.sh --max 10 --days 2
 
   logs:
     name: Logs · archive and trim

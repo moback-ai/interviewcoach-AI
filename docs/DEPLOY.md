@@ -21,7 +21,7 @@ Avoid direct pushes to `develop` and avoid many small merges — each merge trig
 ## Normal release — Option A (no manual button)
 
 1. Open PR: `develop/<your-feature>` → **`develop`**
-2. Get **admin approval** on the PR (@govardhanreddy66 or @KFKishore23)
+2. Get **admin approval** on the PR (@govardhanreddy66 or @KFKishore23) — **required before merge** or auto-deploy will fail
 3. **Merge** the PR into `develop`
 4. **Deploy · Auto (develop)** runs a **quality gate** (lint, build, login bundle check, pytest, merge-conflict scan with `develop`). If it fails, deploy is **rejected** — fix and merge again.
 5. On pass, **Deploy · Production** starts automatically.
@@ -32,6 +32,13 @@ Avoid direct pushes to `develop` and avoid many small merges — each merge trig
    - https://ugaanlabs.ai/login → password field visible
 
 Do **not** merge PRs labeled `deploy-failed`.
+
+### If auto-deploy failed after merge
+
+Common cause: PR merged **without** admin `Approve` review (e.g. PR #73).
+
+1. **Option B**: **Actions → Deploy · Production → Run workflow** → `git_ref` = `develop` → approve `production`.
+2. Or: ask an admin to **Approve** on the merged PR (if still possible), then re-run **Deploy · Auto (develop)** manually.
 
 ---
 
