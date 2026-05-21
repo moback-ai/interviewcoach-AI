@@ -30,7 +30,7 @@ export const useIdleTimeout = (idleTimeoutMinutes = 10, warningTimeSeconds = 30)
   // Handle logout
   const handleLogout = useCallback(async () => {
     console.log('[Idle Timeout] Logging out due to inactivity');
-    await logout();
+    await logout({ expired: true });
   }, [logout]);
 
   // Reset the idle timer
