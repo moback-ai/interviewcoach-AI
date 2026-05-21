@@ -4,6 +4,8 @@ Production: **https://ugaanlabs.ai**
 
 Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
 
+**Production checklist ($650, Plan B, 10am–8pm IST):** [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)
+
 ---
 
 ## One PR per release (recommended)
