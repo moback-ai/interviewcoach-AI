@@ -1,8 +1,10 @@
-# Capacity and AWS budget (~$600/month)
+# Capacity and AWS budget (~$650/month)
+
+**Full production checklist:** [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)
 
 ## Your target
 
-| Goal | Feasible at ~$600/mo? |
+| Goal | Feasible at ~$650/mo? |
 |------|------------------------|
 | **~100 users logged in** (browsing, upload, questions) | **Yes** — with Plan B split (API + RDS medium) |
 | **~100 live AI interviews at the same time** | **No** — Ollama on one box handles ~10–15 concurrent interviews |
