@@ -59,6 +59,11 @@ jobs:
     name: Quality gate
     runs-on: ubuntu-latest
     steps:
+      - name: Gate · Checkout (required for local composite action)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.git_ref }}
+          fetch-depth: 0
       - name: Gate · Scan, test, and conflict check
         uses: ./.github/actions/pre-deploy-quality-gate
         with:
