@@ -12,6 +12,7 @@ import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
 import { useAuth } from '../contexts/AuthContext';
+import { useOperation } from '../contexts/OperationContext';
 import {
   INTERVIEWER_VOICE_PRESETS,
   getInterviewerVoicePreset,
@@ -25,6 +26,7 @@ const HEADER_VOICE_IDS = ['server_default', 'ava', 'mira', 'noah'];
 
 function InterviewPage() {
   const { user } = useAuth();
+  const { setIsOperationInProgress } = useOperation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const userGender = user?.user_metadata?.gender || user?.gender || '';
@@ -98,6 +100,12 @@ function InterviewPage() {
     chatStates.isResponseInProgress ||
     chatStates.isRecording ||
     !!chatStates.isSpeakCooldown;
+
+  useEffect(() => {
+    setIsOperationInProgress(interviewInteractionLocked);
+    return () => setIsOperationInProgress(false);
+  }, [interviewInteractionLocked, setIsOperationInProgress]);
+
   const [cameraError, setCameraError] = useState(null);
   const [isCameraLoading, setIsCameraLoading] = useState(true);
   const cameraRetryCountRef = useRef(0);
