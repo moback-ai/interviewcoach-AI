@@ -223,6 +223,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate_admin_pr_approval]
     steps:
+      - name: Gate · Checkout (required for local composite action)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}
+          fetch-depth: 0
       - name: Gate · Scan, test, and conflict check
         uses: ./.github/actions/pre-deploy-quality-gate
         with:
