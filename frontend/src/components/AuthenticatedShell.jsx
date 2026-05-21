@@ -19,7 +19,7 @@ function AuthenticatedShell() {
   const isOnInterviewPage = location.pathname === '/interview';
 
   const { showWarning, timeRemaining, resetTimer } = useIdleTimeout(
-    isOnInterviewPage ? null : 1440,
+    isOnInterviewPage ? null : 10,
     30
   );
 

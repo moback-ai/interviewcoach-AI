@@ -4,11 +4,11 @@ import { useOperation } from '../contexts/OperationContext';
 
 /**
  * Custom hook to handle idle timeout and automatic logout
- * @param {number} idleTimeoutMinutes - Minutes of inactivity before logout (default: 30)
+ * @param {number} idleTimeoutMinutes - Minutes of inactivity before logout (default: 10)
  * @param {number} warningTimeSeconds - Seconds before logout to show warning (default: 30)
  * @returns {object} { showWarning, timeRemaining, resetTimer }
  */
-export const useIdleTimeout = (idleTimeoutMinutes = 30, warningTimeSeconds = 30) => {
+export const useIdleTimeout = (idleTimeoutMinutes = 10, warningTimeSeconds = 30) => {
   const { isAuthenticated, logout } = useAuth();
   const { isOperationInProgress } = useOperation();
   const [showWarning, setShowWarning] = useState(false);
