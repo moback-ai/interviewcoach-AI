@@ -10,6 +10,7 @@ import { trackEvents } from '../../services/mixpanel';
 import CodeEditorPopup from './CodeEditorPopup';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaDevices';
 import { canUseBrowserSpeech, chooseBrowserVoice, getInterviewerVoicePreset } from '../../utils/interviewerVoices';
+import { devLog } from '../../utils/devLog';
 
 const GENERATE_RESPONSE_TIMEOUT_MS = 120000;
 
@@ -127,7 +128,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
   // Debug loading state changes
   useEffect(() => {
-    console.log('🔄 Loading state changed to:', isLoading);
+    devLog('🔄 Loading state changed to:', isLoading);
   }, [isLoading]);
 
   // Notify parent component of state changes for head tracking toggle & voice controls
@@ -251,8 +252,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   // Function to call Interview Manager API
   const callInterviewManager = async (userInput) => {
     try {
-      console.log('🤖 Calling Interview Manager API with:', userInput);
-      console.log('🔍 Current state before API call:', {
+      devLog('🤖 Calling Interview Manager API with:', userInput);
+      devLog('🔍 Current state before API call:', {
         interviewStage,
         hasAnsweredResumeQuestion,
         canEndInterview
@@ -273,31 +274,31 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
       );
 
-      console.log('📥 Interview Manager response:', response);
+      devLog('📥 Interview Manager response:', response);
       
       if (response.success) {
         const { response: textResponse, audio_url, should_delete_audio, stage, interview_done, requires_code, code_language } = response.data;
         
-        console.log('🔍 Response data:', {
+        devLog('🔍 Response data:', {
           stage,
           interview_done,
           userInput: userInput.trim(),
           currentInterviewStage: interviewStage
         });
 
-        console.log('Question Requires Code: ', requires_code);
+        devLog('Question Requires Code: ', requires_code);
         
         const answeredResumeQuestion = interviewStage === 'resume_discussion' && userInput.trim().length > 0;
         const nextHasAnsweredResumeQuestion = hasAnsweredResumeQuestion || answeredResumeQuestion;
 
         // ✅ NEW: Track when user answers resume questions (check current stage before updating)
         if (answeredResumeQuestion) {
-          console.log('✅ User answered resume question - marking as answered');
+          devLog('✅ User answered resume question - marking as answered');
           setHasAnsweredResumeQuestion(true);
         }
 
         if (requires_code) {
-            console.log('🔧 Coding question detected, auto-opening code editor');
+            devLog('🔧 Coding question detected, auto-opening code editor');
             setCurrentQuestion({
                 question_text: textResponse,
                 requires_code: true,
@@ -314,12 +315,12 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         
         // ✅ NEW: Update interview stage and control End Interview button
         if (stage) {
-          console.log('📊 Interview stage updated from', interviewStage, 'to:', stage);
+          devLog('📊 Interview stage updated from', interviewStage, 'to:', stage);
           setInterviewStage(stage);
           
           // ✅ NEW: Auto-trigger end interview flow when timeout is detected
           if (stage === 'timeout') {
-            console.log('⏰ Timeout detected - showing timeout modal...');
+            devLog('⏰ Timeout detected - showing timeout modal...');
             // Show timeout modal first
             setShowTimeoutModal(true);
             return; // Exit early to prevent normal message handling
@@ -327,14 +328,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           
           // Enable End Interview button only when user has answered at least one resume question
           if (stage === 'resume_discussion' && nextHasAnsweredResumeQuestion) {
-            console.log('✅ Resume question answered - enabling End Interview button');
+            devLog('✅ Resume question answered - enabling End Interview button');
             setCanEndInterview(true);
           } else if (stage === 'custom_questions' || stage === 'candidate_questions' || stage === 'wrapup_evaluation' || stage === 'manual_end' || stage === 'timeout' || stage === 'done') {
-            console.log('✅ Later stage reached - enabling End Interview button');
+            devLog('✅ Later stage reached - enabling End Interview button');
             setCanEndInterview(true);
           } else {
-            console.log('⏳ Waiting for resume question answer - keeping End Interview button disabled');
-            console.log('🔍 Debug info:', {
+            devLog('⏳ Waiting for resume question answer - keeping End Interview button disabled');
+            devLog('🔍 Debug info:', {
               stage,
               hasAnsweredResumeQuestion: nextHasAnsweredResumeQuestion,
               isResumeDiscussion: stage === 'resume_discussion'
@@ -353,7 +354,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             console.error('❌ Audio playback failed:', error);
           }
         } else {
-          console.log('ℹ️ No audio URL provided in response');
+          devLog('ℹ️ No audio URL provided in response');
         }
 
         setIsResponseInProgress(false);
@@ -374,14 +375,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     const confirmed = window.confirm('Are you sure you want to end the interview? This action cannot be undone.');
     
     if (confirmed) {
-      console.log('✅ User confirmed ending interview');
+      devLog('✅ User confirmed ending interview');
       
       // ✅ NEW: Show loading state
       setIsEndingInterview(true);
       
       try {
         // ✅ NEW: Send END_INTERVIEW command to backend
-        console.log('📤 Sending END_INTERVIEW command to backend...');
+        devLog('📤 Sending END_INTERVIEW command to backend...');
         
         // Get interview_id from URL
         const urlParams = new URLSearchParams(window.location.search);
@@ -400,17 +401,17 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
         );
         
-        console.log('📥 End interview response:', response);
+        devLog('📥 End interview response:', response);
         
         if (response.success) {
           const { response: textResponse, audio_url, should_delete_audio, interview_done, feedback_saved_successfully } = response.data;
           
           // ✅ FIXED: Track events only when interview is done AND feedback is successfully saved
           if (interview_done) {
-            console.log('🎯 Interview completed, tracking events...');
+            devLog('🎯 Interview completed, tracking events...');
             
             // Track interview completion
-            console.log('📊 Tracking participatedInMockInterview...');
+            devLog('📊 Tracking participatedInMockInterview...');
             trackEvents.participatedInMockInterview({
               interview_id: interviewId,
               completion_timestamp: new Date().toISOString(),
@@ -419,9 +420,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             
             // ✅ FIXED: Only track feedback generation when feedback is actually saved to database
             if (feedback_saved_successfully) {
-              console.log('✅ Feedback successfully saved to database, tracking feedback generation...');
+              devLog('✅ Feedback successfully saved to database, tracking feedback generation...');
               setTimeout(() => {
-                console.log('📊 Tracking mockInterviewFeedbackGenerated...');
+                devLog('📊 Tracking mockInterviewFeedbackGenerated...');
                 trackEvents.mockInterviewFeedbackGenerated({
                   interview_id: interviewId,
                   generation_timestamp: new Date().toISOString(),
@@ -429,7 +430,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                 });
               }, 100); // 100ms delay
             } else {
-              console.log('⚠️ Interview completed but feedback not saved yet, skipping feedback generation tracking');
+              devLog('⚠️ Interview completed but feedback not saved yet, skipping feedback generation tracking');
             }
           }
           
@@ -482,11 +483,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const toggleRecording = async () => {
     if (isRecording) {
       // Stop recording
-      console.log('🛑 Stopping recording...');
+      devLog('🛑 Stopping recording...');
       setIsRecording(false);
       setCanEndInterview(true); // ✅ NEW: Re-enable end interview button when recording stops
       setIsLoading(true);
-      console.log('🔄 Loading state set to true');
+      devLog('🔄 Loading state set to true');
       
       try {
         // Stop the media recorder
@@ -513,10 +514,10 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           streamRef.current = null;
         }
         
-        console.log('🎵 Audio recording completed, blob size:', audioBlob.size, 'bytes');
+        devLog('🎵 Audio recording completed, blob size:', audioBlob.size, 'bytes');
         
         // Send audio to backend for transcription
-        console.log('📤 Sending audio to backend for transcription...');
+        devLog('📤 Sending audio to backend for transcription...');
         try {
           const wavBlob = await convertToWav(audioBlob);
           const formData = new FormData();
@@ -532,7 +533,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
           const result = await uploadFile('/api/transcribe-audio', formData);
           
-          console.log('📥 Backend response:', result);
+          devLog('📥 Backend response:', result);
           
           if (result.success) {
             const transcription = result.data.transcription;
@@ -541,7 +542,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             if (transcription && transcription.trim()) {
               // Add candidate's response to conversation
               await addMessageToConversation('candidate', transcription);
-              console.log('✅ Candidate message added');
+              devLog('✅ Candidate message added');
               setIsLoading(false); // Stop loading immediately after user message appears
               
               // Add thinking indicator before backend call
@@ -560,7 +561,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
               
             } else {
               // No speech detected
-              console.log('⚠️ No speech detected');
+              devLog('⚠️ No speech detected');
               const newMessage = {
                 id: Date.now(), // Use timestamp as unique ID
                 speaker: 'candidate',
@@ -602,7 +603,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       
     } else {
       // Start recording
-      console.log('🎙️ Starting recording...');
+      devLog('🎙️ Starting recording...');
       setIsRecording(true);
       setCanEndInterview(false); // ✅ NEW: Disable end interview button when recording starts
       
@@ -640,7 +641,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         };
         
         mediaRecorder.start();
-        console.log('✅ Recording started successfully');
+        devLog('✅ Recording started successfully');
         
       } catch (error) {
         console.error('❌ Failed to start recording:', error);
@@ -880,7 +881,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         return;
       }
       
-      console.log('💾 Saving code:', code);
+      devLog('💾 Saving code:', code);
       
       // Trim the code
       const trimmedCode = code.trim();
@@ -892,7 +893,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       
       // Add user message to conversation
       await addMessageToConversation('candidate', formattedCode);
-      console.log('✅ Candidate message added');
+      devLog('✅ Candidate message added');
       
       setIsLoading(false); // Stop loading immediately after user message appears
 
@@ -911,7 +912,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       
       try {
         await callInterviewManager(formattedCode);
-        console.log('✅ Interview Manager API called successfully');
+        devLog('✅ Interview Manager API called successfully');
       } catch (error) {
         console.error('❌ Error calling Interview Manager:', error);
         // Remove thinking message and show error
@@ -929,22 +930,22 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   };
 
   const handleEditorClose = async (code, newLanguage) => {
-        console.log("Code to Append: ", code);
+        devLog("Code to Append: ", code);
         setCodeToAppend(code);
-        console.log(newLanguage);
+        devLog(newLanguage);
         setLanguage(newLanguage);
   };
 
   // ✅ NEW: Auto-end interview when timeout is detected (no confirmation popup)
   const handleEndInterviewAutomatically = async () => {
-    console.log('✅ Auto-ending interview due to timeout...');
+    devLog('✅ Auto-ending interview due to timeout...');
     
     // ✅ NEW: Show loading state
     setIsEndingInterview(true);
     
     try {
       // ✅ Send END_INTERVIEW command to backend (same as manual end)
-      console.log('📤 Sending END_INTERVIEW command to backend...');
+      devLog('📤 Sending END_INTERVIEW command to backend...');
       
       const urlParams = new URLSearchParams(window.location.search);
       const interviewId = urlParams.get('interview_id');
@@ -969,10 +970,10 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         
         // ✅ FIXED: Track events only when interview is done AND feedback is successfully saved
         if (interview_done) {
-          console.log('🎯 Interview completed, tracking events...');
+          devLog('🎯 Interview completed, tracking events...');
           
           // Track interview completion
-          console.log('📊 Tracking participatedInMockInterview...');
+          devLog('📊 Tracking participatedInMockInterview...');
           trackEvents.participatedInMockInterview({
             interview_id: interviewId,
             completion_timestamp: new Date().toISOString(),
@@ -981,9 +982,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           
           // ✅ FIXED: Only track feedback generation when feedback is actually saved to database
           if (feedback_saved_successfully) {
-            console.log('✅ Feedback successfully saved to database, tracking feedback generation...');
+            devLog('✅ Feedback successfully saved to database, tracking feedback generation...');
             setTimeout(() => {
-              console.log('📊 Tracking mockInterviewFeedbackGenerated...');
+              devLog('📊 Tracking mockInterviewFeedbackGenerated...');
               trackEvents.mockInterviewFeedbackGenerated({
                 interview_id: interviewId,
                 generation_timestamp: new Date().toISOString(),
@@ -991,7 +992,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
               });
             }, 100); // 100ms delay
           } else {
-            console.log('⚠️ Interview completed but feedback not saved yet, skipping feedback generation tracking');
+            devLog('⚠️ Interview completed but feedback not saved yet, skipping feedback generation tracking');
           }
         }
         
@@ -1036,7 +1037,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     if (!showTimeoutModal) return null;
     
     const handleContinue = () => {
-      console.log('✅ User acknowledged timeout, ending interview...');
+      devLog('✅ User acknowledged timeout, ending interview...');
       setShowTimeoutModal(false);
       // Now trigger the end interview flow
       handleEndInterviewAutomatically();
@@ -1469,4 +1470,4 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   );
 }
 
-export default ChatWindow;
+export default React.memo(ChatWindow);

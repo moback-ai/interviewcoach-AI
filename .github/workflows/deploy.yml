@@ -55,9 +55,19 @@ on:
           - database
 
 jobs:
+  quality_gate:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate · Scan, test, and conflict check
+        uses: ./.github/actions/pre-deploy-quality-gate
+        with:
+          git_ref: ${{ github.event.inputs.git_ref }}
+
   authorize_and_prepare:
     name: Authorize
     runs-on: ubuntu-latest
+    needs: [quality_gate]
     outputs:
       frontend: ${{ steps.targets.outputs.frontend }}
       backend: ${{ steps.targets.outputs.backend }}
@@ -251,7 +261,7 @@ jobs:
   deployment_approval:
     name: Approve production
     runs-on: ubuntu-latest
-    needs: authorize_and_prepare
+    needs: [authorize_and_prepare, quality_gate]
     environment:
       name: production
     steps:

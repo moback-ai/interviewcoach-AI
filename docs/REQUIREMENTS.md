@@ -32,6 +32,7 @@ This document captures what was requested across prior setup sessions, and what 
 | Failed deploy **rolls back** to last stable — failed code never stays live | `deploy.yml` rollback jobs |
 | **Auto deploy** after approved merge to `develop` | `Deploy · Auto (develop)` on push |
 | **Manual deploy** when auto did not run or re-deploy same SHA | `Deploy · Production` → **Run workflow** |
+| **Pre-deploy quality gate** — reject deploy if lint/build/tests/conflicts fail | `.github/actions/pre-deploy-quality-gate` in `deploy.yml` + `auto-deploy-develop.yml` |
 | Simple deploy documentation (not long checklists) | [DEPLOY.md](DEPLOY.md) |
 | Workflows named consistently | [.github/workflows/README.md](../.github/workflows/README.md) |
 
@@ -43,7 +44,7 @@ This document captures what was requested across prior setup sessions, and what 
 | Keep **last 2 successful releases**; archive/delete older | `scripts/cleanup-host-artifacts.sh` |
 | Dated archive folders (`DD_MM_YYYY`) | In cleanup script |
 | Log rotation / pruning | `scripts/log-maintenance.sh` + scheduled workflow |
-| App fast and stable — **no features removed** | Performance commit on `develop`; Vite chunk fix for login |
+| App fast and stable — **no features removed** | Lazy syntax highlighter, lighter animations, `devLog`, `React.memo` on chat; Vite chunk fix for login |
 | Weekly/monthly maintenance automated | `Maintenance · Scheduled` |
 
 ## 5. Security

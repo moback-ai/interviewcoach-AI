@@ -3,8 +3,8 @@
 | Workflow | When it runs | What you do |
 |----------|----------------|-------------|
 | **Security** | Every PR + push to `develop` | Nothing — automatic |
-| **Deploy · Auto (develop)** | Push / merge to `develop` (with admin-approved PR) | Approve `production` in the deploy run |
-| **Deploy · Production** | Manual, or triggered by Auto | Actions → Run → branch `develop`, target `auto` |
+| **Deploy · Auto (develop)** | Push / merge to `develop` (with admin-approved PR) | Quality gate runs first; then approve `production` in deploy |
+| **Deploy · Production** | Manual, or triggered by Auto | Quality gate → approve `production` → deploy (rejected if gate fails) |
 | **Maintenance · Scheduled** | Weekly / monthly cron | Nothing — automatic |
 | **Security · Veracode** | Manual only | Add Veracode secrets, then Run |
 
