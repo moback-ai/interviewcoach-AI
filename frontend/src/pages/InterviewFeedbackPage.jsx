@@ -20,6 +20,7 @@ import Navbar from '@/components/Navbar';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '@/lib/authClient';
 import { getBackendOrigin } from '@/utils/apiConfig';
+import NoticeModal from '@/components/common/NoticeModal';
 
 // PDF generation functions
 const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, getRatingLabel, getInterviewDuration, getQuestionsAnswered, formatKeyStrengths, formatImprovementAreas) => {
@@ -242,6 +243,7 @@ function InterviewFeedbackPage() {
   const [feedbackData, setFeedbackData] = useState(null);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   
   // Prevent duplicate "Interview Feedback Accessed" tracking for this page visit
   const hasTrackedFeedbackAccessed = useRef(false);
@@ -496,7 +498,12 @@ function InterviewFeedbackPage() {
       
     } catch (error) {
       console.error('Error downloading interview report:', error);
-      alert('Failed to download interview report. Please try again.');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Download failed',
+        message: 'Failed to download interview report. Please try again.',
+        variant: 'error',
+      });
     } finally {
       setIsLoading(false);
     }
@@ -536,7 +543,12 @@ function InterviewFeedbackPage() {
       
     } catch (error) {
       console.error('❌ Failed to download audio transcript:', error);
-      alert('Failed to download audio transcript. Please try again.');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Download failed',
+        message: 'Failed to download audio transcript. Please try again.',
+        variant: 'error',
+      });
     }
   };
 
@@ -974,6 +986,13 @@ function InterviewFeedbackPage() {
           </div>
         </div>
       </div>
+      <NoticeModal
+        isOpen={noticeModal.isOpen}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        variant={noticeModal.variant}
+      />
     </>
   );
 }

@@ -12,6 +12,7 @@ import { trackEvents } from '../services/mixpanel';
 import { getSession } from '../lib/authClient';
 import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
+import NoticeModal from '../components/common/NoticeModal';
 
 
 const getLevelColor = (level) => {
@@ -449,6 +450,7 @@ export default function QuestionsPage() {
   const [currentJdId, setCurrentJdId] = useState(null);
   const [interviewHistory, setInterviewHistory] = useState([]);
   const [hasExistingInterviews, setHasExistingInterviews] = useState(false);
+  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
@@ -727,7 +729,12 @@ export default function QuestionsPage() {
 
   const handlePayment = async () => {
     if (!currentResumeId || !currentJdId) {
-      alert('Please ensure resume and job description are uploaded first.');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Upload required',
+        message: 'Please ensure resume and job description are uploaded first.',
+        variant: 'info',
+      });
       return;
     }
     
@@ -805,14 +812,24 @@ export default function QuestionsPage() {
       
     } catch (error) {
       console.error('Error creating payment:', error);
-      alert(`Error: ${error.message}`);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Payment failed',
+        message: error.message,
+        variant: 'error',
+      });
     }
   };
 
   // ✅ Updated function to handle retake interview
   const handleRetakeInterview = async () => {
     if (!currentResumeId || !currentJdId || !currentQuestionSet) {
-      alert('Please ensure resume, job description, and question set are available.');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Missing data',
+        message: 'Please ensure resume, job description, and question set are available.',
+        variant: 'info',
+      });
       return;
     }
 
@@ -823,7 +840,12 @@ export default function QuestionsPage() {
       );
       
       if (!originalInterview) {
-        alert('No completed interview found to retake from.');
+        setNoticeModal({
+          isOpen: true,
+          title: 'Retake unavailable',
+          message: 'No completed interview found to retake from.',
+          variant: 'info',
+        });
         return;
       }
 
@@ -909,7 +931,12 @@ export default function QuestionsPage() {
       
     } catch (error) {
       console.error('Error initiating retake:', error);
-      alert(`Error: ${error.message}`);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Could not start retake',
+        message: error.message,
+        variant: 'error',
+      });
     }
   };
   
@@ -1257,6 +1284,13 @@ export default function QuestionsPage() {
           </motion.div>
         </div>
       </div>
+      <NoticeModal
+        isOpen={noticeModal.isOpen}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        title={noticeModal.title}
+        message={noticeModal.message}
+        variant={noticeModal.variant}
+      />
     </>
   );
 }
