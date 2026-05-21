@@ -27,11 +27,38 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
-            if (id.includes('node_modules/three')) {
+            if (!id.includes('node_modules')) {
+              return;
+            }
+            if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
+              return 'monaco';
+            }
+            if (id.includes('recharts')) {
+              return 'recharts';
+            }
+            if (id.includes('framer-motion')) {
+              return 'framer-motion';
+            }
+            if (id.includes('react-syntax-highlighter') || id.includes('prismjs')) {
+              return 'syntax-highlighter';
+            }
+            if (id.includes('socket.io-client')) {
+              return 'socket-io';
+            }
+            if (id.includes('swiper')) {
+              return 'swiper';
+            }
+            if (id.includes('three')) {
               return 'three';
             }
-            if (id.includes('node_modules/vanta')) {
+            if (id.includes('vanta')) {
               return 'vanta';
+            }
+            if (id.includes('react-dom')) {
+              return 'react-dom';
+            }
+            if (id.includes('react')) {
+              return 'react';
             }
           },
         },
