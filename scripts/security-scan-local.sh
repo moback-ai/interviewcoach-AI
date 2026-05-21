@@ -19,7 +19,7 @@ echo "==> Frontend lint + audit + build guard"
 echo "==> Backend pip-audit + bandit"
 python3 -m pip install --upgrade pip >/dev/null
 pip install -r backend/requirements.txt bandit pip-audit >/dev/null
-pip-audit -r backend/requirements.txt --progress-spinner off
+bash scripts/pip-audit-production.sh
 bandit -c .github/bandit.yml -r backend
 
 echo "==> All local security checks passed."

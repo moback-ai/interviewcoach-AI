@@ -3072,7 +3072,7 @@ def generate_response():
             try:
                 response_text = response["message"]
                 ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-                text_hash = hashlib.md5(response_text.encode()).hexdigest()[:8]
+                text_hash = hashlib.sha256(response_text.encode()).hexdigest()[:8]
                 filename = f"interviewer_{text_hash}_{ts}.wav"
                 folder = f"audio/{user_id}/{interview_id}"
 
