@@ -40,6 +40,7 @@ jobs:
         run: |
           ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_file(file); puts "ok #{file}" }' .github/workflows/*.yml
           bash -n scripts/log-maintenance.sh
+          bash -n scripts/cleanup-host-artifacts.sh
 
       - name: Setup Node
         if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend == 'true'

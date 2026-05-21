@@ -975,7 +975,7 @@ jobs:
           ln -sfn "$NEW_RELEASE" "$APP_ROOT/current"
           pm2 delete backend >/dev/null 2>&1 || true
           AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
-            pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+            pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 --max-requests 2000 --max-requests-jitter 200 app:app" --name backend
           pm2 save
           sleep 5
           if ! curl -f http://127.0.0.1:5000/api/health; then
@@ -986,7 +986,7 @@ jobs:
               ln -sfn "$STABLE_RELEASE" "$APP_ROOT/current"
               pm2 delete backend >/dev/null 2>&1 || true
               AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
-                pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+                pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 --max-requests 2000 --max-requests-jitter 200 app:app" --name backend
               pm2 save
               sleep 5
               curl -f http://127.0.0.1:5000/api/health
@@ -1449,6 +1449,34 @@ jobs:
             fi
           } 2>&1 | tee >(log_to_remote)
 
+      - name: 11. Finalize - Prune old releases, builds, and logs
+        if: success()
+        run: |
+          log_to_remote() {
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'" 2>/dev/null || true
+          }
+          {
+            echo "=== Prune old releases and logs ==="
+            scp $SSH_OPTS scripts/cleanup-host-artifacts.sh scripts/log-maintenance.sh \
+              ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/tmp/
+            ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
+              "KEEP_SUCCESSFUL_RELEASES=2 LOG_RETENTION_DAYS=3 bash /tmp/cleanup-host-artifacts.sh"
+
+            if [ "${{ needs.authorize_and_prepare.outputs.frontend }}" = "true" ]; then
+              scp $SSH_OPTS scripts/cleanup-host-artifacts.sh scripts/log-maintenance.sh \
+                ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }}:/tmp/
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.FRONTEND_HOST }} \
+                "KEEP_SUCCESSFUL_RELEASES=2 LOG_RETENTION_DAYS=3 bash /tmp/cleanup-host-artifacts.sh"
+            fi
+
+            if [ "${{ needs.authorize_and_prepare.outputs.ai }}" = "true" ] && [ -n "${{ secrets.AI_HOST }}" ]; then
+              scp $SSH_OPTS scripts/cleanup-host-artifacts.sh \
+                ${{ secrets.EC2_USER }}@${{ secrets.AI_HOST }}:/tmp/
+              ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.AI_HOST }} \
+                "DROP_BACKEND_VENV_ON_AI=1 KEEP_SUCCESSFUL_RELEASES=2 bash /tmp/cleanup-host-artifacts.sh"
+            fi
+          } 2>&1 | tee >(log_to_remote)
+
       - name: 11. Finalize - Roll back on failure
         if: >-
           failure()
@@ -1528,7 +1556,7 @@ jobs:
               if [ -n "$TARGET_RELEASE" ] && [ -d "$TARGET_RELEASE" ]; then
                 pm2 delete backend >/dev/null 2>&1 || true
                 AWS_REGION=${{ env.AWS_REGION }} AWS_SECRETS_MANAGER_SECRET_ID=${{ env.AWS_SECRETS_MANAGER_SECRET_ID }} \
-                  pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+                  pm2 start "cd $APP_ROOT/current && $VENV_DIR/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 --max-requests 2000 --max-requests-jitter 200 app:app" --name backend
                 pm2 save
                 sleep 5
                 curl -f http://127.0.0.1:5000/api/health

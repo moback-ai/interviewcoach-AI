@@ -40,6 +40,7 @@ updates = {
     "QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS": "90",
     "JD_PARSE_OLLAMA_TIMEOUT_SECONDS": "25",
     "OLLAMA_MODEL": "llama3.2:3b",
+    "ENABLE_AI_WARMUP": "false",
 }
 if OLLAMA_HOST := __import__("os").environ.get("OLLAMA_HOST", "").strip():
     updates["OLLAMA_HOST"] = OLLAMA_HOST
@@ -76,7 +77,7 @@ set -euo pipefail
 command -v ollama >/dev/null && ollama pull "${OLLAMA_MODEL}" || true
 pm2 delete backend >/dev/null 2>&1 || true
 AWS_REGION="${AWS_REGION}" AWS_SECRETS_MANAGER_SECRET_ID="${AWS_SECRETS_MANAGER_SECRET_ID}" \
-  pm2 start "cd /apps/backend/current && /apps/backend/venv/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 app:app" --name backend
+  pm2 start "cd /apps/backend/current && /apps/backend/venv/bin/gunicorn -w 1 --threads 8 -b 0.0.0.0:5000 --timeout 300 --max-requests 2000 --max-requests-jitter 200 app:app" --name backend
 pm2 save
 sleep 6
 curl -fsS http://127.0.0.1:5000/api/health | python3 -m json.tool 2>/dev/null | head -25 || true
