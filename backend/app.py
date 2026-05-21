@@ -1639,14 +1639,14 @@ def decode_image(img_data):
 #  WHISPER (speech-to-text)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from faster_whisper import WhisperModel
-
 whisper_model = None
 
 def initialize_whisper():
     global whisper_model
     if whisper_model is not None:
         return
+    from faster_whisper import WhisperModel
+
     model_size = optional_env("WHISPER_MODEL", "large-v3")
     whisper_device = "cpu" if device == "mps" else device
     print(f"[INFO] Loading Whisper {model_size} on {whisper_device}...")
@@ -1739,7 +1739,7 @@ def process_audio_file(file):
 
 
 def schedule_background_ai_warmup():
-    if optional_env("ENABLE_AI_WARMUP", "true").lower() in {"0", "false", "no"}:
+    if optional_env("ENABLE_AI_WARMUP", "false").lower() in {"0", "false", "no"}:
         return
 
     def _warmup():
@@ -4416,8 +4416,11 @@ from common.db import close_pool
 
 atexit.register(close_pool)
 
-print("[INFO] Scheduling AI warmup...")
-schedule_background_ai_warmup()
+if optional_env("ENABLE_AI_WARMUP", "false").lower() not in {"0", "false", "no"}:
+    print("[INFO] Scheduling AI warmup...")
+    schedule_background_ai_warmup()
+else:
+    print("[INFO] AI warmup disabled — Whisper/head tracking load on first use (lower idle RAM)")
 print("[INFO] Backend ready")
 
 if __name__ == '__main__':
