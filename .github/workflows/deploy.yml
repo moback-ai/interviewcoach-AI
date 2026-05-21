@@ -12,9 +12,19 @@ on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: Branch or tag to deploy
+        description: Commit SHA or ref to deploy
         required: true
-        default: main
+        default: develop
+        type: string
+      source_branch:
+        description: Source branch name (develop or develop/feature-name) for merge governance
+        required: false
+        default: develop
+        type: string
+      approved_by:
+        description: Admin who approved the deploy (PR review + production environment)
+        required: false
+        default: ""
         type: string
       branch_details:
         description: Branch details or release notes
@@ -86,7 +96,10 @@ jobs:
         run: |
           {
             echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
+            echo "- Source branch: \`${{ github.event.inputs.source_branch }}\`"
+            echo "- Approved by: \`${{ github.event.inputs.approved_by || 'manual dispatch' }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
+            echo "- Failed deploys roll back to the last stable release; failed code is not promoted."
             echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
             echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
             echo "- Requested by: \`${{ github.actor }}\`"
@@ -96,7 +109,7 @@ jobs:
         id: changes
         uses: dorny/paths-filter@v4
         with:
-          base: ${{ github.event.repository.default_branch }}
+          base: develop
           ref: ${{ github.event.inputs.git_ref }}
           filters: |
             frontend:
@@ -247,13 +260,37 @@ jobs:
     environment:
       name: production
     steps:
-      - name: 2. Approval - Record Protected Approval
+      - name: 2. Approval - Verify admin gate
+        env:
+          ADMINS: govardhanreddy66,KFKishore23
         run: |
+          APPROVED_BY="${{ github.event.inputs.approved_by }}"
+          ACTOR="${{ github.triggering_actor || github.actor }}"
+          IFS=',' read -r -a ADMINS <<< "$ADMINS"
+
+          if [ -n "$APPROVED_BY" ]; then
+            gate="PR approval recorded ($APPROVED_BY) plus production environment approval"
+          else
+            allowed=0
+            for admin in "${ADMINS[@]}"; do
+              if [ "$ACTOR" = "$admin" ]; then
+                allowed=1
+                break
+              fi
+            done
+            if [ "$allowed" -ne 1 ]; then
+              echo "Manual deploy requires an admin actor or prior auto-deploy-develop approval."
+              exit 1
+            fi
+            gate="manual admin dispatch ($ACTOR)"
+          fi
+
           {
             echo "## 2. Approval"
-            echo "- Deployment request approved through the protected \`production\` environment."
-            echo "- Requested by: \`${{ github.actor }}\`"
-            echo "- Planned deploy steps appear in job **1. Authorize** summary."
+            echo "- Deployment approved through protected \`production\` environment."
+            echo "- Approval gate: $gate"
+            echo "- Environment approver: \`$ACTOR\`"
+            echo "- On failure, production is restored to the last stable release."
           } >> "$GITHUB_STEP_SUMMARY"
 
   build_and_audit:
@@ -1209,12 +1246,141 @@ jobs:
             echo "- Database deployment stage completed. Review deploy logs for schema application details." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [ "${{ needs.authorize_and_prepare.outputs.ai }}" = "true" ]; then
-            echo "- AI box deploy job completed (Ollama refresh)." >> "$GITHUB_STEP_SUMMARY"
-          fi
+            if [ "${{ needs.authorize_and_prepare.outputs.ai }}" = "true" ]; then
+              echo "- AI box deploy job completed (Ollama refresh)." >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+      - name: 11. Finalize - Feature branch deploy succeeded (admin merge gate)
+        if: >-
+          success()
+          && startsWith(github.event.inputs.source_branch, 'develop/')
+          && github.event.inputs.source_branch != 'develop'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sourceBranch = '${{ github.event.inputs.source_branch }}';
+            const sha = '${{ needs.build_and_audit.outputs.release_sha }}';
+            const admins = ['govardhanreddy66', 'KFKishore23'];
+
+            const pulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${sourceBranch}`,
+              base: 'develop',
+            });
+
+            const body = [
+              '✅ **Production deploy succeeded** for this feature branch.',
+              '',
+              `- Source branch: \`${sourceBranch}\``,
+              `- Release SHA: \`${sha}\``,
+              '',
+              'An **admin** may now merge this pull request into `develop`.',
+              'Automatic merges are disabled. If deploy had failed, do not merge.',
+            ].join('\n');
+
+            if (pulls.data.length === 0) {
+              const { data: created } = await github.rest.pulls.create({
+                owner,
+                repo,
+                title: `[deploy-verified] Merge ${sourceBranch} into develop`,
+                head: sourceBranch,
+                base: 'develop',
+                draft: true,
+                body,
+              });
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: created.number,
+                labels: ['deploy-verified', 'admin-merge-required'],
+              });
+              core.info(`Created draft PR #${created.number} for admin merge.`);
+              return;
+            }
+
+            const pullRequest = pulls.data[0];
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              body,
+            });
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              labels: ['deploy-verified', 'admin-merge-required'],
+            });
+            await github.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              name: 'deploy-failed',
+            }).catch(() => {});
+
+            core.info(`Marked PR #${pullRequest.number} as deploy-verified. Admins: ${admins.join(', ')}`);
+
+      - name: 11. Finalize - Feature branch deploy failed (block merge)
+        if: >-
+          failure()
+          && startsWith(github.event.inputs.source_branch, 'develop/')
+          && github.event.inputs.source_branch != 'develop'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sourceBranch = '${{ github.event.inputs.source_branch }}';
+
+            const pulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${sourceBranch}`,
+              base: 'develop',
+            });
+
+            if (pulls.data.length === 0) {
+              core.info(`No open PR found for ${sourceBranch}; nothing to mark as failed.`);
+              return;
+            }
+
+            const pullRequest = pulls.data[0];
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              body: [
+                '❌ **Production deploy failed** for this feature branch.',
+                '',
+                `Do **not** merge into \`develop\` until deploy is fixed and succeeds.`,
+                'Merges require admin approval and a successful deploy.',
+              ].join('\n'),
+            });
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              labels: ['deploy-failed'],
+            });
+            await github.rest.issues.removeLabel({
+              owner,
+              repo,
+              issue_number: pullRequest.number,
+              name: 'deploy-verified',
+            }).catch(() => {});
 
       - name: 11. Finalize - Promote stable release
-        if: success()
+        if: >-
+          success()
+          && needs.deploy_frontend_box.result != 'failure'
+          && needs.deploy_backend_box.result != 'failure'
+          && needs.deploy_ai_box.result != 'failure'
+          && needs.deploy_database_box.result != 'failure'
         continue-on-error: true
         run: |
           log_to_remote() {
@@ -1284,7 +1450,12 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
       - name: 11. Finalize - Roll back on failure
-        if: failure() && steps.report_status.outcome == 'failure'
+        if: >-
+          failure()
+          || needs.deploy_frontend_box.result == 'failure'
+          || needs.deploy_backend_box.result == 'failure'
+          || needs.deploy_ai_box.result == 'failure'
+          || needs.deploy_database_box.result == 'failure'
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
@@ -1365,6 +1536,20 @@ jobs:
             fi
             EOFSSH
           } 2>&1 | tee >(log_to_remote)
+
+      - name: 11. Finalize - Verify production health after rollback
+        if: >-
+          failure()
+          || needs.deploy_frontend_box.result == 'failure'
+          || needs.deploy_backend_box.result == 'failure'
+          || needs.deploy_ai_box.result == 'failure'
+          || needs.deploy_database_box.result == 'failure'
+        run: |
+          set +e
+          FRONTEND_ORIGIN="${{ needs.deploy_prepare.outputs.frontend_origin }}"
+          if [ -n "$FRONTEND_ORIGIN" ]; then
+            curl -fsS --max-time 20 "$FRONTEND_ORIGIN/api/health" && echo "Post-rollback health check passed."
+          fi
 
       - name: 11. Finalize - Maintain log archives
         if: always()

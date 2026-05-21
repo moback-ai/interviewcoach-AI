@@ -1,0 +1,83 @@
+name: Monthly Sync Main From Develop
+
+# Promote develop into main once per month. Does not trigger production deploy (main is not deployed).
+
+on:
+  schedule:
+    - cron: '0 5 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    name: Merge develop into main (monthly)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update monthly sync PR and merge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const month = new Date().toISOString().slice(0, 7);
+            const title = `chore: monthly sync main from develop (${month})`;
+
+            try {
+              await github.rest.repos.getBranch({ owner, repo, branch: 'develop' });
+            } catch (error) {
+              core.setFailed('develop branch is missing. Create develop from main before running monthly sync.');
+              return;
+            }
+
+            const openPulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:develop`,
+              base: 'main',
+            });
+
+            let pullRequest = openPulls.data[0];
+            if (!pullRequest) {
+              const { data: created } = await github.rest.pulls.create({
+                owner,
+                repo,
+                title,
+                head: 'develop',
+                base: 'main',
+                body: [
+                  'Automated monthly promotion of `develop` into `main`.',
+                  '',
+                  '- `main` is the frozen baseline branch.',
+                  '- Production deploys use `develop` and `develop/*` only.',
+                  '- This merge does not run the production deploy workflow.',
+                ].join('\n'),
+              });
+              pullRequest = created;
+              core.info(`Created PR #${pullRequest.number}`);
+            } else {
+              core.info(`Reusing open PR #${pullRequest.number}`);
+            }
+
+            const { data: merged } = await github.rest.pulls.merge({
+              owner,
+              repo,
+              pull_number: pullRequest.number,
+              merge_method: 'merge',
+              commit_title: title,
+            });
+
+            if (!merged.merged) {
+              core.setFailed(`Monthly sync PR #${pullRequest.number} could not be merged: ${merged.message}`);
+              return;
+            }
+
+            await core.summary
+              .addHeading('Monthly Main Sync')
+              .addRaw(`Merged PR #${pullRequest.number}: develop → main`)
+              .addBreak()
+              .addRaw(`SHA: ${merged.sha}`)
+              .write();

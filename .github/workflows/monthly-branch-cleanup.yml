@@ -19,7 +19,7 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const defaultBranch = context.payload.repository?.default_branch || 'main';
+            const integrationBranch = 'develop';
             const staleDays = 30;
             const cutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000);
             const deletedBranches = [];
@@ -34,7 +34,7 @@ jobs:
 
             for (const branch of branches) {
               const name = branch.name;
-              if (!name.startsWith('feature/')) {
+              if (!name.startsWith('develop/') || name === integrationBranch) {
                 continue;
               }
 
@@ -55,7 +55,7 @@ jobs:
               const comparison = await github.rest.repos.compareCommits({
                 owner,
                 repo,
-                base: defaultBranch,
+                base: integrationBranch,
                 head: name,
               });
 

@@ -47,6 +47,21 @@ def load_runtime_config() -> None:
 
     _CONFIG = normalized
 
+    # Local dev: env overrides (DB tunnel, storage paths, log dirs, etc.)
+    for key in (
+        "DB_HOST",
+        "DB_PORT",
+        "STORAGE_PATH",
+        "UPLOAD_FOLDER",
+        "ADMIN_LOG_ROOT",
+        "PUBLIC_STORAGE_URL",
+        "BACKEND_API_BASE",
+        "DOMAIN",
+    ):
+        override = os.getenv(key, "").strip()
+        if override:
+            _CONFIG[key] = override
+
     _LOADED = True
 
 
