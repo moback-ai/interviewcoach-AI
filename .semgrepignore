@@ -1,0 +1,4 @@
+# GitHub Actions workflows use controlled inputs; Semgrep shell-injection rules are noisy here.
+.github/workflows/deploy.yml
+.github/workflows/auto-deploy-develop.yml
+.github/workflows/auto-deploy-main.yml

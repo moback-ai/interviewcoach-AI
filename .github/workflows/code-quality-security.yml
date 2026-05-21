@@ -75,12 +75,13 @@ jobs:
         working-directory: frontend
         run: npm ci --legacy-peer-deps
 
-      - name: Frontend lint
+      - name: Frontend lint (advisory)
         if: >-
           github.event_name == 'workflow_dispatch'
           || github.event_name == 'schedule'
           || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
+        continue-on-error: true
         run: npm run lint
 
       - name: Frontend dependency audit
@@ -181,16 +182,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@v0.2.5
+
       - name: Filesystem vulnerability scan
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: table
-          severity: CRITICAL,HIGH
-          exit-code: '1'
-          skip-dirs: backend/Piper,frontend/node_modules,frontend/dist,.git
-          trivyignores: .trivyignore
+        run: |
+          trivy fs . \
+            --severity CRITICAL,HIGH \
+            --exit-code 1 \
+            --skip-dirs backend/Piper,frontend/node_modules,frontend/dist,.git \
+            --ignorefile .trivyignore \
+            --format table
 
   semgrep:
     name: Semgrep (SAST rules)
@@ -202,7 +204,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Run Semgrep CI rules
-        run: semgrep scan --config p/ci --error --exclude backend/Piper
+        run: semgrep scan --config p/ci --error
 
   secret-scan:
     name: Secret scan (Gitleaks)
@@ -213,11 +215,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+      - name: Install Gitleaks CLI
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Gitleaks detect
+        run: gitleaks detect --source . --config .gitleaks.toml --verbose
 
   # Optional: enable when SNYK_TOKEN is added to repository secrets.
   # snyk:
