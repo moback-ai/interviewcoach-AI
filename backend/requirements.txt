@@ -35,7 +35,7 @@ mediapipe==0.10.14
 
 # Document parsing
 PyPDF2==3.0.1
-python-docx==1.1.2
+python-docx==1.2.0
 pillow==12.2.0
 
 # Utilities
