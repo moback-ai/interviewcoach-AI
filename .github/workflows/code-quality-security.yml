@@ -8,13 +8,22 @@ on:
       - develop
       - 'develop/**'
   workflow_dispatch:
+  schedule:
+    # Weekly security pass (Monday 06:00 UTC)
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
   security-events: write
+  actions: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint-and-scan:
+    name: Lint & dependency audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,10 +31,9 @@ jobs:
 
       - name: Detect changed areas
         id: changes
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
         uses: dorny/paths-filter@v4
         with:
-          base: develop
           filters: |
             frontend:
               - 'frontend/**'
@@ -34,52 +42,199 @@ jobs:
             governance:
               - '.github/**'
               - 'scripts/**'
+              - 'docs/**'
 
       - name: Validate governance files
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || steps.changes.outputs.governance == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || github.event_name == 'push'
+          || steps.changes.outputs.governance == 'true'
         run: |
           ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_file(file); puts "ok #{file}" }' .github/workflows/*.yml
           bash -n scripts/log-maintenance.sh
           bash -n scripts/cleanup-host-artifacts.sh
+          bash -n scripts/verify-frontend-login-bundle.sh
 
       - name: Setup Node
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Frontend install
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npm ci --legacy-peer-deps
 
       - name: Frontend lint
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npm run lint
 
+      - name: Frontend dependency audit
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+      - name: Frontend production build + login bundle guard
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.frontend == 'true'
+        working-directory: frontend
+        run: |
+          echo "VITE_API_BASE_URL=/api" > .env
+          echo "VITE_STORAGE_URL=/storage" >> .env
+          npm run build
+          bash ../scripts/verify-frontend-login-bundle.sh dist
+
       - name: Setup Python
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.backend == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
 
       - name: Backend dependency install
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend == 'true'
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.backend == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install bandit pip-audit
 
       - name: Security scan (Python dependencies)
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend == 'true'
-        run: pip-audit --progress-spinner off
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.backend == 'true'
+        run: pip-audit -r backend/requirements.txt --progress-spinner off
 
       - name: Security scan (Python source)
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.backend == 'true'
-        run: bandit -r backend -x backend/Piper
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          || github.event_name == 'schedule'
+          || steps.changes.outputs.backend == 'true'
+        run: bandit -c .github/bandit.yml -r backend
 
-      - name: Frontend dependency audit
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.frontend == 'true'
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Install frontend for CodeQL
+        if: matrix.language == 'javascript-typescript'
         working-directory: frontend
-        run: npm audit --audit-level=high
+        run: npm ci --legacy-peer-deps
+
+      - name: Install backend for CodeQL
+        if: matrix.language == 'python'
+        run: pip install -r backend/requirements.txt
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}
+
+  trivy:
+    name: Trivy (CVE scan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Filesystem vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          skip-dirs: backend/Piper,frontend/node_modules,frontend/dist,.git
+          trivyignores: .trivyignore
+
+  semgrep:
+    name: Semgrep (SAST rules)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run Semgrep CI rules
+        run: semgrep scan --config p/ci --error --exclude backend/Piper
+
+  secret-scan:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  # Optional: enable when SNYK_TOKEN is added to repository secrets.
+  # snyk:
+  #   name: Snyk
+  #   runs-on: ubuntu-latest
+  #   if: ${{ secrets.SNYK_TOKEN != '' }}
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - uses: snyk/actions/node@master
+  #       env:
+  #         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  #       with:
+  #         command: test
+  #         args: --severity-threshold=high
+  #     - uses: snyk/actions/python@master
+  #       env:
+  #         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  #       with:
+  #         command: test
+  #         args: --file=backend/requirements.txt --severity-threshold=high
