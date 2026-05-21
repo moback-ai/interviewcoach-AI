@@ -1,6 +1,10 @@
 name: Maintenance · Scheduled
 
 on:
+  push:
+    paths:
+      - '.github/workflows/maintenance-scheduled.yml'
+      - '.github/actions/setup-deploy-ssh/**'
   schedule:
     - cron: '30 4 * * 0'   # Sunday — log cleanup
     - cron: '0 4 * * 0'    # Sunday — host artifact cleanup
@@ -100,7 +104,9 @@ jobs:
             "KEEP_SUCCESSFUL_RELEASES=2 DRY_RUN=$DRY_RUN bash /tmp/cleanup-host-artifacts.sh"
 
       - name: AI host
-        if: ${{ secrets.AI_HOST != '' }}
+        env:
+          AI_HOST: ${{ secrets.AI_HOST }}
+        if: env.AI_HOST != ''
         run: |
           set -euo pipefail
           scp $SSH_OPTS scripts/cleanup-host-artifacts.sh \
