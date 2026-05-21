@@ -11,6 +11,11 @@
 
 - Describe what was tested.
 
+## Security
+
+- [ ] `Code Quality & Security` workflow is green (CodeQL, Trivy, Semgrep, audits)
+- [ ] No secrets or credentials in the diff (Gitleaks / manual review)
+
 ## Governance Checklist
 
 - [ ] Admin approval requested from @govardhanreddy66 or @KFKishore23 before merge into `develop`

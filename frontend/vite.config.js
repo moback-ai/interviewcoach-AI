@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
     build: {
       minify: 'esbuild',
       esbuild: {
-        drop: ['debugger'],
+        drop: isDev ? ['debugger'] : ['console', 'debugger'],
       },
       chunkSizeWarningLimit: 1000,
       sourcemap: false,

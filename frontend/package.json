@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:check": "vite build && bash ../scripts/verify-frontend-login-bundle.sh dist",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "vite"
@@ -23,7 +24,6 @@
     "jspdf": "^3.0.2",
     "jspdf-autotable": "^5.0.2",
     "lucide-react": "^0.536.0",
-    "prismjs": "^1.30.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-icons": "^5.5.0",
