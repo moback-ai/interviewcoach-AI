@@ -7,7 +7,7 @@ This repo runs automated security checks on every PR and push to `develop`. Opti
 | Tool | What it finds | Workflow job |
 |------|----------------|--------------|
 | **npm audit** | Vulnerable npm packages (frontend) | `lint-and-scan` |
-| **pip-audit** | Vulnerable Python packages | `lint-and-scan` |
+| **pip-audit** | Vulnerable Python packages (core deps patched; ML CVEs without PyPI fix are documented ignores) | `lint-and-scan` |
 | **Bandit** | Common Python security issues in source | `lint-and-scan` |
 | **CodeQL** | SQL injection, XSS, auth bugs (JS + Python) | `codeql` |
 | **Trivy** | CVEs in dependencies and misconfigurations | `trivy` |

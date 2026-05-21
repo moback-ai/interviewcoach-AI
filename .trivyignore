@@ -1,3 +1,13 @@
-# Add CVE IDs here only after risk acceptance (with ticket link in commit message).
-# Example:
-# CVE-2024-12345
+# ML / AI transitive packages: no patched PyPI release yet (tracked in pyproject.toml pip-audit ignores).
+# Re-run Trivy after upgrading torch, transformers, or ollama when fixes ship.
+
+CVE-2024-11396
+CVE-2024-11397
+CVE-2025-3730
+CVE-2025-32434
+CVE-2025-29513
+CVE-2025-29514
+CVE-2025-29515
+CVE-2025-29516
+CVE-2025-29517
+CVE-2025-29518
