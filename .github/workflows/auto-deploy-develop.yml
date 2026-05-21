@@ -1,117 +1,214 @@
 name: Auto Deploy Develop
 
-# Deploy develop (integration) and develop/* feature branches only — never main.
-# Feature branches deploy on push; merge into develop is admin-only AFTER a successful deploy.
+# All production deploys (develop + develop/*) require admin PR approval before dispatch.
+# deploy.yml then requires protected `production` environment approval before any server change.
+# Failed deploys never stay live — deploy.yml rolls back to the last stable release.
 
 on:
   push:
     branches:
       - develop
       - 'develop/**'
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Branch name to deploy (develop or develop/feat-*)
+        required: true
+        type: string
+      git_sha:
+        description: Optional commit SHA (defaults to branch tip)
+        required: false
+        type: string
 
 permissions:
   actions: write
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 jobs:
-  dispatch:
-    name: Dispatch deploy for develop branch push
+  validate_admin_pr_approval:
+    name: Validate admin PR approval
     runs-on: ubuntu-latest
+    outputs:
+      source_branch: ${{ steps.meta.outputs.source_branch }}
+      deploy_sha: ${{ steps.meta.outputs.deploy_sha }}
+      approved_by: ${{ steps.meta.outputs.approved_by }}
+      review_notes: ${{ steps.meta.outputs.review_notes }}
+      deploy_kind: ${{ steps.meta.outputs.deploy_kind }}
     steps:
-      - name: Validate branch and dispatch deploy
+      - name: Resolve branch, SHA, and admin approval
+        id: meta
         uses: actions/github-script@v7
         env:
           ADMINS: '["govardhanreddy66","KFKishore23"]'
+          INPUT_REF: ${{ github.event.inputs.git_ref }}
+          INPUT_SHA: ${{ github.event.inputs.git_sha }}
         with:
           script: |
             const admins = JSON.parse(process.env.ADMINS);
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const ref = context.ref.replace('refs/heads/', '');
-            const sha = context.sha;
-            const isFeatureBranch = ref.startsWith('develop/');
-            const isDevelop = ref === 'develop';
 
-            if (!isDevelop && !isFeatureBranch) {
-              core.setFailed(`Ref ${ref} is not deployable. Only develop and develop/* branches are allowed.`);
+            const ref =
+              context.eventName === 'workflow_dispatch'
+                ? process.env.INPUT_REF
+                : context.ref.replace('refs/heads/', '');
+
+            const sha =
+              context.eventName === 'workflow_dispatch'
+                ? process.env.INPUT_SHA || ''
+                : context.sha;
+
+            if (!ref || (ref !== 'develop' && !ref.startsWith('develop/'))) {
+              core.setFailed('Only develop and develop/* branches can be deployed.');
               return;
             }
 
-            let approvedBy = 'auto-deploy-develop';
-            let reviewNotes = `Automatic deployment for branch ${ref}.`;
+            const resolveSha = async () => {
+              if (sha) {
+                return sha;
+              }
+              const branch = await github.rest.repos.getBranch({ owner, repo, branch: ref });
+              return branch.data.commit.sha;
+            };
 
-            if (isDevelop) {
-              const commitMessage = context.payload.head_commit?.message || '';
+            const deploySha = await resolveSha();
+            const isFeatureBranch = ref.startsWith('develop/') && ref !== 'develop';
+
+            const activeAdminApprovals = async (pullNumber) => {
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner,
+                repo,
+                pull_number: pullNumber,
+                per_page: 100,
+              });
+              const approvalState = new Map();
+              for (const review of reviews) {
+                const login = review.user?.login;
+                if (!admins.includes(login)) {
+                  continue;
+                }
+                if (review.state === 'APPROVED') {
+                  approvalState.set(login, 'APPROVED');
+                  continue;
+                }
+                if (review.state === 'CHANGES_REQUESTED' || review.state === 'DISMISSED') {
+                  approvalState.delete(login);
+                }
+              }
+              return admins.filter((login) => approvalState.get(login) === 'APPROVED');
+            };
+
+            let pullRequest;
+            let approvedBy = '';
+            let reviewNotes = '';
+
+            if (isFeatureBranch) {
+              const openPulls = await github.rest.pulls.list({
+                owner,
+                repo,
+                state: 'open',
+                head: `${owner}:${ref}`,
+                base: 'develop',
+              });
+              if (!openPulls.data.length) {
+                core.setFailed(
+                  `No open PR from ${ref} to develop. Open a PR and get admin approval before deploy.`
+                );
+                return;
+              }
+              pullRequest = openPulls.data[0];
+              const approvingAdmins = await activeAdminApprovals(pullRequest.number);
+              if (!approvingAdmins.length) {
+                core.setFailed(
+                  `PR #${pullRequest.number} requires admin approval before deploy. Approvers: ${admins.join(', ')}`
+                );
+                return;
+              }
+              approvedBy = approvingAdmins[0];
+              reviewNotes = `Feature deploy for PR #${pullRequest.number} approved by ${approvedBy}.`;
+            } else {
+              const commitMessage =
+                context.payload.head_commit?.message || `workflow_dispatch ${ref}`;
               const findMergedPullRequest = async () => {
                 const mergeMatch = commitMessage.match(/Merge pull request #(\d+)/i);
                 if (mergeMatch) {
                   const pullNumber = Number(mergeMatch[1]);
-                  const { data: pullRequest } = await github.rest.pulls.get({
+                  const { data } = await github.rest.pulls.get({
                     owner,
                     repo,
                     pull_number: pullNumber,
                   });
-                  if (pullRequest.base.ref === 'develop' && pullRequest.merged_at) {
-                    return pullRequest;
+                  if (data.base.ref === 'develop' && data.merged_at) {
+                    return data;
                   }
                 }
 
-                const associatedPullRequests = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
                   owner,
                   repo,
-                  commit_sha: sha,
+                  commit_sha: deploySha,
                 });
 
-                return associatedPullRequests.data
+                return associated.data
                   .filter((pr) => pr.base.ref === 'develop' && pr.merged_at)
                   .sort((left, right) => new Date(right.merged_at) - new Date(left.merged_at))[0];
               };
 
-              let mergedPullRequest = await findMergedPullRequest();
-              if (!mergedPullRequest) {
-                core.info('Merged pull request not indexed yet. Retrying in 15 seconds...');
-                await new Promise((resolve) => setTimeout(resolve, 15000));
-                mergedPullRequest = await findMergedPullRequest();
+              pullRequest = await findMergedPullRequest();
+              if (!pullRequest) {
+                core.setFailed(
+                  'develop deploy requires a merged PR into develop with admin approval. Direct pushes are not deployable.'
+                );
+                return;
               }
 
-              if (mergedPullRequest) {
-                const reviews = await github.paginate(github.rest.pulls.listReviews, {
-                  owner,
-                  repo,
-                  pull_number: mergedPullRequest.number,
-                  per_page: 100,
-                });
-
-                const approvalState = new Map();
-                for (const review of reviews) {
-                  const login = review.user?.login;
-                  if (!admins.includes(login) || login === mergedPullRequest.user.login) {
-                    continue;
-                  }
-                  if (review.state === 'APPROVED') {
-                    approvalState.set(login, 'APPROVED');
-                    continue;
-                  }
-                  if (review.state === 'CHANGES_REQUESTED' || review.state === 'DISMISSED') {
-                    approvalState.delete(login);
-                  }
-                }
-
-                const approvingAdmins = admins.filter((login) => approvalState.get(login) === 'APPROVED');
-                if (approvingAdmins.length === 0) {
-                  core.setFailed(
-                    `PR #${mergedPullRequest.number} does not have an active admin approval. Deployment was not started.`
-                  );
-                  return;
-                }
-
-                approvedBy = approvingAdmins[0];
-                reviewNotes = `Merged PR #${mergedPullRequest.number} approved by ${approvedBy}.`;
+              const approvingAdmins = await activeAdminApprovals(pullRequest.number);
+              if (!approvingAdmins.length) {
+                core.setFailed(
+                  `Merged PR #${pullRequest.number} does not have active admin approval. Deployment blocked.`
+                );
+                return;
               }
+              approvedBy = approvingAdmins[0];
+              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} approved by ${approvedBy}.`;
             }
 
-            const deployKind = isFeatureBranch ? 'feature-branch-preview' : 'develop-integration';
+            const deployKind = isFeatureBranch ? 'feature-branch' : 'develop-integration';
+            core.setOutput('source_branch', ref);
+            core.setOutput('deploy_sha', deploySha);
+            core.setOutput('approved_by', approvedBy);
+            core.setOutput('review_notes', reviewNotes);
+            core.setOutput('deploy_kind', deployKind);
+
+            await core.summary
+              .addHeading('Deploy request validated')
+              .addRaw(`Branch: \`${ref}\``)
+              .addBreak()
+              .addRaw(`SHA: \`${deploySha}\``)
+              .addBreak()
+              .addRaw(`Admin approval: ${approvedBy}`)
+              .addBreak()
+              .addRaw(`Next: an admin must approve the \`production\` environment in deploy.yml.`)
+              .write();
+
+  dispatch_production_deploy:
+    name: Dispatch production deploy
+    runs-on: ubuntu-latest
+    needs: [validate_admin_pr_approval]
+    steps:
+      - name: Dispatch deploy workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = '${{ needs.validate_admin_pr_approval.outputs.source_branch }}';
+            const sha = '${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}';
+            const approvedBy = '${{ needs.validate_admin_pr_approval.outputs.approved_by }}';
+            const reviewNotes = '${{ needs.validate_admin_pr_approval.outputs.review_notes }}';
+            const deployKind = '${{ needs.validate_admin_pr_approval.outputs.deploy_kind }}';
+
             await github.rest.actions.createWorkflowDispatch({
               owner,
               repo,
@@ -120,6 +217,7 @@ jobs:
               inputs: {
                 git_ref: sha,
                 source_branch: ref,
+                approved_by: approvedBy,
                 branch_details: `[${deployKind}] branch=${ref}`,
                 code_review_notes: reviewNotes,
                 version_audit: 'true',
@@ -128,10 +226,10 @@ jobs:
             });
 
             await core.summary
-              .addHeading('Auto Deploy Develop Dispatch')
-              .addRaw(`Triggered deploy.yml for \`${ref}\` at \`${sha}\`.`)
+              .addHeading('Production deploy dispatched')
+              .addRaw(`deploy.yml started for \`${ref}\` @ \`${sha}\`.`)
               .addBreak()
-              .addRaw(`Kind: ${deployKind}`)
+              .addRaw(`PR approved by: ${approvedBy}`)
               .addBreak()
-              .addRaw(`Approved by: ${approvedBy}`)
+              .addRaw(`Waiting for production environment approval in deploy.yml.`)
               .write();

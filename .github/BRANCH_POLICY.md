@@ -6,61 +6,53 @@
 
 | Branch | Purpose | Deploy | Merge policy |
 |--------|---------|--------|----------------|
-| `main` | Original / baseline code | **Never** auto-deployed | Receives `develop` monthly (automated) |
-| `develop` | Shared integration (same starting point as `main`) | Auto-deploy on push (after admin-approved PR merges) | Admin-only PR merges |
-| `develop/<feature>` | Developer feature work (e.g. `develop/feat-login`) | Auto-deploy on every push | **No auto-merge**; admin merges into `develop` only after **successful** deploy |
+| `main` | Original / baseline code | **Never** | Monthly auto-sync from `develop` |
+| `develop` | Shared integration | After **admin PR approval** + **production environment approval** | Admin-only PR merges |
+| `develop/<feature>` | Developer feature work | Same dual approval; **no auto-merge** | Admin merges into `develop` only after **successful** deploy |
+
+## Deployment approvals (all branches, including `develop/feat-*`)
+
+Every production deploy requires **both**:
+
+1. **Admin PR approval** — an open PR (`develop/feat-*` → `develop`) or merged PR (`develop`) with approval from @govardhanreddy66 or @KFKishore23
+2. **Production environment approval** — an admin clicks **Review deployments → Approve** on the `production` environment in the `deploy.yml` run
+
+Nothing is copied to servers until both gates pass.
+
+## Failed deploy = automatic rollback
+
+- Before deploy, the workflow snapshots the current **stable** release on each host.
+- If health checks fail, the job restores `current` → `stable` immediately (per host).
+- The finalize step runs a full rollback if any deploy stage fails.
+- **Stable is promoted only after a fully successful deploy** — failed code is never promoted.
 
 ## Developer workflow
 
-1. Branch from `develop`:
-   ```bash
-   git checkout develop
-   git pull origin develop
-   git checkout -b develop/feat-your-change
-   ```
-2. Push commits — production deploy runs automatically for that branch.
-3. Open a PR: **`develop/feat-your-change` → `develop`** (draft is fine until deploy passes).
-4. Wait for deploy to succeed — workflow adds label `deploy-verified` and comments on the PR.
-5. **Admin** reviews and merges the PR manually. Failed deploys get `deploy-failed` — do not merge.
-6. Merging into `develop` triggers another deploy of `develop` (integration).
+1. `git checkout develop && git pull`
+2. `git checkout -b develop/feat-your-change`
+3. Open PR → `develop` and get **admin approval** on the PR
+4. Push commits → `auto-deploy-develop.yml` validates PR approval and starts `deploy.yml`
+5. **Admin approves** the `production` environment in GitHub Actions
+6. If deploy succeeds → label `deploy-verified` on the PR → **admin merges** manually
+7. If deploy fails → label `deploy-failed`, servers stay on last stable — **do not merge**
 
-Direct pushes to `develop` and `main` should be blocked in branch protection.
+## Triggers
 
-## Deployment
+| Event | Behavior |
+|-------|----------|
+| Push to `develop` / `develop/**` | Validates admin PR approval → dispatches `deploy.yml` |
+| `deploy.yml` | Requires `production` environment approval → deploy with rollback |
+| Push to `main` | No deploy |
+| Monthly cron | `develop` → `main` only (no deploy) |
 
-| Trigger | Workflow |
-|---------|----------|
-| Push to `develop` or `develop/**` | `.github/workflows/auto-deploy-develop.yml` → `deploy.yml` |
-| Push to `main` | Disabled (`.github/workflows/auto-deploy-main.yml`) |
-| Manual | `deploy.yml` (`workflow_dispatch`), default ref `develop` |
+## GitHub settings (admin)
 
-Production environment approval still applies inside `deploy.yml`.
+- Default branch: `develop`
+- Protect `develop` and `main` (PR required, code owners, lint check)
+- **Disable auto-merge** on PRs
+- `production` environment: required reviewers = admins only
+- Labels: `deploy-verified`, `deploy-failed`, `admin-merge-required`
 
-## Monthly `main` sync
+## Logs, rollback detail, toolchain
 
-`.github/workflows/monthly-sync-main-from-develop.yml` runs on the **1st of each month** (and can be run manually). It merges `develop` → `main` and does **not** deploy `main`.
-
-## GitHub settings (repository admin)
-
-Apply to **`develop`** and **`main`**:
-
-- Require pull request before merging
-- Require approvals: **1**
-- Require review from Code Owners (`.github/CODEOWNERS`)
-- Require status check: `Code Quality & Security / lint-and-scan`
-- Block force pushes
-- Restrict direct pushes (admins only if needed for break-glass)
-
-Recommended:
-
-- Set **default branch** to `develop`
-- Do **not** enable auto-merge on PRs targeting `develop`
-- Create labels (optional; workflows also create them): `deploy-verified`, `deploy-failed`, `admin-merge-required`
-
-## Feature branch cleanup
-
-`.github/workflows/monthly-branch-cleanup.yml` removes stale **merged** `develop/*` branches older than 30 days.
-
-## Logs, rollback, toolchain
-
-See previous sections in this file for HTTP logs, rollback behavior, host toolchain updates, and log retention (unchanged).
+HTTP logs, per-step rollback, host toolchain updates, and log retention behave as documented in the deploy workflow (`deploy.yml`).

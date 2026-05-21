@@ -21,6 +21,11 @@ on:
         required: false
         default: develop
         type: string
+      approved_by:
+        description: Admin who approved the deploy (PR review + production environment)
+        required: false
+        default: ""
+        type: string
       branch_details:
         description: Branch details or release notes
         required: false
@@ -92,7 +97,9 @@ jobs:
           {
             echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
             echo "- Source branch: \`${{ github.event.inputs.source_branch }}\`"
+            echo "- Approved by: \`${{ github.event.inputs.approved_by || 'manual dispatch' }}\`"
             echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
+            echo "- Failed deploys roll back to the last stable release; failed code is not promoted."
             echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
             echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
             echo "- Requested by: \`${{ github.actor }}\`"
@@ -253,13 +260,37 @@ jobs:
     environment:
       name: production
     steps:
-      - name: 2. Approval - Record Protected Approval
+      - name: 2. Approval - Verify admin gate
+        env:
+          ADMINS: govardhanreddy66,KFKishore23
         run: |
+          APPROVED_BY="${{ github.event.inputs.approved_by }}"
+          ACTOR="${{ github.triggering_actor || github.actor }}"
+          IFS=',' read -r -a ADMINS <<< "$ADMINS"
+
+          if [ -n "$APPROVED_BY" ]; then
+            gate="PR approval recorded ($APPROVED_BY) plus production environment approval"
+          else
+            allowed=0
+            for admin in "${ADMINS[@]}"; do
+              if [ "$ACTOR" = "$admin" ]; then
+                allowed=1
+                break
+              fi
+            done
+            if [ "$allowed" -ne 1 ]; then
+              echo "Manual deploy requires an admin actor or prior auto-deploy-develop approval."
+              exit 1
+            fi
+            gate="manual admin dispatch ($ACTOR)"
+          fi
+
           {
             echo "## 2. Approval"
-            echo "- Deployment request approved through the protected \`production\` environment."
-            echo "- Requested by: \`${{ github.actor }}\`"
-            echo "- Planned deploy steps appear in job **1. Authorize** summary."
+            echo "- Deployment approved through protected \`production\` environment."
+            echo "- Approval gate: $gate"
+            echo "- Environment approver: \`$ACTOR\`"
+            echo "- On failure, production is restored to the last stable release."
           } >> "$GITHUB_STEP_SUMMARY"
 
   build_and_audit:
@@ -1344,7 +1375,12 @@ jobs:
             }).catch(() => {});
 
       - name: 11. Finalize - Promote stable release
-        if: success()
+        if: >-
+          success()
+          && needs.deploy_frontend_box.result != 'failure'
+          && needs.deploy_backend_box.result != 'failure'
+          && needs.deploy_ai_box.result != 'failure'
+          && needs.deploy_database_box.result != 'failure'
         continue-on-error: true
         run: |
           log_to_remote() {
@@ -1414,7 +1450,12 @@ jobs:
           } 2>&1 | tee >(log_to_remote)
 
       - name: 11. Finalize - Roll back on failure
-        if: failure() && steps.report_status.outcome == 'failure'
+        if: >-
+          failure()
+          || needs.deploy_frontend_box.result == 'failure'
+          || needs.deploy_backend_box.result == 'failure'
+          || needs.deploy_ai_box.result == 'failure'
+          || needs.deploy_database_box.result == 'failure'
         run: |
           log_to_remote() {
             ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} "cat >> '$DEPLOY_LOG_FILE'"
@@ -1495,6 +1536,20 @@ jobs:
             fi
             EOFSSH
           } 2>&1 | tee >(log_to_remote)
+
+      - name: 11. Finalize - Verify production health after rollback
+        if: >-
+          failure()
+          || needs.deploy_frontend_box.result == 'failure'
+          || needs.deploy_backend_box.result == 'failure'
+          || needs.deploy_ai_box.result == 'failure'
+          || needs.deploy_database_box.result == 'failure'
+        run: |
+          set +e
+          FRONTEND_ORIGIN="${{ needs.deploy_prepare.outputs.frontend_origin }}"
+          if [ -n "$FRONTEND_ORIGIN" ]; then
+            curl -fsS --max-time 20 "$FRONTEND_ORIGIN/api/health" && echo "Post-rollback health check passed."
+          fi
 
       - name: 11. Finalize - Maintain log archives
         if: always()
