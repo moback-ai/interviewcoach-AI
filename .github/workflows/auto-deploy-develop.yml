@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Only merged PRs or manual dispatch
         id: check
+        env:
+          DEPLOY_COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -39,7 +41,7 @@ jobs:
             echo "Manual deploy dispatch."
             exit 0
           fi
-          msg="${{ github.event.head_commit.message }}"
+          msg="${DEPLOY_COMMIT_MSG}"
           if printf '%s' "$msg" | grep -qiE 'Merge pull request|\(#[0-9]+\)'; then
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             echo "Merged PR commit on develop — continuing."
