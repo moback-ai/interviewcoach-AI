@@ -1,0 +1,137 @@
+name: Auto Deploy Develop
+
+# Deploy develop (integration) and develop/* feature branches only — never main.
+# Feature branches deploy on push; merge into develop is admin-only AFTER a successful deploy.
+
+on:
+  push:
+    branches:
+      - develop
+      - 'develop/**'
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  dispatch:
+    name: Dispatch deploy for develop branch push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch and dispatch deploy
+        uses: actions/github-script@v7
+        env:
+          ADMINS: '["govardhanreddy66","KFKishore23"]'
+        with:
+          script: |
+            const admins = JSON.parse(process.env.ADMINS);
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const ref = context.ref.replace('refs/heads/', '');
+            const sha = context.sha;
+            const isFeatureBranch = ref.startsWith('develop/');
+            const isDevelop = ref === 'develop';
+
+            if (!isDevelop && !isFeatureBranch) {
+              core.setFailed(`Ref ${ref} is not deployable. Only develop and develop/* branches are allowed.`);
+              return;
+            }
+
+            let approvedBy = 'auto-deploy-develop';
+            let reviewNotes = `Automatic deployment for branch ${ref}.`;
+
+            if (isDevelop) {
+              const commitMessage = context.payload.head_commit?.message || '';
+              const findMergedPullRequest = async () => {
+                const mergeMatch = commitMessage.match(/Merge pull request #(\d+)/i);
+                if (mergeMatch) {
+                  const pullNumber = Number(mergeMatch[1]);
+                  const { data: pullRequest } = await github.rest.pulls.get({
+                    owner,
+                    repo,
+                    pull_number: pullNumber,
+                  });
+                  if (pullRequest.base.ref === 'develop' && pullRequest.merged_at) {
+                    return pullRequest;
+                  }
+                }
+
+                const associatedPullRequests = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                  owner,
+                  repo,
+                  commit_sha: sha,
+                });
+
+                return associatedPullRequests.data
+                  .filter((pr) => pr.base.ref === 'develop' && pr.merged_at)
+                  .sort((left, right) => new Date(right.merged_at) - new Date(left.merged_at))[0];
+              };
+
+              let mergedPullRequest = await findMergedPullRequest();
+              if (!mergedPullRequest) {
+                core.info('Merged pull request not indexed yet. Retrying in 15 seconds...');
+                await new Promise((resolve) => setTimeout(resolve, 15000));
+                mergedPullRequest = await findMergedPullRequest();
+              }
+
+              if (mergedPullRequest) {
+                const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                  owner,
+                  repo,
+                  pull_number: mergedPullRequest.number,
+                  per_page: 100,
+                });
+
+                const approvalState = new Map();
+                for (const review of reviews) {
+                  const login = review.user?.login;
+                  if (!admins.includes(login) || login === mergedPullRequest.user.login) {
+                    continue;
+                  }
+                  if (review.state === 'APPROVED') {
+                    approvalState.set(login, 'APPROVED');
+                    continue;
+                  }
+                  if (review.state === 'CHANGES_REQUESTED' || review.state === 'DISMISSED') {
+                    approvalState.delete(login);
+                  }
+                }
+
+                const approvingAdmins = admins.filter((login) => approvalState.get(login) === 'APPROVED');
+                if (approvingAdmins.length === 0) {
+                  core.setFailed(
+                    `PR #${mergedPullRequest.number} does not have an active admin approval. Deployment was not started.`
+                  );
+                  return;
+                }
+
+                approvedBy = approvingAdmins[0];
+                reviewNotes = `Merged PR #${mergedPullRequest.number} approved by ${approvedBy}.`;
+              }
+            }
+
+            const deployKind = isFeatureBranch ? 'feature-branch-preview' : 'develop-integration';
+            await github.rest.actions.createWorkflowDispatch({
+              owner,
+              repo,
+              workflow_id: 'deploy.yml',
+              ref: 'develop',
+              inputs: {
+                git_ref: sha,
+                source_branch: ref,
+                branch_details: `[${deployKind}] branch=${ref}`,
+                code_review_notes: reviewNotes,
+                version_audit: 'true',
+                deploy_target: 'auto',
+              },
+            });
+
+            await core.summary
+              .addHeading('Auto Deploy Develop Dispatch')
+              .addRaw(`Triggered deploy.yml for \`${ref}\` at \`${sha}\`.`)
+              .addBreak()
+              .addRaw(`Kind: ${deployKind}`)
+              .addBreak()
+              .addRaw(`Approved by: ${approvedBy}`)
+              .write();

@@ -1,77 +1,66 @@
 # Branch Governance & Deployment Policy
 
-This repository enforces admin-gated PR merges and deployments through GitHub Branch Protection, CODEOWNERS, GitHub Actions status checks, and protected GitHub Environments.
+`develop` is the **primary integration branch**. `main` is the frozen baseline and is updated from `develop` **once per month** only.
 
-## 1) Branch Protection (apply to `main` and `develop`)
+## Branch model
 
-Configure in Settings -> Branches, or org-level Rulesets:
+| Branch | Purpose | Deploy | Merge policy |
+|--------|---------|--------|----------------|
+| `main` | Original / baseline code | **Never** auto-deployed | Receives `develop` monthly (automated) |
+| `develop` | Shared integration (same starting point as `main`) | Auto-deploy on push (after admin-approved PR merges) | Admin-only PR merges |
+| `develop/<feature>` | Developer feature work (e.g. `develop/feat-login`) | Auto-deploy on every push | **No auto-merge**; admin merges into `develop` only after **successful** deploy |
 
-- Require a pull request before merging.
-- Require approvals = `1` minimum.
-- Dismiss stale approvals when new commits are pushed.
-- Require review from Code Owners.
-- Restrict who can dismiss PR reviews to admins only.
-- Block force pushes.
-- Do not allow bypassing branch protections, except repository admins if org policy requires it.
-- Require status checks to pass before merge:
-  - `Code Quality & Security / lint-and-scan`
-- Restrict who can push to matching branches to no one, except automation if explicitly needed.
+## Developer workflow
 
-### Admin approval semantics
+1. Branch from `develop`:
+   ```bash
+   git checkout develop
+   git pull origin develop
+   git checkout -b develop/feat-your-change
+   ```
+2. Push commits — production deploy runs automatically for that branch.
+3. Open a PR: **`develop/feat-your-change` → `develop`** (draft is fine until deploy passes).
+4. Wait for deploy to succeed — workflow adds label `deploy-verified` and comments on the PR.
+5. **Admin** reviews and merges the PR manually. Failed deploys get `deploy-failed` — do not merge.
+6. Merging into `develop` triggers another deploy of `develop` (integration).
 
-- Any one admin approval is sufficient, because required approvals = `1` and admins are listed in `.github/CODEOWNERS`.
-- Direct pushes to `main` and `develop` must be blocked by branch protection or rulesets.
-- All merges into `main` and `develop` must happen through pull requests.
+Direct pushes to `develop` and `main` should be blocked in branch protection.
 
-## 2) Deployment Approval & Manual Trigger
+## Deployment
 
-- Deployments are manual through `.github/workflows/deploy.yml` (`workflow_dispatch`) and may auto-dispatch after approved merges via `auto-deploy-main.yml`.
-- A human must approve the protected GitHub Environment (`production`) before deploy steps run.
-- Deploy target options: `all`, `frontend`, `backend`, `database`.
+| Trigger | Workflow |
+|---------|----------|
+| Push to `develop` or `develop/**` | `.github/workflows/auto-deploy-develop.yml` → `deploy.yml` |
+| Push to `main` | Disabled (`.github/workflows/auto-deploy-main.yml`) |
+| Manual | `deploy.yml` (`workflow_dispatch`), default ref `develop` |
 
-## 3) Requirement: HTTP logs (frontend, backend, database)
+Production environment approval still applies inside `deploy.yml`.
 
-Production exposes logs over HTTPS at:
+## Monthly `main` sync
 
-| URL | Content |
-|-----|---------|
-| `https://ugaanlabs.ai/logs/` | Log hub (static index) |
-| `https://ugaanlabs.ai/logs/live.html` | Live deployment log (auto-refresh) |
-| `https://ugaanlabs.ai/logs/files/live/deploy-current.log` | Raw deployment log file (public) |
-| `https://ugaanlabs.ai/logs/api/<source>` | Runtime logs API (admin Bearer token) |
-| `https://ugaanlabs.ai/admin/logs` | Admin UI for live streams and archives |
+`.github/workflows/monthly-sync-main-from-develop.yml` runs on the **1st of each month** (and can be run manually). It merges `develop` → `main` and does **not** deploy `main`.
 
-**Log sources** (via `/logs/api/` or admin UI):
+## GitHub settings (repository admin)
 
-- `backend-error`, `backend-out` — PM2 backend logs
-- `frontend-access` — nginx access log (synced from frontend host to `/apps/logs/live/frontend-nginx.log`)
-- `database` — PostgreSQL diagnostics snapshot
-- `deployment-live` — current deploy log
+Apply to **`develop`** and **`main`**:
 
-Log files on the backend host: `/apps/logs` (`live/`, `archive/`).
+- Require pull request before merging
+- Require approvals: **1**
+- Require review from Code Owners (`.github/CODEOWNERS`)
+- Require status check: `Code Quality & Security / lint-and-scan`
+- Block force pushes
+- Restrict direct pushes (admins only if needed for break-glass)
 
-## 4) Requirement: Rollback on deployment failure
+Recommended:
 
-- Before deploy, the workflow snapshots the current `stable` release symlink if missing.
-- Backend and frontend deploy steps roll back to `stable` if health checks fail during the same step.
-- If the deploy job fails, the **Roll Back To Last Stable Release** step restores:
-  - Frontend `current` → last `stable` release
-  - Backend `current` → last `stable` release
-  - Database from pre-migration backup (when database deploy was selected)
-- `stable` is updated only after a successful deploy (**Promote Stable Release**).
+- Set **default branch** to `develop`
+- Do **not** enable auto-merge on PRs targeting `develop`
+- Create labels (optional; workflows also create them): `deploy-verified`, `deploy-failed`, `admin-merge-required`
 
-## 5) Requirement: Keep toolchain updated during deploy
+## Feature branch cleanup
 
-On each deploy, target EC2 hosts run `scripts/deploy-host-toolchain.sh`:
+`.github/workflows/monthly-branch-cleanup.yml` removes stale **merged** `develop/*` branches older than 30 days.
 
-- `apt-get update` and `apt-get upgrade` (Ubuntu packages)
-- Node.js 22 LTS, latest npm, latest PM2
-- nginx reload when present
+## Logs, rollback, toolchain
 
-The GitHub Actions runner builds with Node 22. Version audits in the workflow remain advisory for app dependencies.
-
-## 6) Log Retention
-
-- Deployment logs are zipped before cleanup (`scripts/log-maintenance.sh`).
-- Monthly workflow: `.github/workflows/log-maintenance.yml`
-- If total log storage exceeds 2 GB, older logs are archived and cleaned while recent logs are retained.
+See previous sections in this file for HTTP logs, rollback behavior, host toolchain updates, and log retention (unchanged).

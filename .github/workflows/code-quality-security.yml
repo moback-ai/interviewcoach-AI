@@ -3,6 +3,10 @@ name: Code Quality & Security
 on:
   pull_request:
     branches: [main, develop]
+  push:
+    branches:
+      - develop
+      - 'develop/**'
   workflow_dispatch:
 
 permissions:
@@ -18,9 +22,10 @@ jobs:
 
       - name: Detect changed areas
         id: changes
-        if: github.event_name == 'pull_request'
+        if: github.event_name != 'workflow_dispatch'
         uses: dorny/paths-filter@v4
         with:
+          base: develop
           filters: |
             frontend:
               - 'frontend/**'
@@ -31,7 +36,7 @@ jobs:
               - 'scripts/**'
 
       - name: Validate governance files
-        if: github.event_name == 'workflow_dispatch' || steps.changes.outputs.governance == 'true'
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || steps.changes.outputs.governance == 'true'
         run: |
           ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_file(file); puts "ok #{file}" }' .github/workflows/*.yml
           bash -n scripts/log-maintenance.sh
