@@ -27,15 +27,23 @@ from Interview_functions import (
 
 
 class InterviewManager:
+    @classmethod
+    def from_config(cls, config, model="llama3"):
+        """Build manager without writing a temp JSON file (faster per /generate-response)."""
+        instance = cls.__new__(cls)
+        instance._init_new_session(model, config)
+        return instance
+
     def __init__(self, model="llama3", config_path="interview_config.json"):
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        self._init_new_session(model, config)
+
+    def _init_new_session(self, model, config):
         self.model = model
         self.api_call_count = 0
         self.stage = "introduction"
         self.conversation_history = []
-
-        # Load config
-        with open(config_path, "r") as f:
-            config = json.load(f)
 
         self.job_title = config.get("job_title", "this role")
         self.job_description = config.get("job_description", "")
@@ -269,15 +277,15 @@ class InterviewManager:
             print("[DEBUG] Job explanation confirmed by LLM. Resetting retry count and setting job_description_shown = True")
 
 
-        intro_status = None
-        if self.job_description_shown and not self.job_qna_done:
-            job_done_check = assess_intro_progress(self.conversation_history)
-            if job_done_check == "continue":
+        if self.job_qna_done:
+            intro_status = "continue"
+            print("[DEBUG] job_qna_done already set — skipping extra assess_intro_progress")
+        elif self.job_description_shown:
+            intro_status = assess_intro_progress(self.conversation_history)
+            if intro_status == "continue":
                 self.job_qna_done = True
-                intro_status = "continue"
                 print("[DEBUG] Job Q&A finished. Marking job_qna_done = True")
-
-        if intro_status is None:
+        else:
             intro_status = assess_intro_progress(self.conversation_history)
         print(f"[DEBUG] assess_intro_progress → {intro_status}")
 

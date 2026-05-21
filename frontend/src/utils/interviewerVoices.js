@@ -165,7 +165,11 @@ export function persistVoicePresetChoice(presetId, { manual = true } = {}) {
 }
 
 export function getInterviewerVoicePreset(presetId) {
-  return INTERVIEWER_VOICE_PRESETS.find((preset) => preset.id === presetId) || INTERVIEWER_VOICE_PRESETS[0];
+  return (
+    INTERVIEWER_VOICE_PRESETS.find((preset) => preset.id === presetId)
+    || INTERVIEWER_VOICE_PRESETS.find((preset) => preset.id === 'ava')
+    || INTERVIEWER_VOICE_PRESETS[0]
+  );
 }
 
 export function canUseBrowserSpeech() {

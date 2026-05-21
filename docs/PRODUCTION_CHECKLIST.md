@@ -55,6 +55,7 @@ Store in **AWS Secrets Manager** (`interviewcoach/prod/app`) or API `.env`. Do n
 | `OLLAMA_HOST` | `http://<AI_PRIVATE_IP>:11434` |
 | `OLLAMA_HEALTH_URL` | `http://<AI_PRIVATE_IP>:11434/api/tags` |
 | `OLLAMA_MODEL` | `llama3.2:3b` |
+| `OLLAMA_NUM_PREDICT` | `384` (lower = faster replies) |
 | `SMTP_*` / `MAIL_FROM` | Live SMTP |
 
 ### Performance (interviews + uploads)
@@ -164,7 +165,19 @@ curl -s https://ugaanlabs.ai/api/health | python3 -m json.tool
 
 ---
 
-## 8. Do not (stays under $650)
+## 8. Code optimizations (in repo)
+
+| Change | Benefit |
+|--------|---------|
+| `InterviewManager.from_config` | No temp JSON file per interview turn |
+| Session caches question config | Skips repeat DB question queries |
+| `OLLAMA_NUM_PREDICT` | Caps LLM length → faster replies |
+| Intro stage skips duplicate `assess_intro` | One fewer Ollama call when job Q&A done |
+| Browser voice default (Ava) | No server TTS wait |
+
+---
+
+## 9. Do not (stays under $650)
 
 - Run all EC2 **24/7** unless you accept higher bills  
 - Second AI server without raising budget  
