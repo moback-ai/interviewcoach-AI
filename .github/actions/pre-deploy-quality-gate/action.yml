@@ -75,10 +75,12 @@ runs:
 
     - name: Gate · Summary
       shell: bash
+      env:
+        GATE_GIT_REF: ${{ inputs.git_ref }}
       run: |
         {
           echo "## Quality gate passed"
-          echo "- Ref: \`${{ inputs.git_ref }}\`"
+          echo "- Ref: \`${GATE_GIT_REF}\`"
           echo "- Merge conflicts with develop: none"
           echo "- Frontend lint, build, login bundle: ok"
           echo "- Backend pytest: ok"
