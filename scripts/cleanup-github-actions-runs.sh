@@ -114,12 +114,22 @@ fi
 echo "Repository: ${REPO}"
 echo "Total runs: ${total} — deleting ${#UNIQUE_DELETE[@]} (keep ${KEEP_DAYS} days, max ${MAX_RUNS} runs)"
 
+CURRENT_RUN_ID="${GITHUB_RUN_ID:-}"
+
 for id in "${UNIQUE_DELETE[@]}"; do
+  if [[ -n "$CURRENT_RUN_ID" && "$id" == "$CURRENT_RUN_ID" ]]; then
+    echo "Skip run ${id} (current workflow run)"
+    continue
+  fi
   if (( DRY_RUN )); then
     echo "[dry-run] would delete run ${id}"
-  else
-    gh api --method DELETE "repos/${REPO}/actions/runs/${id}" >/dev/null
+    continue
+  fi
+  if gh api --method DELETE "repos/${REPO}/actions/runs/${id}" >/dev/null 2>&1; then
     echo "Deleted run ${id}"
+  else
+    # 404 = already removed or not deletable — do not fail the maintenance job
+    echo "Skip run ${id} (not found or not deletable)"
   fi
 done
 
