@@ -1,6 +1,7 @@
 name: Deploy · Auto (develop)
 
-# Requires admin-approved PR → dispatches deploy.yml → production environment approval.
+# Merged PR on develop → quality gate → dispatches deploy.yml → production environment approval (admin).
+# PR GitHub "Approve" review is not required before merge; admins approve in the production environment.
 
 on:
   # Only integration merges — feature work runs Security on the PR, not deploy.
@@ -48,10 +49,10 @@ jobs:
             exit 0
           fi
           echo "proceed=false" >> "$GITHUB_OUTPUT"
-          echo "Skipped: direct push to develop does not deploy. Merge an admin-approved PR (Option A) or use Deploy · Production (Option B)."
+          echo "Skipped: direct push to develop does not deploy. Merge a PR into develop (Option A) or use Deploy · Production (Option B)."
 
-  validate_admin_pr_approval:
-    name: Validate PR approval
+  resolve_deploy:
+    name: Resolve deploy target
     needs: [deploy_trigger_gate]
     if: needs.deploy_trigger_gate.outputs.proceed == 'true'
     runs-on: ubuntu-latest
@@ -62,16 +63,14 @@ jobs:
       review_notes: ${{ steps.meta.outputs.review_notes }}
       deploy_kind: ${{ steps.meta.outputs.deploy_kind }}
     steps:
-      - name: Resolve branch, SHA, and admin approval
+      - name: Resolve branch, SHA, and PR metadata
         id: meta
         uses: actions/github-script@v7
         env:
-          ADMINS: '["govardhanreddy66","KFKishore23"]'
           INPUT_REF: ${{ github.event.inputs.git_ref }}
           INPUT_SHA: ${{ github.event.inputs.git_sha }}
         with:
           script: |
-            const admins = JSON.parse(process.env.ADMINS);
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
@@ -101,33 +100,9 @@ jobs:
             const deploySha = await resolveSha();
             const isFeatureBranch = ref.startsWith('develop/') && ref !== 'develop';
 
-            const activeAdminApprovals = async (pullNumber) => {
-              const reviews = await github.paginate(github.rest.pulls.listReviews, {
-                owner,
-                repo,
-                pull_number: pullNumber,
-                per_page: 100,
-              });
-              const approvalState = new Map();
-              for (const review of reviews) {
-                const login = review.user?.login;
-                if (!admins.includes(login)) {
-                  continue;
-                }
-                if (review.state === 'APPROVED') {
-                  approvalState.set(login, 'APPROVED');
-                  continue;
-                }
-                if (review.state === 'CHANGES_REQUESTED' || review.state === 'DISMISSED') {
-                  approvalState.delete(login);
-                }
-              }
-              return admins.filter((login) => approvalState.get(login) === 'APPROVED');
-            };
-
             let pullRequest;
-            let approvedBy = '';
             let reviewNotes = '';
+            const approvedBy = 'develop-merge-quality-gate';
 
             if (isFeatureBranch) {
               const openPulls = await github.rest.pulls.list({
@@ -139,20 +114,12 @@ jobs:
               });
               if (!openPulls.data.length) {
                 core.setFailed(
-                  `No open PR from ${ref} to develop. Open a PR and get admin approval before deploy.`
+                  `No open PR from ${ref} to develop. Open a PR before using Deploy · Auto for this branch.`
                 );
                 return;
               }
               pullRequest = openPulls.data[0];
-              const approvingAdmins = await activeAdminApprovals(pullRequest.number);
-              if (!approvingAdmins.length) {
-                core.setFailed(
-                  `PR #${pullRequest.number} requires admin approval before deploy. Approvers: ${admins.join(', ')}`
-                );
-                return;
-              }
-              approvedBy = approvingAdmins[0];
-              reviewNotes = `Feature deploy for PR #${pullRequest.number} approved by ${approvedBy}.`;
+              reviewNotes = `Feature-branch deploy for open PR #${pullRequest.number} (quality gate + production approval).`;
             } else {
               const commitMessage =
                 context.payload.head_commit?.message || `workflow_dispatch ${ref}`;
@@ -184,20 +151,12 @@ jobs:
               pullRequest = await findMergedPullRequest();
               if (!pullRequest) {
                 core.setFailed(
-                  'develop deploy requires a merged PR into develop with admin approval. Direct pushes are not deployable.'
+                  'develop deploy requires a merged PR into develop. Direct pushes are not deployable.'
                 );
                 return;
               }
 
-              const approvingAdmins = await activeAdminApprovals(pullRequest.number);
-              if (!approvingAdmins.length) {
-                core.setFailed(
-                  `Merged PR #${pullRequest.number} does not have active admin approval. Deployment blocked.`
-                );
-                return;
-              }
-              approvedBy = approvingAdmins[0];
-              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} approved by ${approvedBy}.`;
+              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} (quality gate + production environment approval).`;
             }
 
             const deployKind = isFeatureBranch ? 'feature-branch' : 'develop-integration';
@@ -213,30 +172,30 @@ jobs:
               .addBreak()
               .addRaw(`SHA: \`${deploySha}\``)
               .addBreak()
-              .addRaw(`Admin approval: ${approvedBy}`)
+              .addRaw(`Gate: quality checks, then **production** environment approval (@govardhanreddy66 / @KFKishore23).`)
               .addBreak()
-              .addRaw(`Next: quality gate (lint, build, tests, merge conflicts), then production approval.`)
+              .addRaw(`PR GitHub Approve review is not required before merge.`)
               .write();
 
   pre_deploy_quality:
     name: Quality gate
     runs-on: ubuntu-latest
-    needs: [validate_admin_pr_approval]
+    needs: [resolve_deploy]
     steps:
       - name: Gate · Checkout (required for local composite action)
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}
+          ref: ${{ needs.resolve_deploy.outputs.deploy_sha }}
           fetch-depth: 0
       - name: Gate · Scan, test, and conflict check
         uses: ./.github/actions/pre-deploy-quality-gate
         with:
-          git_ref: ${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}
+          git_ref: ${{ needs.resolve_deploy.outputs.deploy_sha }}
 
   dispatch_production_deploy:
     name: Dispatch deploy
     runs-on: ubuntu-latest
-    needs: [validate_admin_pr_approval, pre_deploy_quality]
+    needs: [resolve_deploy, pre_deploy_quality]
     steps:
       - name: Dispatch deploy workflow
         uses: actions/github-script@v7
@@ -244,11 +203,11 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const ref = '${{ needs.validate_admin_pr_approval.outputs.source_branch }}';
-            const sha = '${{ needs.validate_admin_pr_approval.outputs.deploy_sha }}';
-            const approvedBy = '${{ needs.validate_admin_pr_approval.outputs.approved_by }}';
-            const reviewNotes = '${{ needs.validate_admin_pr_approval.outputs.review_notes }}';
-            const deployKind = '${{ needs.validate_admin_pr_approval.outputs.deploy_kind }}';
+            const ref = '${{ needs.resolve_deploy.outputs.source_branch }}';
+            const sha = '${{ needs.resolve_deploy.outputs.deploy_sha }}';
+            const approvedBy = '${{ needs.resolve_deploy.outputs.approved_by }}';
+            const reviewNotes = '${{ needs.resolve_deploy.outputs.review_notes }}';
+            const deployKind = '${{ needs.resolve_deploy.outputs.deploy_kind }}';
 
             await github.rest.actions.createWorkflowDispatch({
               owner,
@@ -270,7 +229,5 @@ jobs:
               .addHeading('Production deploy dispatched')
               .addRaw(`deploy.yml started for \`${ref}\` @ \`${sha}\`.`)
               .addBreak()
-              .addRaw(`PR approved by: ${approvedBy}`)
-              .addBreak()
-              .addRaw(`Quality gate passed. Waiting for production environment approval in deploy.yml.`)
+              .addRaw(`Quality gate passed. Waiting for **production** environment approval in deploy.yml (admin).`)
               .write();
