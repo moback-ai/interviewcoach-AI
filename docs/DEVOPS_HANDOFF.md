@@ -44,9 +44,10 @@
 
 - Work on `develop/<your-feature>` → PR into **`develop`**
 - **Do not push directly to `develop`**
-- **Admin approval** required before merge: **@govardhanreddy66** or **@KFKishore23**
+- Merge PR into **`develop`** (no direct push) → auto-deploy runs **quality gate**, then **production** approval (**@govardhanreddy66** / **@KFKishore23** in GitHub Actions)
+- PR **GitHub Approve** review before merge is **not** required
 - Production deploys from **`develop` only** — `main` is not deployed
-- If deploy fails: **Actions → Deploy · Production → Run workflow** with `git_ref` = `develop`
+- Manual deploy: **Actions → Deploy · Production** → `git_ref` = `develop` → admin approves **production** environment
 - After deploy, verify:
   - https://ugaanlabs.ai/api/health
   - https://ugaanlabs.ai/login
@@ -129,7 +130,7 @@ Runs automatically before **Deploy · Production**. **Deploy is blocked** if any
 
 | Issue | What devs see |
 |-------|----------------|
-| PR merged without admin **Approve** | Auto-deploy skips or stops |
+| Direct push to `develop` (no PR merge) | Auto-deploy skipped |
 | Quality gate red | Fix code/conflicts, merge again or manual redeploy |
 | Production environment not approved | Deploy job waits/fails until admin approves in Actions |
 
