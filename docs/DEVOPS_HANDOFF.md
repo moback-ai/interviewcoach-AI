@@ -165,39 +165,71 @@ python -m pytest backend/tests/ -q
 
 ## Log access — request, approval, grant, revoke
 
-Admin logs are **not public**. Access is granted only after an approved **domain email** request. Use **Slack** only to notify (not as the official approval record).
+Admin logs are **not public**. Access is granted only after an approved **domain email** request. There is **no shared DevOps mailbox** — use the approvers’ **personal moback.com emails** below. **Slack** is for pings only; approval must be on the **email thread**.
 
 **Log viewer:** https://ugaanlabs.ai/admin/logs (after access is granted)
 
-**Who can approve:** @govardhanreddy66 or @KFKishore23 (or designated admin on the email thread)
+**GitHub / deploy admins (unchanged — do not add log viewers here):** only **@govardhanreddy66** and **@KFKishore23** can approve PRs and production deploys. `ADMIN_LOG_VIEWER_EMAILS` gives **app log UI only** — not GitHub repo access, not merge rights, not AWS.
 
-**DevOps mailbox (example):** `devops@ugaanlabs.ai` — replace with your real alias
+**Contacts (approvers + grant access on server):**
 
-### Flow
+| Channel | Contact |
+|---------|---------|
+| Email | `govardhanr@moback.com`, `kishoren@moback.com` |
+| Slack | **Govardhan Reddy G**, **Kishore** (optional ping only) |
 
-1. Requester sends **Request** email (template below) → DevOps + Admin CC
-2. Admin replies on the **same thread** with **Approval** (template below)
-3. DevOps adds username or email to AWS secret / API env:
-   - `ADMIN_LOG_VIEWER_USERNAMES` and/or `ADMIN_LOG_VIEWER_EMAILS`
-4. DevOps restarts API: `pm2 restart backend` (or `apply-backend-env.sh --apply`)
-5. DevOps sends **Grant** email on the same thread
-6. Optional: short Slack post — “Log access granted to &lt;user&gt; until &lt;date&gt;”
-7. On expiry or offboarding: remove from env, restart backend, send **Revoke** email
+---
 
-### Email template — Request (requester → DevOps + Admin)
+### Quick guide — how to request (for devs)
+
+1. Send email **To:** `govardhanr@moback.com`, `kishoren@moback.com` (both addresses — or **To** one, **Cc** the other).
+2. Use subject: `[Log Access] Request — <Your Name> — <YYYY-MM-DD>`
+3. Include: app username, app email, reason, from/until dates (template below).
+4. Optional: Slack message to **Govardhan Reddy G** or **Kishore** — “Sent log access email, subject: …”
+5. Wait for **Approved** reply on the same email thread, then **Access granted** reply.
+6. Log in at https://ugaanlabs.ai and open https://ugaanlabs.ai/admin/logs
+
+**Slack-only requests are not accepted** — send email first.
+
+---
+
+### Quick guide — how to approve (Govardhan / Kishore)
+
+**If request came by email:**
+
+1. Open the email thread.
+2. **Reply all** with the Approval template below.
+3. Whoever has server access: add user to `ADMIN_LOG_VIEWER_USERNAMES` and/or `ADMIN_LOG_VIEWER_EMAILS` (AWS Secrets Manager), restart API (`apply-backend-env.sh --apply` or `pm2 restart backend` on API host).
+4. **Reply all** again with the Grant template below.
+
+**If request came by Slack only:**
+
+Reply: *“Please email govardhanr@moback.com and kishoren@moback.com with the log access request details. We approve on the email thread only.”*
+
+---
+
+### Full flow
+
+1. Requester emails **both** approvers (see template)
+2. Optional Slack ping for visibility
+3. **Govardhan** or **Kishore** replies **Approved** on same thread
+4. Approver (or whoever runs AWS) updates env + restarts API
+5. Approver sends **Access granted** on same thread
+6. On expiry/offboarding: remove from env, restart, send **Revoke** email
+
+### Email template — Request (requester → approvers)
 
 ```
 Subject: [Log Access] Request — <Your Name> — <YYYY-MM-DD>
 
-To: devops@ugaanlabs.ai
-Cc: <admin@ugaanlabs.ai>
+To: govardhanr@moback.com, kishoren@moback.com
 
 Hi,
 
 I request access to production admin logs for InterviewCoach.
 
 App username: <username>
-App email: <your@company-domain.com>
+App email: <your@moback.com or login email>
 Reason: <incident / debugging / release support — be specific>
 Access needed from: <YYYY-MM-DD>
 Access needed until: <YYYY-MM-DD> (max 30 days unless approved otherwise)
@@ -208,22 +240,22 @@ Thanks,
 <Name>
 ```
 
-### Email template — Approval (admin reply-all on same thread)
+### Email template — Approval (Govardhan or Kishore — reply all)
 
 ```
 Subject: Re: [Log Access] Request — <Name> — <YYYY-MM-DD>
 
 Approved.
 
-Approver: <Admin name>
+Approver: <Govardhan Reddy G / Kishore>
 Approved for: <username / email>
 Valid from: <YYYY-MM-DD>
 Valid until: <YYYY-MM-DD>
 
-DevOps: please grant per SOP and reply when done.
+Will grant access on server and confirm on this thread.
 ```
 
-### Email template — Grant (DevOps reply-all on same thread)
+### Email template — Grant (reply all after env update + restart)
 
 ```
 Subject: Re: [Log Access] Request — <Name> — <YYYY-MM-DD>
@@ -238,7 +270,7 @@ URL: https://ugaanlabs.ai/admin/logs
 Please log in with your app account and open the link above.
 If access does not work within 15 minutes, reply on this thread.
 
-DevOps
+<Govardhan / Kishore>
 ```
 
 ### Email template — Revoke (DevOps reply-all on same thread)
@@ -250,18 +282,18 @@ Log access has been revoked for <username / email> as of <YYYY-MM-DD HH:MM IST>.
 
 Reason: <expiry / offboarding / request closed>
 
-DevOps
+<Govardhan / Kishore>
 ```
 
-### DevOps checklist (grant)
+### Checklist — grant (Govardhan / Kishore)
 
-- [ ] Approval email present on thread from authorized admin
+- [ ] Approval email present on thread from **`govardhanr@moback.com` or `kishoren@moback.com`**
 - [ ] Add to `ADMIN_LOG_VIEWER_USERNAMES` and/or `ADMIN_LOG_VIEWER_EMAILS` in Secrets Manager
 - [ ] `apply-backend-env.sh --apply` or `pm2 restart backend` on API host
 - [ ] Send Grant email with expiry date
 - [ ] Calendar reminder to revoke on expiry date
 
-### DevOps checklist (revoke)
+### Checklist — revoke (Govardhan / Kishore)
 
 - [ ] Remove username/email from viewer lists
 - [ ] Restart backend
@@ -274,4 +306,4 @@ DevOps
 
 - Production is live and synced on GitHub
 - Devs: pull **`develop`** and branch from it for new work
-- Log access: **email request + admin approval** (templates above); not public
+- Log access: email **govardhanr@moback.com** + **kishoren@moback.com** (no shared DevOps mailbox); Slack **Govardhan Reddy G** / **Kishore** for pings only
