@@ -8,10 +8,7 @@ import {
   Clock,
   Target
 } from 'lucide-react';
-import { useTheme } from '@/hooks/useTheme';
-
 function FeedbackLoading({ progress = 0, onProgressComplete }) {
-  const { isDark } = useTheme();
   const [currentStep, setCurrentStep] = useState(0);
 
   const steps = [

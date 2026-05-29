@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings } from 'react-icons/fi';
-import { useAuth } from '../contexts/AuthContext';
-import { useTheme } from '../hooks/useTheme';
 import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -45,13 +43,10 @@ const parseApiJson = async (response, fallbackMessage) => {
 };
 
 function DashboardPage() {
-  const { theme } = useTheme();
-  const { user } = useAuth();
   const navigate = useNavigate();
   const { setIsOperationInProgress } = useOperation();
   const [loading, setLoading] = useState(true);
   const [selectedPairings, setSelectedPairings] = useState(new Set());
-  const [expandedDescriptions, setExpandedDescriptions] = useState(new Set());
   const [resumeJobPairings, setResumeJobPairings] = useState([]);
   const [error, setError] = useState(null);
   const [modalContent, setModalContent] = useState(null);
@@ -73,12 +68,13 @@ function DashboardPage() {
   // ✅ ADD: Split and Blend mode percentage sliders
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
-  const [questionValidationError, setQuestionValidationError] = useState('');
+  const [, setQuestionValidationError] = useState('');
   // Add state for loading overall performance
 
 
   useEffect(() => {
     fetchDashboardData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load dashboard once on mount
   }, []);
 
     // Check if any questions are being regenerated
@@ -131,18 +127,6 @@ function DashboardPage() {
     });
   };
 
-  const handleToggleDescription = (pairingId) => {
-    setExpandedDescriptions(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(pairingId)) {
-        newSet.delete(pairingId);
-      } else {
-        newSet.add(pairingId);
-      }
-      return newSet;
-    });
-  };
-
   const openJobDescriptionModal = (jobTitle, jobDescription) => {
     setModalContent({ title: jobTitle, description: jobDescription });
     setIsModalOpen(true);
@@ -151,35 +135,6 @@ function DashboardPage() {
   const closeModal = () => {
     setIsModalOpen(false);
     setModalContent(null);
-  };
-
-  const handleViewQuestions = (questionSetId, pairing) => {
-    // Navigate to questions page with resume_id and jd_id
-    const url = `/questions?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}&question_set=${questionSetId.split('-').pop()}`;
-    window.location.href = url;
-  };
-
-  const handleViewSummary = (questionSetId, pairing) => {
-    const questionSetNumber = Number(String(questionSetId).split('-').pop());
-    const questionSet = pairing.questionSets?.find(
-      (item) => Number(item.questionSetNumber) === questionSetNumber
-    );
-    const completedInterviews = (questionSet?.interviews || [])
-      .filter((interview) => interview.status === 'completed' || interview.status === 'ENDED')
-      .sort((a, b) => new Date(b.scheduled_at || b.created_at || 0) - new Date(a.scheduled_at || a.created_at || 0));
-    const latestCompleted = completedInterviews[0];
-
-    if (!latestCompleted?.id) {
-      setNoticeModal({
-        isOpen: true,
-        title: 'Summary not ready',
-        message: 'No completed interview summary is available for this question set yet.',
-        variant: 'info',
-      });
-      return;
-    }
-
-    navigate(`/interview-feedback?interview_id=${latestCompleted.id}`);
   };
 
   const handleRegenerateQuestions = async (pairing) => {
@@ -320,30 +275,6 @@ function DashboardPage() {
     }
   };
 
-  const handleScheduleInterview = (pairingId) => {
-    const pairing = resumeJobPairings.find((item) => item.id === pairingId);
-    if (!pairing) {
-      setNoticeModal({
-        isOpen: true,
-        title: 'Pairing not found',
-        message: 'Refresh the dashboard and try again.',
-        variant: 'error',
-      });
-      return;
-    }
-
-    const questionSets = pairing.questionSets || [];
-    if (!questionSets.length) {
-      navigate(`/questions?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}`);
-      return;
-    }
-
-    const latestSet = [...questionSets].sort(
-      (a, b) => Number(b.questionSetNumber) - Number(a.questionSetNumber)
-    )[0];
-    handleViewQuestions(`set-${latestSet.questionSetNumber}`, pairing);
-  };
-
   const handleDownloadResume = async (pairing, e) => {
     e.stopPropagation(); // Prevent triggering the pairing selection
     
@@ -401,27 +332,6 @@ function DashboardPage() {
         return newSet;
       });
     }
-  };
-
-  // Retake requests are now handled directly in InterviewHistoryCard
-  // This function is kept for future use if needed
-  const handleRetakeRequest = (retakeInterview) => {
-    // Refresh the dashboard to show the new interview
-    fetchDashboardData();
-  };
-
-  // Helper function to format file size
-  const formatFileSize = (bytes) => {
-    if (!bytes) return 'Unknown size';
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
-  };
-
-  // Helper function to get file extension
-  const getFileExtension = (filename) => {
-    if (!filename) return 'Unknown';
-    return filename.split('.').pop()?.toUpperCase() || 'Unknown';
   };
 
   // Helper function to call backend API for question generation
@@ -789,7 +699,6 @@ function DashboardPage() {
                            key={questionSet.id}
                            questionSet={questionSet}
                            pairing={pairing}
-                           onRetakeRequest={handleRetakeRequest}
                            isRegenerating={regeneratingQuestions.has(pairing.id)}
                            isAnyRegenerating={isGeneratingQuestions}
                          />

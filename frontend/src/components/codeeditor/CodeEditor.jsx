@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Editor } from '@monaco-editor/react';
-import { motion } from 'framer-motion';
 import {
   PlayIcon,
   StopIcon,
@@ -22,14 +21,14 @@ const CodeEditor = ({
   onSave,
   saveLang,
   isRunning = false,
-  output = '',
+  output: _output = '',
   errors = '',
   testResults = null,
   executionTime = 0
 }) => {
   const [code, setCode] = useState(initialCode);
   const [canRun, setCanRun] = useState(true);
-  const [canTest, setCanTest] = useState(true);
+  const [, setCanTest] = useState(true);
   const [selectedLanguage, setSelectedLanguage] = useState(language);
   const [fontSize, setFontSize] = useState(14);
   const [theme, setTheme] = useState('vs-dark');

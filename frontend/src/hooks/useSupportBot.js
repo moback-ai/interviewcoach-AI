@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { apiPost } from '../api';
 
 export const useSupportBot = () => {
-  const { user, isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [conversation, setConversation] = useState([]);

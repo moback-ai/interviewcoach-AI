@@ -31,9 +31,22 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['warn', { varsIgnorePattern: '^[A-Z_]' }],
+      'no-unused-vars': [
+        'warn',
+        {
+          varsIgnorePattern: '^[A-Z_]|^motion$|^Icon$',
+          argsIgnorePattern: '^_|^Icon$',
+          destructuredArrayIgnorePattern: '^_',
+        },
+      ],
       'no-empty': ['warn', { allowEmptyCatch: true }],
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      'react-refresh/only-export-components': [
+        'warn',
+        {
+          allowConstantExport: true,
+          allowExportNames: ['useAuth', 'useTheme', 'useOperation'],
+        },
+      ],
     },
   },
 ])

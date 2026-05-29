@@ -1,10 +1,8 @@
-import React, { useState, useRef, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mic, MicOff, Square, Code } from 'lucide-react'; // ✅ Add Square icon for end button
 import { uploadFile, apiPost, apiDelete } from '../../api';
 import { apiPostInterviewStream } from '../../api/interviewStream';
-import { useAuth } from '../../contexts/AuthContext'; // ✅ Use useAuth hook
-
 import { useChatHistory } from '../../hooks/useChatHistory';
 
 import { trackEvents } from '../../services/mixpanel';
@@ -24,9 +22,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   
-  // ✅ Use useAuth hook to get user
-  const { user } = useAuth();
-
   // Add this state for loading
   const [isEndingInterview, setIsEndingInterview] = useState(false);
   const [currentAudioElement, setCurrentAudioElement] = useState(null);

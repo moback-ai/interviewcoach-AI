@@ -7,14 +7,13 @@ import { apiPost } from '../../api';
 
 const CodeEditorPopup = ({ isOpen, onClose, initialLanguage = 'javascript', questionText, handleEditorSave, maintainCodeAndLang, initialEditorCode }) => {
   const [code, setCode] = useState('');
-  const [codeToSave, setCodeToSave] = useState('');
   const [language, setLanguage] = useState(initialLanguage);
   const [isRunning, setIsRunning] = useState(false);
   const [output, setOutput] = useState('');
   const [errors, setErrors] = useState('');
   const [testResults, setTestResults] = useState(null);
   const [executionTime, setExecutionTime] = useState(0);
-  const [isTestMode, setIsTestMode] = useState(false);
+  const [, setIsTestMode] = useState(false);
 
   // Reset code when popup opens or initialEditorCode changes
 

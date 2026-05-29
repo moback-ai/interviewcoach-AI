@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FiCheckCircle, FiLoader, FiXCircle } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
@@ -8,9 +8,6 @@ import { getBackendOrigin } from '../utils/apiConfig';
 export default function PaymentSuccess() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [status, setStatus] = useState('processing');
-  const [message, setMessage] = useState('Processing your payment...');
-
   useEffect(() => {
     const processPayment = async () => {
       try {
@@ -41,8 +38,6 @@ export default function PaymentSuccess() {
         
         // ✅ Check payment status and redirect accordingly
         if (paymentStatus === 'succeeded' || paymentStatus === 'success' || paymentStatus === 'completed') {
-          setStatus('success');
-          setMessage('Payment successful! Redirecting to interview...');
           
           // Wait a moment for webhook to process, then redirect to interview
           setTimeout(() => {
@@ -52,8 +47,6 @@ export default function PaymentSuccess() {
         } else {
           // ✅ Payment failed or processing - redirect back to questions page
           // Use preserved URL parameters first, fallback to fetching from interview if needed
-          setStatus('error');
-          setMessage('Payment was not successful. Redirecting back to questions...');
           
           // ✅ Use preserved parameters from URL if available
           if (resumeId && jdId) {
@@ -120,8 +113,6 @@ export default function PaymentSuccess() {
         
       } catch (error) {
         console.error('Error processing payment:', error);
-        setStatus('error');
-        setMessage('Error processing payment. Redirecting to dashboard...');
         
         setTimeout(() => {
           navigate('/dashboard');

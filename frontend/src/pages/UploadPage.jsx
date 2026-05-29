@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
 import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
-import { useTheme } from '../hooks/useTheme';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
@@ -16,7 +15,6 @@ import { getSession } from '../lib/authClient';
 import useBodyScrollLock from '../hooks/useBodyScrollLock';
 
 function UploadPage() {
-  const { theme } = useTheme();
   const navigate = useNavigate();
   const { setIsOperationInProgress } = useOperation();
 
@@ -46,7 +44,7 @@ function UploadPage() {
   const [blendMode, setBlendMode] = useState(false);
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
-  const [questionValidationError, setQuestionValidationError] = useState('');
+  const [, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
@@ -689,9 +687,6 @@ function UploadPage() {
       navigate('/dashboard');
     }
   };
-
-  // Check if there's unsaved work that should trigger navigation warnings
-  const hasUnsavedWork = resume || jobDesc || jobTitle.trim() || jobDescription.trim() || loading || parsingJobDesc;
 
   // Check if any critical operations are in progress
   const isCriticalOperationInProgress = loading || parsingJobDesc;

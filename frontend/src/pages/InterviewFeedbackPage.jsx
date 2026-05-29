@@ -15,7 +15,6 @@ import {
   AlertCircle,
   Headphones
 } from 'lucide-react';
-import { useTheme } from '@/hooks/useTheme';
 import Navbar from '@/components/Navbar';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '@/lib/authClient';
@@ -26,7 +25,7 @@ import NoticeModal from '@/components/common/NoticeModal';
 const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, getRatingLabel, getInterviewDuration, getQuestionsAnswered, formatKeyStrengths, formatImprovementAreas) => {
   // Import jsPDF dynamically to avoid SSR issues
   import('jspdf').then(({ default: jsPDF }) => {
-    import('jspdf-autotable').then(({ default: autoTable }) => {
+    import('jspdf-autotable').then(() => {
       const doc = new jsPDF();
       
       // Set document properties
@@ -101,7 +100,7 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
       
       const summary = feedbackData.summary || 'No summary available';
       const summaryLines = doc.splitTextToSize(summary, pageWidth - 2 * margin);
-      summaryLines.forEach((line, index) => {
+      summaryLines.forEach((line) => {
         if (yPosition > doc.internal.pageSize.height - 30) {
           doc.addPage();
           yPosition = 30;
@@ -203,7 +202,7 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
           doc.setTextColor(44, 62, 80);
           
           const messageLines = doc.splitTextToSize(message.content, pageWidth - messageX - margin);
-          messageLines.forEach((line, lineIndex) => {
+          messageLines.forEach((line) => {
             if (yPosition > doc.internal.pageSize.height - 30) {
               doc.addPage();
               yPosition = 30;
@@ -234,7 +233,6 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
 };
 
 function InterviewFeedbackPage() {
-  const { isDark } = useTheme();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const interviewId = searchParams.get('interview_id');
@@ -319,6 +317,7 @@ function InterviewFeedbackPage() {
     
     // Start fetching data immediately
     fetchFeedbackData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch when interview id changes
   }, [interviewId]);
 
   const getOverallRating = () => {
