@@ -46,7 +46,7 @@ runs:
     - name: Gate · Frontend lint
       shell: bash
       working-directory: frontend
-      run: npm run lint
+      run: npm run lint -- --max-warnings 0
 
     - name: Gate · Frontend build and login bundle
       shell: bash
