@@ -23,9 +23,10 @@ if [[ "${INSTALL_FFMPEG:-0}" == "1" ]]; then
   FFMPEG_SCRIPT="${SCRIPT_DIR}/install-ffmpeg-8.sh"
   [[ -f "$FFMPEG_SCRIPT" ]] || FFMPEG_SCRIPT="/tmp/install-ffmpeg-8.sh"
   if [[ -f "$FFMPEG_SCRIPT" ]]; then
-    bash "$FFMPEG_SCRIPT"
+    bash "$FFMPEG_SCRIPT" || echo "WARN: install-ffmpeg-8.sh returned non-zero — continuing deploy"
   else
-    echo "WARN: install-ffmpeg-8.sh not found — skipping FFmpeg 8.x install"
+    echo "WARN: install-ffmpeg-8.sh not found — installing ffmpeg via apt"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg || true
   fi
 fi
 
