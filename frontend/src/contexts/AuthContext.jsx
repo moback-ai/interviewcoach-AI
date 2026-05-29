@@ -87,7 +87,7 @@ export const AuthProvider = ({ children }) => {
     getToken,
     updateProfile,
     apiBase: API_BASE,
-  }), [user, loading, API_BASE]);
+  }), [user, loading]);
 
   return (
     <AuthContext.Provider value={value}>

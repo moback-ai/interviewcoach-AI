@@ -5,7 +5,6 @@ import { Sparkles, Waves, Crown } from 'lucide-react';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
 import ChatWindow from '@/components/interview/ChatWindow';
 import ServiceHoursNotice from '@/components/interview/ServiceHoursNotice';
-import { trackEvents } from '../services/mixpanel';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
 import WaveAnimation from '@/components/interview/WaveAnimation';
@@ -191,7 +190,7 @@ function InterviewPage() {
             resolve();
           };
 
-          const handleError = (e) => {
+          const handleError = () => {
             video.removeEventListener('loadedmetadata', handleLoadedMetadata);
             video.removeEventListener('error', handleError);
             reject(new Error('Video element failed to load stream'));
@@ -260,7 +259,7 @@ function InterviewPage() {
         streamRef.current = null;
       }
     };
-  }, [isValidated, isValidating]); // ✅ Changed dependency - wait for validation
+  }, [isValidated, isValidating, videoRef]); // wait for validation before starting camera
 
   // Handle calibration success
   const handleCalibrationSuccess = useCallback(() => {
@@ -289,17 +288,13 @@ function InterviewPage() {
     isLooking,
     isConnected,
     error,
-    personStatus,
     readyForCalibration,
     calibrationMessage,
     videoRef,
-    startFrameSending,
-    stopFrameSending,
     startCalibration,
     pauseFrameSending,
     resumeFrameSending,
-    startMonitoring,
-    stopMonitoring
+    startMonitoring
   } = useHeadTracking(headTrackingEnabled, handleCalibrationSuccess);
 
   // Show head tracking popup when user enables the toggle
@@ -371,7 +366,8 @@ function InterviewPage() {
   useEffect(() => {
     devLog(`🔍 Monitoring check: videoRef=${!!videoRef.current}, isConnected=${isConnected}, headTrackingStarted=${headTrackingStarted}, showHeadTrackingPopup=${showHeadTrackingPopup}`);
     
-    if (videoRef.current && headTrackingStarted && !showHeadTrackingPopup) {
+    const video = videoRef.current;
+    if (video && headTrackingStarted && !showHeadTrackingPopup) {
       const handleVideoReady = () => {
         devLog('🎥 Video ready, starting monitoring...');
         startMonitoring();
@@ -380,12 +376,12 @@ function InterviewPage() {
         // Calibration will start automatically when readyForCalibration becomes true
       };
 
-      if (videoRef.current.readyState >= 2) {
+      if (video.readyState >= 2) {
         handleVideoReady();
       } else {
-        videoRef.current.addEventListener('loadeddata', handleVideoReady);
+        video.addEventListener('loadeddata', handleVideoReady);
         return () => {
-          videoRef.current?.removeEventListener('loadeddata', handleVideoReady);
+          video.removeEventListener('loadeddata', handleVideoReady);
         };
       }
     }
@@ -562,7 +558,7 @@ function InterviewPage() {
     };
     
     validateInterview();
-  }, []); // ✅ FIXED: Empty dependency array - only runs once on mount
+  }, [navigate, searchParams]);
 
   // Handle head tracking confirmation
   const confirmHeadTracking = () => {
@@ -577,48 +573,6 @@ function InterviewPage() {
     }, 1000);
   };
 
-  // Toggle head tracking on/off
-  const toggleHeadTracking = () => {
-    const newMode = !headTrackingEnabled;
-    devLog(`🔄 Toggle requested: ${headTrackingEnabled} → ${newMode}`);
-    setHeadTrackingEnabled(newMode);
-    
-    if (newMode) {
-      // Switching TO head tracking - start fresh calibration session
-      devLog('🔄 Setting up head tracking mode...');
-      setCurrentMode('head_tracking');
-      setHeadTrackingStarted(false); // Reset to show popup again
-      setCalibrationState('idle'); // Reset calibration state
-      
-      // Reset all head tracking state for fresh session
-      setShowWarningModal(false);
-      setWarningType(null);
-      
-      // Clear any existing calibration check timers
-      if (calibrationCheckTimer) {
-        clearTimeout(calibrationCheckTimer);
-        setCalibrationCheckTimer(null);
-      }
-      
-      devLog('🔄 Toggled to head tracking - will show popup for calibration');
-    } else {
-      // Switching OFF head tracking - stop all monitoring
-      setCurrentMode('disabled');
-      setHeadTrackingStarted(false); // Stop monitoring
-      
-      // Clean up head tracking session
-      setShowHeadTrackingPopup(false);
-      setCalibrationState('idle');
-      setShowWarningModal(false);
-      setWarningType(null);
-      
-      // Reset calibration progress flag
-      calibrationInProgressRef.current = false;
-      
-      devLog('🔄 Toggled off head tracking - stopped all monitoring');
-    }
-  };
-
   // Handle warning modal close
   const closeWarningModal = () => {
     setShowWarningModal(false);
@@ -629,23 +583,6 @@ function InterviewPage() {
     }, 1000); // Small delay to ensure user has time to adjust
     
     devLog(`✅ Monitoring resumed for ${currentMode} mode`);
-  };
-
-  const endInterview = () => {
-    // Note: Interview completion and feedback generation events are tracked in ChatWindow.jsx
-    // when the backend confirms completion with interview_done: true, not here when button is clicked
-    
-    // Stop monitoring
-    stopMonitoring();
-    
-    // Stop camera stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    
-    // Navigate to feedback page with the actual interview ID
-    const interviewId = searchParams.get('interview_id');
-    navigate(`/interview-feedback?interview_id=${interviewId}`);
   };
 
   // Show loading while validating

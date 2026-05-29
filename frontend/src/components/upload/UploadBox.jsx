@@ -18,7 +18,6 @@ const UploadBox = ({
   dragging,
   setDragging,
   type,
-  otherFileExists,
   multiple = false, // default: false
   parsing = false, // new prop for parsing state
   disabled = false, // new prop for disabled state

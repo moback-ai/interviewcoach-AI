@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 
-function WaveAnimation({ isActive, size = 160, imageSize = 128, listening = false }) {
+function WaveAnimation({ isActive, size = 160, imageSize: _imageSize = 128, listening = false }) {
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1024);
 
   useEffect(() => {

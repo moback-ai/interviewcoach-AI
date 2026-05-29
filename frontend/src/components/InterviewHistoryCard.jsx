@@ -1,14 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw } from 'react-icons/fi';
-import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
-import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from './common/NoticeModal';
 
-const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegenerating, isAnyRegenerating = false }) => {
-  const { user } = useAuth();
+const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegenerating = false }) => {
   const [loading, setLoading] = useState(false);
   const [retakeModalOpen, setRetakeModalOpen] = useState(false);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '' });
@@ -201,20 +198,6 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
                       throw new Error('No active session');
                     }
 
-                    // Find existing interviews to determine attempt number
-                    const existingInterviewsResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews?resume_id=${pairing.resume_id}&jd_id=${pairing.jd_id}&question_set=${questionSet.questionSetNumber}`, {
-                      headers: {
-                        'Authorization': `Bearer ${session.access_token}`
-                      }
-                    });
-
-                    const existingInterviewsResult = await existingInterviewsResponse.json();
-                    const existingInterviews = existingInterviewsResult.data || [];
-                    
-                    const nextAttemptNumber = existingInterviews.length > 0 
-                      ? Math.max(...existingInterviews.map(i => i.attempt_number || 1)) + 1
-                      : 1;
-
                     // Create blank interview with PENDING status
                     const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
                       method: 'POST',
@@ -321,7 +304,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, onRetakeRequest, isRegener
             <h5 className="text-xs sm:text-sm font-medium text-[var(--color-text-primary)] mb-2 sm:mb-3">
               Interview History
             </h5>
-            {questionSet.interviews.map((interview, index) => (
+            {questionSet.interviews.map((interview) => (
               <div
                 key={interview.id}
                 className="flex flex-col sm:flex-row sm:items-center justify-between p-2 sm:p-3 bg-[var(--color-card)] rounded-lg border border-[var(--color-border)] gap-2 sm:gap-0"

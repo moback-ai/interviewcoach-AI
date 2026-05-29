@@ -1,11 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye } from 'react-icons/fi'; // Add FiLoader, FiRefreshCw, FiEye
-import { useTheme } from '../hooks/useTheme';
 import Navbar from '../components/Navbar';
 import LazySyntaxHighlightedCode from '../components/common/LazySyntaxHighlightedCode';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '../lib/authClient';
@@ -317,21 +315,17 @@ const processTextWithCode = (text, baseIndex) => {
 
 export default function QuestionsPage() {
   const [searchParams] = useSearchParams(); // ✅ Add this
-  const { theme } = useTheme();
   const [expandedQuestions, setExpandedQuestions] = useState(new Set());
   const [filterLevel, setFilterLevel] = useState('all');
   const [filterStrength, setFilterStrength] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
-  const [isPaymentLoading, setIsPaymentLoading] = useState(false);
+  const [isPaymentLoading] = useState(false);
   // Database state
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [currentQuestionSet, setCurrentQuestionSet] = useState(null);
   const [availableQuestionSets, setAvailableQuestionSets] = useState([]);
-  const [paymentStatus, setPaymentStatus] = useState(null);
-  const [signatureOk, setSignatureOk] = useState(null);
-  const [paymentDebug, setPaymentDebug] = useState([]);
   const [currentResumeId, setCurrentResumeId] = useState(null);
   const [currentJdId, setCurrentJdId] = useState(null);
   const [interviewHistory, setInterviewHistory] = useState([]);
@@ -601,18 +595,6 @@ export default function QuestionsPage() {
     }
     setExpandedQuestions(newExpanded);
   };
-  const { user } = useAuth();
-
-  const buildRedirectUrl = (resumeId, jdId, transactionId) => {
-    const baseUrl = `${window.location.origin}/payment-status`;
-    const params = new URLSearchParams({
-      resume_id: resumeId,
-      jd_id: jdId,
-      transaction_id: transactionId
-    });
-    return `${baseUrl}?${params.toString()}`;
-  };
-
   const handlePayment = async () => {
     if (!currentResumeId || !currentJdId) {
       setNoticeModal({
@@ -826,43 +808,6 @@ export default function QuestionsPage() {
     }
   };
   
-  
-  
-  const pollPaymentStatus = async (transactionId, accessToken) => {
-    try {
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
-      const res = await fetch(`${apiBaseUrl}/check-payment-status?transaction_id=${transactionId}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` },
-      });
-      const data = await res.json();
-
-      if (!res.ok || !data.success) return;
-
-      setPaymentStatus(data.status || null);
-      setSignatureOk(
-        typeof data.signature_ok === 'boolean' ? data.signature_ok : null
-      );
-
-      if (Array.isArray(data.debug)) {
-        setPaymentDebug(data.debug);
-      }
-
-      if (['succeeded', 'failed', 'cancelled'].includes(data.status)) {
-        // stop polling
-        return;
-      }
-      // continue polling
-      setTimeout(() => pollPaymentStatus(transactionId, accessToken), 1500);
-    } catch (err) {
-      console.error('Status check error:', err);
-      setTimeout(() => pollPaymentStatus(transactionId, accessToken), 2500);
-    }
-  };
-
-
-
-  
-
   return (
     <>
       <Navbar />

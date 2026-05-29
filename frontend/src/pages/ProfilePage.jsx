@@ -627,8 +627,6 @@ const AnalyticsSection = () => {
     const [job_descriptions, setJobDescriptions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [refreshing, setRefreshing] = useState(false);
-
     //Initialized structures to be used in RecentActivity
     let searchableResumes;
     let searchableJDs;
@@ -752,14 +750,6 @@ const AnalyticsSection = () => {
         } finally {
             setLoading(false);
         }
-    };
-
-    const handleRefresh = async () => {
-        setRefreshing(true);
-        await fetchInterviewHistory();
-        await fetchResumeHistory();
-        await fetchJDHistory();
-        setRefreshing(false);
     };
 
     // Reformat resumes and job_descriptions to be searchable

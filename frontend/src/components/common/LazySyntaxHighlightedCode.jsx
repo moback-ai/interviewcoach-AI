@@ -2,13 +2,14 @@ import { lazy, Suspense, useState } from 'react';
 import { FiCopy } from 'react-icons/fi';
 
 const SyntaxHighlighter = lazy(async () => {
-  const [highlighter, style] = await Promise.all([
+  const [syntaxHighlighter, style] = await Promise.all([
     import('react-syntax-highlighter'),
     import('react-syntax-highlighter/dist/esm/styles/prism'),
   ]);
+  const { Prism } = syntaxHighlighter;
   return {
     default: (props) => (
-      <highlighter.Prism {...props} style={style.vscDarkPlus} />
+      <Prism {...props} style={style.vscDarkPlus} />
     ),
   };
 });
