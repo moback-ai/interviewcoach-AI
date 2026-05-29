@@ -81,7 +81,7 @@ jobs:
           || github.event_name == 'schedule'
           || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
-        run: npm run lint -- --max-warnings 200
+        run: npm run lint -- --max-warnings 0
 
       - name: Frontend dependency audit
         if: >-
