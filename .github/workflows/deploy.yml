@@ -934,9 +934,10 @@ jobs:
 
       - name: Backend · Toolchain
         run: |
-          scp $SSH_OPTS scripts/deploy-host-toolchain.sh ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/tmp/deploy-host-toolchain.sh
+          scp $SSH_OPTS scripts/deploy-host-toolchain.sh scripts/install-ffmpeg-8.sh \
+            ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}:/tmp/
           ssh $SSH_OPTS ${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }} \
-            "NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh"
+            "INSTALL_FFMPEG=1 NODE_MAJOR=${{ env.NODE_MAJOR }} bash /tmp/deploy-host-toolchain.sh"
 
       - name: Backend · Snapshot stable release
         run: |

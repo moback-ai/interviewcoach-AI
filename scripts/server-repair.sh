@@ -4,21 +4,25 @@ set -euo pipefail
 
 echo "=== InterviewCoach server repair ==="
 
-echo "[1/5] Backend health (local)"
+echo "[1/6] ffmpeg 8.x (audio transcoding)"
+REPAIR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "${REPAIR_DIR}/install-ffmpeg-8.sh"
+
+echo "[2/6] Backend health (local)"
 curl -fsS http://127.0.0.1:5000/api/health | python3 -m json.tool || {
   echo "Backend is not healthy on :5000. Check: pm2 status && pm2 logs backend --lines 80"
   pm2 status || true
 }
 
-echo "[2/5] PM2 backend"
+echo "[3/6] PM2 backend"
 if command -v pm2 >/dev/null 2>&1; then
   pm2 status || true
 else
   echo "pm2 not installed"
 fi
 
-echo "[3/5] Ollama service"
-OLLAMA_MODEL="${OLLAMA_MODEL:-llama3}"
+echo "[4/6] Ollama service"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:3b}"
 if command -v ollama >/dev/null 2>&1; then
   if ! curl -fsS http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     if systemctl list-unit-files ollama.service >/dev/null 2>&1; then
@@ -44,12 +48,12 @@ else
   echo "Ollama not installed. Install with: curl -fsSL https://ollama.com/install.sh | sh"
 fi
 
-echo "[4/5] Nginx (frontend host — skip if this is backend-only)"
+echo "[5/6] Nginx (frontend host — skip if this is backend-only)"
 if command -v nginx >/dev/null 2>&1; then
   sudo nginx -t
   sudo systemctl reload nginx || sudo systemctl restart nginx
 fi
 
-echo "[5/5] Final API health"
+echo "[6/6] Final API health"
 curl -fsS http://127.0.0.1:5000/api/health | python3 -m json.tool
 echo "=== Repair complete ==="

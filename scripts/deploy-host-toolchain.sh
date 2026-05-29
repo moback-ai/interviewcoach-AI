@@ -14,9 +14,20 @@ fi
 sudo apt-get update -qq
 sudo apt-get upgrade -y -qq
 sudo apt-get install -y -qq \
-  ca-certificates curl gnupg rsync nginx \
+  ca-certificates curl gnupg rsync nginx xz-utils \
   python3 python3-pip python3-venv \
   build-essential pkg-config libpq-dev
+
+if [[ "${INSTALL_FFMPEG:-0}" == "1" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  FFMPEG_SCRIPT="${SCRIPT_DIR}/install-ffmpeg-8.sh"
+  [[ -f "$FFMPEG_SCRIPT" ]] || FFMPEG_SCRIPT="/tmp/install-ffmpeg-8.sh"
+  if [[ -f "$FFMPEG_SCRIPT" ]]; then
+    bash "$FFMPEG_SCRIPT"
+  else
+    echo "WARN: install-ffmpeg-8.sh not found — skipping FFmpeg 8.x install"
+  fi
+fi
 
 echo "=== Node.js ${NODE_MAJOR}.x + npm + pm2 ==="
 if ! command -v node >/dev/null 2>&1 || ! node --version | grep -q "v${NODE_MAJOR}\\."; then
