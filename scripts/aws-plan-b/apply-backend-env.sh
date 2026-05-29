@@ -90,6 +90,11 @@ restart_backend() {
     AWS_SECRETS_MANAGER_SECRET_ID="$SECRET_ID" \
     OLLAMA_MODEL="${OLLAMA_MODEL}" bash -s <<'REMOTE'
 set -euo pipefail
+if [[ -x /apps/backend/current/scripts/install-ffmpeg-8.sh ]]; then
+  bash /apps/backend/current/scripts/install-ffmpeg-8.sh
+elif [[ -f /tmp/install-ffmpeg-8.sh ]]; then
+  bash /tmp/install-ffmpeg-8.sh
+fi
 command -v ollama >/dev/null && ollama pull "${OLLAMA_MODEL}" || true
 pm2 delete backend >/dev/null 2>&1 || true
 AWS_REGION="${AWS_REGION}" AWS_SECRETS_MANAGER_SECRET_ID="${AWS_SECRETS_MANAGER_SECRET_ID}" \

@@ -38,11 +38,11 @@ def resolve_ollama_model_name(model=None):
     configured_model = ""
     try:
         from common.runtime_config import optional_env as runtime_optional_env
-        configured_model = runtime_optional_env("OLLAMA_MODEL", "llama3")
+        configured_model = runtime_optional_env("OLLAMA_MODEL", "llama3.2:3b")
     except Exception:
-        configured_model = os.getenv("OLLAMA_MODEL", "llama3")
+        configured_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
-    configured_model = (configured_model or "llama3").strip()
+    configured_model = (configured_model or "llama3.2:3b").strip()
     requested_model = (model or "").strip()
     if not requested_model or requested_model == "llama3":
         return configured_model

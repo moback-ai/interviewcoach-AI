@@ -2046,7 +2046,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
 
 
 def get_ollama_model_name():
-    return (optional_env("OLLAMA_MODEL", "llama3") or "llama3").strip()
+    return (optional_env("OLLAMA_MODEL", "llama3.2:3b") or "llama3.2:3b").strip()
 
 
 def _normalize_model_aliases(name: str):
@@ -3452,7 +3452,7 @@ def support_bot():
     try:
         from Support_manager_enhanced import SupportBotManager
         bot = SupportBotManager(
-            model="llama3",
+            model=get_ollama_model_name(),
             faq_path=os.path.join(SUPPORT_BOT_PATH, "support_bot.md")
         )
         auth = request.headers.get('Authorization')
@@ -3488,10 +3488,14 @@ def analyze_performance_trends():
     data = request.get_json() or {}
     try:
         if 'feedbacks' in data and isinstance(data['feedbacks'], list):
-            result = analyze_performance_from_feedbacks(data['feedbacks'], data.get('model', 'llama3'))
+            result = analyze_performance_from_feedbacks(
+                data['feedbacks'], data.get('model', get_ollama_model_name())
+            )
         else:
             auth_token = request.headers.get('Authorization', '').split(' ')[-1]
-            result = analyze_user_performance(auth_token, data.get('model', 'llama3'), data.get('limit', 100))
+            result = analyze_user_performance(
+                auth_token, data.get('model', get_ollama_model_name()), data.get('limit', 100)
+            )
         if not result.get('success'):
             return jsonify({"success": False, "message": result.get('error', 'Analysis failed')}), 400
         return jsonify({"success": True, "data": result})

@@ -28,7 +28,7 @@ sudo n 22
 hash -r
 pm2 startup systemd -u ubuntu --hp /home/ubuntu | tail -1 | sudo bash
 
-OLLAMA_MODEL="${OLLAMA_MODEL:-llama3}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:3b}"
 
 # ── Ollama ────────────────────────────────────────────────────
 echo "[3/9] Installing Ollama..."
