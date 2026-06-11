@@ -455,7 +455,7 @@ def extract_json_array(text):
 
 
 def generate_core_questions(structured_resume, job_title, job_description, beginner_count=2, medium_count=2, hard_count=2, model="llama3"):
-    def generate_questions_by_level(level, count, weight, max_retries=100000):
+    def generate_questions_by_level(level, count, weight, max_retries=2):
         # Map the level to the correct database constraint values
         level_mapping = {
             'beginner': 'easy',
