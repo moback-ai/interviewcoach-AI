@@ -2046,7 +2046,7 @@ def build_local_question_set(job_title, job_description, resume_text, question_c
 
 
 def get_ollama_model_name():
-    return (optional_env("OLLAMA_MODEL", "llama3.2:3b") or "llama3.2:3b").strip()
+    return (optional_env("OLLAMA_MODEL", "llama3") or "llama3").strip()
 
 
 def _normalize_model_aliases(name: str):
@@ -2229,7 +2229,7 @@ def _classify_if_technical_role(job_title, job_description, model=None):
     return classify_if_technical_role(job_title, job_description, model=model)
 
 
-def _generate_questions_with_fallback(
+def _generate_questions_ollama_only(
     temp_resume,
     job_title,
     job_description,
@@ -2238,19 +2238,18 @@ def _generate_questions_with_fallback(
     data,
     ollama_diagnostics,
 ):
-    """Fast local generation by default; Ollama only when explicitly enabled."""
+    """Ollama-only question generation; raises on failure (no local template fallback)."""
     if not _use_ollama_question_pipeline(data, ollama_diagnostics):
-        result = build_local_question_set(job_title, job_description, resume_text, question_counts)
-        result["ollama_diagnostics"] = ollama_diagnostics
-        result["generator"] = "local_fallback"
-        return result
+        raise RuntimeError(
+            "Failed to generate interview questions. Please try again."
+        )
 
     pipeline_kwargs = {
         "resume_path": temp_resume,
         "job_title": job_title,
         "job_description": job_description,
         "question_counts": question_counts,
-        "include_answers": True,
+        "include_answers": data.get("include_answers", True),
         "split": data.get("split", False),
         "resume_pct": data.get("resume_pct", 50),
         "jd_pct": data.get("jd_pct", 50),
@@ -2260,29 +2259,31 @@ def _generate_questions_with_fallback(
         "max_retries": 2,
     }
 
-    try:
-        from INTERVIEW.Resumeparser import run_pipeline_from_api
+    from INTERVIEW.Resumeparser import run_pipeline_from_api
 
+    try:
         result = _run_callable_with_timeout(
             lambda: run_pipeline_from_api(**pipeline_kwargs),
             QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS,
             label="Question generation pipeline",
         )
-        if result.get("success") and result.get("questions"):
-            result.setdefault("generator", "ollama_pipeline")
-            result["ollama_diagnostics"] = ollama_diagnostics
-            return result
+    except TimeoutError:
+        raise TimeoutError("Unable to generate interview questions. Please try again.") from None
+    if not result.get("success") or not result.get("questions"):
         raise RuntimeError(result.get("error") or "Pipeline returned no questions")
-    except Exception as pipeline_error:
-        print(
-            "[WARN] Falling back to local question generator: "
-            f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
-        )
-        result = build_local_question_set(job_title, job_description, resume_text, question_counts)
-        result["ollama_diagnostics"] = ollama_diagnostics
-        result["pipeline_error"] = str(pipeline_error)
-        result["generator"] = "local_fallback"
-        return result
+
+    result.setdefault("generator", "ollama_pipeline")
+    result["ollama_diagnostics"] = ollama_diagnostics
+    return result
+
+
+def _question_generation_error_status(exc):
+    message = str(exc)
+    if isinstance(exc, TimeoutError) or "timed out after" in message.lower():
+        return 504
+    if "not available" in message.lower() or "not installed" in message.lower():
+        return 503
+    return 500
 
 
 def _ollama_diagnostic_snapshot():
@@ -2867,19 +2868,30 @@ def generate_questions():
                 return jsonify({"success": False, "message": resume_validation_error}), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
-            result = _generate_questions_with_fallback(
-                temp_resume,
-                job_title,
-                job_description,
-                resume_text,
-                question_counts,
-                data,
-                ollama_diagnostics,
-            )
-            if not result.get('success') or not result.get('questions'):
-                result = build_local_question_set(job_title, job_description, resume_text, question_counts)
-                result["ollama_diagnostics"] = ollama_diagnostics
-                result["generator"] = "local_fallback"
+            try:
+                result = _generate_questions_ollama_only(
+                    temp_resume,
+                    job_title,
+                    job_description,
+                    resume_text,
+                    question_counts,
+                    data,
+                    ollama_diagnostics,
+                )
+            except Exception as pipeline_error:
+                print(
+                    "[ERROR] Ollama question generation failed: "
+                    f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+                )
+                status = _question_generation_error_status(pipeline_error)
+                return jsonify({
+                    "success": False,
+                    "message": str(pipeline_error),
+                    "debug": {
+                        "generator": "ollama_failed",
+                        "ollama": ollama_diagnostics,
+                    },
+                }), status
             return jsonify({"success": True, "data": {
                 "questions": result['questions'],
                 "questions_count": result['questions_count'],
@@ -3262,6 +3274,7 @@ def generate_response_stream():
                     return
 
             event_q = queue.Queue()
+            user = request.user
 
             def on_token(text):
                 if text:
@@ -3276,7 +3289,7 @@ def generate_response_stream():
                                 {"position": slot["queue_position"], "message": "Waiting for AI capacity…"},
                             ))
                         payload, _status = _build_generate_response_payload(
-                            request.user, data, on_token=on_token
+                            user, data, on_token=on_token
                         )
                     event_q.put(("complete", payload))
                 except InterviewCapacityError as exc:

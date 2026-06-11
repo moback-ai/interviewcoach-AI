@@ -341,7 +341,7 @@ function DashboardPage() {
         resume_url: pairing.resumeUrl,
         job_title: pairing.jobTitle,
         job_description: pairing.jobDescription,
-        prefer_local: true,
+        prefer_local: false,
         question_counts: {
           beginner: questionSettings.easy || 1,
           medium: questionSettings.medium || 1,
@@ -354,7 +354,7 @@ function DashboardPage() {
         blend: questionSettings.blendMode || false,
         blend_pct_resume: questionSettings.blendResumePercentage || 50,
         blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50)
-      }, { timeoutMs: 180000 });
+      }, { timeoutMs: 600000 });
 
       return response;
     } catch (error) {
