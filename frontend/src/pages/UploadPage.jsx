@@ -47,7 +47,7 @@ function UploadPage() {
   const [, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
-  const GENERATE_QUESTIONS_TIMEOUT_MS = 600000;
+  const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
 
   useBodyScrollLock(loading || successModal.isOpen);
 

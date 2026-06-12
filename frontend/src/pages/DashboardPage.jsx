@@ -354,7 +354,7 @@ function DashboardPage() {
         blend: questionSettings.blendMode || false,
         blend_pct_resume: questionSettings.blendResumePercentage || 50,
         blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50)
-      }, { timeoutMs: 600000 });
+      }, { timeoutMs: 180000 });
 
       return response;
     } catch (error) {
