@@ -29,28 +29,16 @@ function Signup() {
   const [passwordBlurred, setPasswordBlurred] = useState(false);
 
   const isRealEmail = (value) => {
-    if (!isValidEmail(value)) {
-      return false;
-    }
-
-    const domain = value.split('@')[1]?.toLowerCase() || '';
+    if (!isValidEmail(value)) return false;
+    const domain = (value.split('@')[1] || '').toLowerCase();
     const parts = domain.split('.');
-    if (parts.length < 2) {
-      return false;
-    }
-
-    const tld = parts[parts.length - 1];
-    if (tld.length < 2) {
-      return false;
-    }
-
+    if (parts.length < 2 || parts[parts.length - 1].length < 2) return false;
     const popularBases = ['gmail', 'yahoo', 'hotmail', 'outlook'];
     for (const base of popularBases) {
       if (domain !== `${base}.com` && domain.startsWith(base) && domain.endsWith('.com')) {
         return false;
       }
     }
-
     return true;
   };
 
@@ -96,6 +84,11 @@ function Signup() {
     try {
       const normalizedUsername = username.toLowerCase().trim();
       const normalizedEmail = email.toLowerCase().trim();
+
+      if (!isRealEmail(normalizedEmail)) {
+        throw new Error('Please enter a valid email address.');
+      }
+
       const availability = await checkEmailAvailability(normalizedEmail);
       if (!availability.available) {
         throw new Error('This email is already registered. Please log in instead.');
@@ -221,6 +214,11 @@ function Signup() {
                 That username is already taken. Please choose another one.
               </p>
             ) : null}
+            {!errorMsg && usernameStatus === 'error' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Could not check username availability. Please try again.
+              </p>
+            ) : null}
           </div>
 
           <div className="auth-simple-field">
@@ -263,7 +261,7 @@ function Signup() {
             </div>
             {!errorMsg && emailStatus === 'invalid' ? (
               <p className="auth-simple-helper auth-simple-helper-error">
-                Enter a valid email address like `you@gmail.com`.
+                Enter a valid email address (e.g. you@gmail.com or you@yahoo.com).
               </p>
             ) : null}
             {!errorMsg && emailStatus === 'taken' ? (
@@ -290,18 +288,9 @@ function Signup() {
                 minLength={8}
                 disabled={loading}
                 autoComplete="new-password"
-                className={`auth-simple-input ${password.length > 0 ? 'auth-simple-input-with-double-buttons' : 'auth-simple-input-with-button'} ${password.length >= 8 ? 'auth-simple-input-success' : (passwordBlurred && password.length > 0 && password.length < 8) ? 'auth-simple-input-error' : ''}`}
+                className="auth-simple-input auth-simple-input-with-button"
                 placeholder="At least 8 characters"
               />
-              {password.length > 0 && (
-                <div className="auth-simple-input-status-indicator-double">
-                  {password.length >= 8 ? (
-                    <FiCheck className="auth-simple-email-indicator-success" size={20} />
-                  ) : passwordBlurred ? (
-                    <FiX className="auth-simple-email-indicator-error" size={20} />
-                  ) : null}
-                </div>
-              )}
               <button
                 type="button"
                 onClick={() => setPasswordVisible((prev) => !prev)}
@@ -329,8 +318,8 @@ function Signup() {
 
           <button
             type="submit"
-            disabled={loading || !fullName.trim() || !isValidUsername(username) || !isValidEmail(email) || password.length < 8 || !acceptedTerms}
-            className={`auth-simple-submit ${(!loading && fullName.trim() && isValidUsername(username) && isValidEmail(email) && password.length >= 8 && acceptedTerms) ? 'auth-simple-submit-valid' : ''}`}
+            disabled={loading || !fullName.trim() || !isValidUsername(username) || !isRealEmail(email) || password.length < 8 || !acceptedTerms}
+            className={`auth-simple-submit ${(!loading && fullName.trim() && isValidUsername(username) && isRealEmail(email) && password.length > 0 && acceptedTerms) ? 'auth-simple-submit-valid' : ''}`}
           >
             {loading ? 'Creating account...' : 'Create account'}
           </button>
