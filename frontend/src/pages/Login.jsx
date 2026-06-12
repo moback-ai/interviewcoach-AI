@@ -8,7 +8,6 @@ import {
   FiInfo,
   FiMail,
   FiX,
-  FiCheck,
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import AuthStudioShell from '../components/auth/AuthStudioShell';
@@ -49,38 +48,10 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [coachNotice, setCoachNotice] = useState(() => getDefaultLoginCoachNotice());
-  const [emailStatus, setEmailStatus] = useState('idle');
-  const [identifierBlurred, setIdentifierBlurred] = useState(false);
-  const [passwordBlurred, setPasswordBlurred] = useState(false);
 
   const normalizedIdentifier = identifier.toLowerCase().trim();
   const looksLikeEmail = normalizedIdentifier.includes('@');
   const identifierIsValid = looksLikeEmail ? isValidEmail(normalizedIdentifier) : isValidUsername(normalizedIdentifier);
-
-  const handleIdentifierBlur = async () => {
-    setIdentifierBlurred(true);
-    if (!normalizedIdentifier) {
-      setEmailStatus('idle');
-      return;
-    }
-
-    if (looksLikeEmail) {
-      if (!isValidEmail(normalizedIdentifier)) {
-        setEmailStatus('invalid');
-        return;
-      }
-
-      setEmailStatus('checking');
-      try {
-        const result = await checkEmailAvailability(normalizedIdentifier);
-        setEmailStatus(!result.available ? 'exists' : 'not-exists');
-      } catch {
-        setEmailStatus('idle');
-      }
-    } else {
-      setEmailStatus('idle');
-    }
-  };
 
   const requestedNextPath = new URLSearchParams(location.search).get('next');
   const stateRedirectPath = typeof location.state?.from === 'string' ? location.state.from : '';
@@ -295,54 +266,18 @@ function Login() {
         <form onSubmit={handleLogin} className="auth-simple-form">
           <div className="auth-simple-field">
             <label htmlFor="auth-login-identifier" className="auth-simple-label">Email or Username</label>
-            <div className="auth-simple-input-wrap">
-              <input
-                id="auth-login-identifier"
-                type="text"
-                value={identifier}
-                onChange={(e) => {
-                  setIdentifier(e.target.value);
-                  setEmailStatus('idle');
-                  setIdentifierBlurred(false);
-                  setErrorMsg('');
-                }}
-                onBlur={handleIdentifierBlur}
-                required
-                disabled={loading}
-                autoComplete="username"
-                className={`auth-simple-input ${looksLikeEmail && emailStatus !== 'idle' ? 'auth-simple-input-with-button' : ''} ${looksLikeEmail && emailStatus === 'exists' ? 'auth-simple-input-success' : ((looksLikeEmail && identifierBlurred && (emailStatus === 'not-exists' || emailStatus === 'invalid')) || (!looksLikeEmail && identifierBlurred && identifier && !identifierIsValid)) ? 'auth-simple-input-error' : ''}`}
-                placeholder="you@example.com or your.username"
-              />
-              {looksLikeEmail && emailStatus !== 'idle' && (
-                <div className="auth-simple-input-status-indicator">
-                  {emailStatus === 'checking' && (
-                    <div className="auth-scene-spinner" style={{ color: 'var(--color-primary)' }}>
-                      <svg className="animate-spin" viewBox="0 0 24 24" fill="none" style={{ width: '1.25rem', height: '1.25rem' }}>
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                    </div>
-                  )}
-                  {emailStatus === 'exists' && (
-                    <FiCheck className="auth-simple-email-indicator-success" size={20} />
-                  )}
-                  {identifierBlurred && (emailStatus === 'not-exists' || emailStatus === 'invalid') && (
-                    <FiX className="auth-simple-email-indicator-error" size={20} />
-                  )}
-                </div>
-              )}
-            </div>
-            {!errorMsg && looksLikeEmail && identifierBlurred && emailStatus === 'invalid' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Enter a valid email address.
-              </p>
-            ) : null}
-            {!errorMsg && looksLikeEmail && identifierBlurred && emailStatus === 'not-exists' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                This email is not registered. Please sign up first.
-              </p>
-            ) : null}
-            {!errorMsg && (!looksLikeEmail || emailStatus === 'idle') && identifier && identifierBlurred && !identifierIsValid ? (
+            <input
+              id="auth-login-identifier"
+              type="text"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              required
+              disabled={loading}
+              autoComplete="username"
+              className="auth-simple-input"
+              placeholder="you@example.com or your.username"
+            />
+            {identifier && !identifierIsValid ? (
               <p className="auth-simple-helper auth-simple-helper-error">
                 Enter a valid email or a username with at least 3 characters.
               </p>
@@ -356,27 +291,13 @@ function Login() {
                 id="auth-login-password"
                 type={passwordVisible ? 'text' : 'password'}
                 value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  setPasswordBlurred(false);
-                  setErrorMsg('');
-                }}
-                onBlur={() => setPasswordBlurred(true)}
+                onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
                 autoComplete="current-password"
-                className={`auth-simple-input ${password.length > 0 ? 'auth-simple-input-with-double-buttons' : 'auth-simple-input-with-button'} ${password.length >= 8 ? 'auth-simple-input-success' : (passwordBlurred && password.length > 0 && password.length < 8) ? 'auth-simple-input-error' : ''}`}
+                className="auth-simple-input auth-simple-input-with-button"
                 placeholder="Enter your password"
               />
-              {password.length > 0 && (
-                <div className="auth-simple-input-status-indicator-double">
-                  {password.length >= 8 ? (
-                    <FiCheck className="auth-simple-email-indicator-success" size={20} />
-                  ) : passwordBlurred ? (
-                    <FiX className="auth-simple-email-indicator-error" size={20} />
-                  ) : null}
-                </div>
-              )}
               <button
                 type="button"
                 onClick={() => setPasswordVisible((prev) => !prev)}
@@ -391,7 +312,7 @@ function Login() {
           <button
             type="submit"
             disabled={loading || !identifierIsValid || !password}
-            className={`auth-simple-submit ${(!loading && identifierIsValid && password.length >= 8) ? 'auth-simple-submit-valid' : ''}`}
+            className="auth-simple-submit"
           >
             {loading ? 'Signing in...' : 'Sign in'}
           </button>
