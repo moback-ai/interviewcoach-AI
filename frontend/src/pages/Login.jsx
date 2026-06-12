@@ -51,7 +51,6 @@ function Login() {
   const [coachNotice, setCoachNotice] = useState(() => getDefaultLoginCoachNotice());
   const [emailStatus, setEmailStatus] = useState('idle');
   const [identifierBlurred, setIdentifierBlurred] = useState(false);
-  const [passwordBlurred, setPasswordBlurred] = useState(false);
 
   const normalizedIdentifier = identifier.toLowerCase().trim();
   const looksLikeEmail = normalizedIdentifier.includes('@');
@@ -158,8 +157,14 @@ function Login() {
 
   const handleLogin = async (event) => {
     event.preventDefault();
-    setLoading(true);
     setErrorMsg('');
+
+    if (!identifier.trim()) {
+      setErrorMsg('Please enter your registered username or email.');
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const data = await login(identifier, password);
@@ -358,25 +363,14 @@ function Login() {
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value);
-                  setPasswordBlurred(false);
                   setErrorMsg('');
                 }}
-                onBlur={() => setPasswordBlurred(true)}
                 required
                 disabled={loading}
                 autoComplete="current-password"
-                className={`auth-simple-input ${password.length > 0 ? 'auth-simple-input-with-double-buttons' : 'auth-simple-input-with-button'} ${password.length >= 8 ? 'auth-simple-input-success' : (passwordBlurred && password.length > 0 && password.length < 8) ? 'auth-simple-input-error' : ''}`}
+                className="auth-simple-input auth-simple-input-with-button"
                 placeholder="Enter your password"
               />
-              {password.length > 0 && (
-                <div className="auth-simple-input-status-indicator-double">
-                  {password.length >= 8 ? (
-                    <FiCheck className="auth-simple-email-indicator-success" size={20} />
-                  ) : passwordBlurred ? (
-                    <FiX className="auth-simple-email-indicator-error" size={20} />
-                  ) : null}
-                </div>
-              )}
               <button
                 type="button"
                 onClick={() => setPasswordVisible((prev) => !prev)}
@@ -390,8 +384,8 @@ function Login() {
 
           <button
             type="submit"
-            disabled={loading || !identifierIsValid || !password}
-            className={`auth-simple-submit ${(!loading && identifierIsValid && password.length >= 8) ? 'auth-simple-submit-valid' : ''}`}
+            disabled={loading || !password}
+            className={`auth-simple-submit ${(!loading && identifierIsValid && password.length > 0) ? 'auth-simple-submit-valid' : ''}`}
           >
             {loading ? 'Signing in...' : 'Sign in'}
           </button>
