@@ -2886,7 +2886,7 @@ def generate_questions():
                 status = _question_generation_error_status(pipeline_error)
                 return jsonify({
                     "success": False,
-                    "message": str(pipeline_error),
+                    "message": "Failed to generate interview questions.",
                     "debug": {
                         "generator": "ollama_failed",
                         "ollama": ollama_diagnostics,
