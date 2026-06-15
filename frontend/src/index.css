@@ -8,6 +8,7 @@
   --color-text-secondary: #475569; /* Muted gray-blue */
   --color-accent: #3B82F6; /* Lively blue for gradients */
   --color-error: #EF4444;
+  --color-success: #10B981;
   --color-border: #E2E8F0; /* Softer border */
   --color-card: #ffffff;
   --color-input-bg: #f0f0f0; 
@@ -24,6 +25,7 @@
   --color-text-secondary: #A1A1AA;
   --color-accent: #60A5FA;
   --color-error: #F87171;
+  --color-success: #34D399;
   --color-border: #2C2F36;
   --color-card: #1C1F26;
   --color-input-bg: #1f2937; 
@@ -506,6 +508,66 @@ body::after {
 
 .auth-simple-input-with-button {
   padding-right: 3.2rem;
+}
+
+.auth-simple-input-status-indicator {
+  position: absolute;
+  top: 50%;
+  right: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 1.15rem;
+}
+
+.auth-simple-email-indicator-success {
+  color: var(--color-success);
+}
+
+.auth-simple-email-indicator-error {
+  color: var(--color-error);
+}
+
+.auth-simple-input-with-double-buttons {
+  padding-right: 5rem;
+}
+
+.auth-simple-input-status-indicator-double {
+  position: absolute;
+  top: 50%;
+  right: 3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  transform: translateY(-50%);
+  pointer-events: none;
+  font-size: 1.15rem;
+}
+
+.auth-simple-input-success {
+  border-color: var(--color-success) !important;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-success) 16%, transparent) !important;
+}
+
+.auth-simple-input-error {
+  border-color: var(--color-error) !important;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-error) 16%, transparent) !important;
+}
+
+.auth-simple-submit-valid {
+  background: linear-gradient(135deg, var(--color-success), var(--color-accent)) !important;
+  box-shadow: 0 14px 30px color-mix(in srgb, var(--color-success) 30%, transparent) !important;
+}
+
+.auth-simple-submit-valid:hover {
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--color-success) 40%, transparent) !important;
+  transform: translateY(-2px);
 }
 
 .auth-simple-password-toggle {

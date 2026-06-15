@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiEye, FiEyeOff } from 'react-icons/fi';
+import { FiEye, FiEyeOff, FiCheck, FiX } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import AuthStudioShell from '../components/auth/AuthStudioShell';
 import { useTheme } from '../hooks/useTheme';
@@ -26,30 +26,19 @@ function Signup() {
   const [usernameStatus, setUsernameStatus] = useState('idle');
   const [emailStatus, setEmailStatus] = useState('idle');
   const [usernameBlurred, setUsernameBlurred] = useState(false);
+  const [passwordBlurred, setPasswordBlurred] = useState(false);
 
   const isRealEmail = (value) => {
-    if (!isValidEmail(value)) {
-      return false;
-    }
-
-    const domain = value.split('@')[1]?.toLowerCase() || '';
+    if (!isValidEmail(value)) return false;
+    const domain = (value.split('@')[1] || '').toLowerCase();
     const parts = domain.split('.');
-    if (parts.length < 2) {
-      return false;
-    }
-
-    const tld = parts[parts.length - 1];
-    if (tld.length < 2) {
-      return false;
-    }
-
+    if (parts.length < 2 || parts[parts.length - 1].length < 2) return false;
     const popularBases = ['gmail', 'yahoo', 'hotmail', 'outlook'];
     for (const base of popularBases) {
       if (domain !== `${base}.com` && domain.startsWith(base) && domain.endsWith('.com')) {
         return false;
       }
     }
-
     return true;
   };
 
@@ -95,6 +84,11 @@ function Signup() {
     try {
       const normalizedUsername = username.toLowerCase().trim();
       const normalizedEmail = email.toLowerCase().trim();
+
+      if (!isRealEmail(normalizedEmail)) {
+        throw new Error('Please enter a valid email address.');
+      }
+
       const availability = await checkEmailAvailability(normalizedEmail);
       if (!availability.available) {
         throw new Error('This email is already registered. Please log in instead.');
@@ -176,7 +170,10 @@ function Signup() {
               id="auth-signup-fullname"
               type="text"
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              onChange={(e) => {
+                setFullName(e.target.value);
+                setErrorMsg('');
+              }}
               required
               disabled={loading}
               autoComplete="name"
@@ -194,6 +191,7 @@ function Signup() {
               onChange={(e) => {
                 setUsername(e.target.value);
                 setUsernameStatus('idle');
+                setErrorMsg('');
               }}
               onFocus={() => setUsernameBlurred(false)}
               onBlur={() => {
@@ -216,28 +214,54 @@ function Signup() {
                 That username is already taken. Please choose another one.
               </p>
             ) : null}
+            {!errorMsg && usernameStatus === 'error' ? (
+              <p className="auth-simple-helper auth-simple-helper-error">
+                Could not check username availability. Please try again.
+              </p>
+            ) : null}
           </div>
 
           <div className="auth-simple-field">
             <label htmlFor="auth-signup-email" className="auth-simple-label">Email</label>
-            <input
-              id="auth-signup-email"
-              type="email"
-              value={email}
-              onChange={(e) => {
-                setEmail(e.target.value);
-                setEmailStatus('idle');
-              }}
-              onBlur={handleEmailBlur}
-              required
-              disabled={loading}
-              autoComplete="email"
-              className="auth-simple-input"
-              placeholder="you@example.com"
-            />
+            <div className="auth-simple-input-wrap">
+              <input
+                id="auth-signup-email"
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setEmailStatus('idle');
+                  setErrorMsg('');
+                }}
+                onBlur={handleEmailBlur}
+                required
+                disabled={loading}
+                autoComplete="email"
+                className={`auth-simple-input ${emailStatus !== 'idle' ? 'auth-simple-input-with-button' : ''} ${emailStatus === 'available' ? 'auth-simple-input-success' : emailStatus === 'taken' || emailStatus === 'invalid' ? 'auth-simple-input-error' : ''}`}
+                placeholder="you@example.com"
+              />
+              {emailStatus !== 'idle' && (
+                <div className="auth-simple-input-status-indicator">
+                  {emailStatus === 'checking' && (
+                    <div className="auth-scene-spinner" style={{ color: 'var(--color-primary)' }}>
+                      <svg className="animate-spin" viewBox="0 0 24 24" fill="none" style={{ width: '1.25rem', height: '1.25rem' }}>
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                    </div>
+                  )}
+                  {emailStatus === 'available' && (
+                    <FiCheck className="auth-simple-email-indicator-success" size={20} />
+                  )}
+                  {(emailStatus === 'taken' || emailStatus === 'invalid') && (
+                    <FiX className="auth-simple-email-indicator-error" size={20} />
+                  )}
+                </div>
+              )}
+            </div>
             {!errorMsg && emailStatus === 'invalid' ? (
               <p className="auth-simple-helper auth-simple-helper-error">
-                Enter a valid email address like `you@gmail.com`.
+                Enter a valid email address (e.g. you@gmail.com or you@yahoo.com).
               </p>
             ) : null}
             {!errorMsg && emailStatus === 'taken' ? (
@@ -254,7 +278,12 @@ function Signup() {
                 id="auth-signup-password"
                 type={passwordVisible ? 'text' : 'password'}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setPasswordBlurred(false);
+                  setErrorMsg('');
+                }}
+                onBlur={() => setPasswordBlurred(true)}
                 required
                 minLength={8}
                 disabled={loading}
@@ -271,7 +300,7 @@ function Signup() {
                 {passwordVisible ? <FiEyeOff size={18} /> : <FiEye size={18} />}
               </button>
             </div>
-            {!errorMsg && password.length > 0 && password.length < 8 ? (
+            {!errorMsg && passwordBlurred && password.length > 0 && password.length < 8 ? (
               <p className="auth-simple-helper auth-simple-helper-error">
                 Password must be at least 8 characters.
               </p>
@@ -289,8 +318,8 @@ function Signup() {
 
           <button
             type="submit"
-            disabled={loading || !fullName.trim() || !isValidUsername(username) || !isValidEmail(email) || password.length < 8 || !acceptedTerms}
-            className="auth-simple-submit"
+            disabled={loading || !fullName.trim() || !isValidUsername(username) || !isRealEmail(email) || password.length < 8 || !acceptedTerms}
+            className={`auth-simple-submit ${(!loading && fullName.trim() && isValidUsername(username) && isRealEmail(email) && password.length > 0 && acceptedTerms) ? 'auth-simple-submit-valid' : ''}`}
           >
             {loading ? 'Creating account...' : 'Create account'}
           </button>
