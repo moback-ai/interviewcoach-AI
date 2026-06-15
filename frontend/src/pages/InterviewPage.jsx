@@ -125,6 +125,42 @@ function InterviewPage() {
     persistVoicePresetChoice(selectedVoiceId, { manual: true });
   }, [selectedVoiceId]);
 
+  // Handle calibration success
+  const handleCalibrationSuccess = useCallback(() => {
+    setCalibrationState('success');
+    setShowCalibrationSuccess(true);
+    
+    // Clear any ongoing calibration check timer
+    if (calibrationCheckTimer) {
+      clearTimeout(calibrationCheckTimer);
+      setCalibrationCheckTimer(null);
+    }
+    // Reset the calibration progress flag
+    calibrationInProgressRef.current = false;
+    devLog('🎉 Calibration completed successfully');
+    
+    // Auto-hide success message after 3 seconds
+    setTimeout(() => {
+      setShowCalibrationSuccess(false);
+      setCalibrationState('idle');
+    }, 3000);
+  }, [calibrationCheckTimer]);
+
+  // Initialize head tracking
+  const {
+    isCalibrated,
+    isLooking,
+    isConnected,
+    error,
+    readyForCalibration,
+    calibrationMessage,
+    videoRef,
+    startCalibration,
+    pauseFrameSending,
+    resumeFrameSending,
+    startMonitoring
+  } = useHeadTracking(headTrackingEnabled, handleCalibrationSuccess);
+
   useEffect(() => {
     const startCamera = async (retryCount = 0) => {
       try {
@@ -261,41 +297,6 @@ function InterviewPage() {
     };
   }, [isValidated, isValidating, videoRef]); // wait for validation before starting camera
 
-  // Handle calibration success
-  const handleCalibrationSuccess = useCallback(() => {
-    setCalibrationState('success');
-    setShowCalibrationSuccess(true);
-    
-    // Clear any ongoing calibration check timer
-    if (calibrationCheckTimer) {
-      clearTimeout(calibrationCheckTimer);
-      setCalibrationCheckTimer(null);
-    }
-    // Reset the calibration progress flag
-    calibrationInProgressRef.current = false;
-    devLog('🎉 Calibration completed successfully');
-    
-    // Auto-hide success message after 3 seconds
-    setTimeout(() => {
-      setShowCalibrationSuccess(false);
-      setCalibrationState('idle');
-    }, 3000);
-  }, [calibrationCheckTimer]);
-
-  // Initialize head tracking
-  const {
-    isCalibrated,
-    isLooking,
-    isConnected,
-    error,
-    readyForCalibration,
-    calibrationMessage,
-    videoRef,
-    startCalibration,
-    pauseFrameSending,
-    resumeFrameSending,
-    startMonitoring
-  } = useHeadTracking(headTrackingEnabled, handleCalibrationSuccess);
 
   // Show head tracking popup when user enables the toggle
   useEffect(() => {

@@ -341,7 +341,7 @@ function DashboardPage() {
         resume_url: pairing.resumeUrl,
         job_title: pairing.jobTitle,
         job_description: pairing.jobDescription,
-        prefer_local: true,
+        prefer_local: false,
         question_counts: {
           beginner: questionSettings.easy || 1,
           medium: questionSettings.medium || 1,

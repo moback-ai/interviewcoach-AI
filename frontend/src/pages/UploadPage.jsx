@@ -503,7 +503,7 @@ function UploadPage() {
           resume_url: resumeUrl,
           job_title: jobTitle,
           job_description: jobDescription,
-          prefer_local: true,
+          prefer_local: false,
           question_counts: {
             beginner: easyQuestions,
             medium: mediumQuestions,
@@ -543,7 +543,7 @@ function UploadPage() {
       console.error('Error calling backend API:', error);
       if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
         throw new Error(
-          'Question generation timed out after 3 minutes. The server may still be busy — try again with fewer questions or check backend logs.'
+          'Question generation timed out. The server may still be busy try again with fewer questions.'
         );
       }
       throw error;
