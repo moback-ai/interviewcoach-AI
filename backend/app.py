@@ -3097,16 +3097,13 @@ def _build_generate_response_payload(user, data, on_token=None):
         chat_rows,
     )
 
-    # Generate audio for interviewer response (skip when client uses browser TTS)
+    # Generate Piper audio for interviewer response (Classic server voice only)
     audio_url = None
-    voice_mode = (data.get("voice_mode") or "").strip().lower()
-    prefer_browser_voice = bool(data.get("prefer_browser_voice")) or voice_mode == "browser"
     server_tts_enabled = _env_truthy("INTERVIEW_SERVER_TTS", "false")
     if (
         response.get("message")
         and not response.get("interview_done", False)
         and server_tts_enabled
-        and not prefer_browser_voice
     ):
         try:
             response_text = response["message"]
@@ -3194,7 +3191,7 @@ def _build_generate_response_payload(user, data, on_token=None):
             "interview_done": response.get("interview_done", False),
             "feedback_saved_successfully": feedback_saved,
             "audio_url": audio_url,
-            "should_delete_audio": bool(audio_url),
+            "should_delete_audio": False,
             "requires_code": response.get("requires_code"),
             "code_language": response.get("code_language"),
         },
@@ -3300,6 +3297,10 @@ def generate_response_stream():
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUDIO MERGE HELPER
 # ─────────────────────────────────────────────────────────────────────────────
+def _audio_turn_timestamp(filename):
+    """Extract YYYYMMDDTHHMMSS from user_* or interviewer_*_*.wav for chronological merge."""
+    match = re.search(r'(\d{8}T\d{6})', filename or '')
+    return match.group(1) if match else filename
 
 def _merge_interview_audio(user_id, interview_id):
     folder = f"audio/{user_id}/{interview_id}"
@@ -3309,7 +3310,7 @@ def _merge_interview_audio(user_id, interview_id):
     audio_files = [f for f in files if f['name'].startswith(('interviewer_', 'user_'))]
     if not audio_files:
         return None
-    audio_files.sort(key=lambda x: x['name'])
+    audio_files.sort(key=lambda x: _audio_turn_timestamp(x['name']))
     segments = []
     temp_files = []
     try:
