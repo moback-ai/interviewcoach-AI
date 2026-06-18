@@ -783,72 +783,38 @@ class InterviewManager:
 
 # ===== BEGGINING OF - END OF INTERVIEW CANDIDATE EVALUATION STAGE  =====
 
-    def _fast_wrapup_enabled(self):
-        return os.getenv("INTERVIEW_FAST_WRAPUP", "true").strip().lower() in {
-            "1", "true", "yes", "on",
-        }
-
-    def _handle_wrapup_evaluation_fast(self):
-        """Complete the interview without blocking on multiple Ollama evaluation calls."""
-        log("_handle_wrapup_evaluation_fast")
-        self.final_summary = (
-            f"Mock interview for {self.job_title} completed. "
-            "Your responses were saved — open feedback for transcript review."
-        )
-        self.final_evaluation_log = self.evaluation_log
-        self.key_strengths = "• Participated in the full mock interview flow"
-        self.improvement_areas = "• Review transcript answers and practice concise STAR-format responses"
-        self.overall_rating = 7.0
-        self.metrics = {"wrapup_mode": "fast"}
-        return {
-            "stage": "done",
-            "message": "Thanks — this concludes the interview. Your session has been saved.",
-            "interview_done": True,
-            "summary": self.final_summary,
-            "key_strengths": self.key_strengths,
-            "improvement_areas": self.improvement_areas,
-            "overall_rating": self.overall_rating,
-        }
-
     def handle_wrapup_evaluation(self):
         log("handle_wrapup_evaluation")
 
-        if self._fast_wrapup_enabled():
-            print("[INFO] Using fast interview wrap-up (skipping slow LLM evaluation).")
-            return self._handle_wrapup_evaluation_fast()
-
         from Interview_functions import (
             analyze_individual_responses,
-            generate_final_summary_review  # ✅ Only need this one function now
+            generate_final_summary_review
         )
 
         print("Interview Assistant: Thank you! Let me summarize your interview.")
 
-        # 1. Analyze individual responses
         detailed_log = analyze_individual_responses(self.evaluation_log, model=self.model)
-        
-        # 2. Generate comprehensive evaluation (summary + strengths + improvements)
+
         evaluation_result = generate_final_summary_review(
             self.job_title,
             self.conversation_history,
             detailed_log,
             model=self.model
         )
-        
-        # ✅ Store all data for backend database storage
+
         self.final_summary = evaluation_result['summary']
         self.final_evaluation_log = detailed_log
         self.key_strengths = evaluation_result['key_strengths']
         self.improvement_areas = evaluation_result['improvement_areas']
         self.overall_rating = evaluation_result['overall_rating']
-        self.metrics = evaluation_result.get('metrics', {})  # ✅ Add metrics storage
-        
+        self.metrics = evaluation_result.get('metrics', {})
+
         print(f"\nFinal Evaluation:\n{evaluation_result['summary']}")
         print(f"\nKey Strengths:\n{evaluation_result['key_strengths']}")
         print(f"\nImprovement Areas:\n{evaluation_result['improvement_areas']}")
         print(f"\nOverall Rating: {evaluation_result['overall_rating']:.1f}/10")
         print("[INFO] Interview evaluation completed - data ready for database storage.")
-        
+
         return {
             "stage": "done",
             "message": "Thanks again — this concludes the interview. Final evaluation saved.",

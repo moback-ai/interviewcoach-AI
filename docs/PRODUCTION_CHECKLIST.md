@@ -63,7 +63,6 @@ Store in **AWS Secrets Manager** (`interviewcoach/prod/app`) or API `.env`. Do n
 | Variable | Production value |
 |----------|------------------|
 | `INTERVIEW_SERVER_TTS` | `false` (use browser voices in UI) |
-| `INTERVIEW_FAST_WRAPUP` | `true` |
 | `INTERVIEW_RESPONSE_TIMEOUT_SECONDS` | `45` |
 | `QUESTION_GEN_FORCE_LOCAL` | `true` |
 | `JD_PARSE_USE_OLLAMA` | `false` |
