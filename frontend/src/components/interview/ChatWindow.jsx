@@ -8,12 +8,11 @@ import { useChatHistory } from '../../hooks/useChatHistory';
 import { trackEvents } from '../../services/mixpanel';
 import CodeEditorPopup from './CodeEditorPopup';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaDevices';
-import { canUseBrowserSpeech, chooseBrowserVoice, getInterviewerVoicePreset } from '../../utils/interviewerVoices';
 import { devLog } from '../../utils/devLog';
 
 const GENERATE_RESPONSE_TIMEOUT_MS = 120000;
 
-function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange, selectedVoiceId = 'ava' }) {
+function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isButtonDisabled, setIsButtonDisabled] = useState(false);
   const mediaRecorderRef = useRef(null);
@@ -25,11 +24,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   // Add this state for loading
   const [isEndingInterview, setIsEndingInterview] = useState(false);
   const [currentAudioElement, setCurrentAudioElement] = useState(null);
-  const speechUtteranceRef = useRef(null);
   const [canEndInterview, setCanEndInterview] = useState(false); // Start disabled
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
-  const [browserVoices, setBrowserVoices] = useState([]);
-  const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
 
   const buildGenerateResponsePayload = useCallback((message) => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -37,10 +33,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     return {
       message,
       interview_id: interviewId,
-      voice_mode: activeVoicePreset.mode,
-      prefer_browser_voice: activeVoicePreset.mode === 'browser',
     };
-  }, [activeVoicePreset.mode]);
+  }, []);
 
   const userHasParticipated = conversation.some(
     (msg) => msg.speaker !== 'interviewer' && !msg.isThinking && (msg.message || '').trim().length > 0
@@ -87,24 +81,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
   // Cleanup function to stop media stream when component unmounts
   useEffect(() => {
-    if (!canUseBrowserSpeech()) return undefined;
-
-    const loadVoices = () => {
-      const availableVoices = window.speechSynthesis.getVoices();
-      if (availableVoices.length > 0) {
-        setBrowserVoices(availableVoices);
-      }
-    };
-
-    loadVoices();
-    window.speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
-
-    return () => {
-      window.speechSynthesis.removeEventListener?.('voiceschanged', loadVoices);
-    };
-  }, []);
-
-  useEffect(() => {
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
@@ -113,10 +89,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         currentAudioElement.pause();
         currentAudioElement.currentTime = 0;
       }
-      if (canUseBrowserSpeech()) {
-        window.speechSynthesis.cancel();
-      }
-      speechUtteranceRef.current = null;
       setIsAudioPlaying(false);
       setCurrentAudioElement(null);
     };
@@ -127,7 +99,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     devLog('🔄 Loading state changed to:', isLoading);
   }, [isLoading]);
 
-  // Notify parent component of state changes for head tracking toggle & voice controls
+  // Notify parent component of state changes for head tracking toggle
   useEffect(() => {
     if (onStateChange) {
       onStateChange({
@@ -150,40 +122,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       console.error('❌ Failed to delete audio file:', error);
     }
   }, []);
-
-  const speakWithBrowserVoice = useCallback((text) => new Promise((resolve, reject) => {
-    if (!canUseBrowserSpeech()) {
-      reject(new Error('Browser speech synthesis is unavailable'));
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-
-    const utterance = new window.SpeechSynthesisUtterance(text);
-    const selectedVoice = chooseBrowserVoice(browserVoices, selectedVoiceId);
-
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-      utterance.lang = selectedVoice.lang;
-    }
-
-    utterance.rate = activeVoicePreset.rate;
-    utterance.pitch = activeVoicePreset.pitch;
-    utterance.volume = 1;
-    speechUtteranceRef.current = utterance;
-
-    utterance.onend = () => {
-      speechUtteranceRef.current = null;
-      resolve();
-    };
-
-    utterance.onerror = (event) => {
-      speechUtteranceRef.current = null;
-      reject(new Error(event.error || 'Speech synthesis failed'));
-    };
-
-    window.speechSynthesis.speak(utterance);
-  }), [activeVoicePreset.pitch, activeVoicePreset.rate, browserVoices, selectedVoiceId]);
 
   const playServerAudio = useCallback((audioUrl) => new Promise((resolve, reject) => {
     const audio = new Audio(audioUrl);
@@ -225,25 +163,21 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     };
   }), []);
 
-  const playInterviewerResponseAudio = useCallback(async (textResponse, audioUrl, shouldDeleteAudio) => {
-    if (!audioUrl && !(activeVoicePreset.mode === 'browser' && canUseBrowserSpeech())) {
+  const playInterviewerResponseAudio = useCallback(async (audioUrl, shouldDeleteAudio) => {
+    if (!audioUrl) {
       return;
     }
 
     setIsAudioPlaying(true);
 
     try {
-      if (activeVoicePreset.mode === 'browser' && canUseBrowserSpeech()) {
-        await speakWithBrowserVoice(textResponse);
-      } else if (audioUrl) {
-        await playServerAudio(audioUrl);
-      }
+      await playServerAudio(audioUrl);
     } finally {
       setIsAudioPlaying(false);
       setCurrentAudioElement(null);
       await deleteGeneratedAudio(audioUrl, shouldDeleteAudio);
     }
-  }, [activeVoicePreset.mode, deleteGeneratedAudio, playServerAudio, setIsAudioPlaying, speakWithBrowserVoice]);
+  }, [deleteGeneratedAudio, playServerAudio, setIsAudioPlaying]);
 
   // Function to call Interview Manager API
   const callInterviewManager = async (userInput) => {
@@ -398,9 +332,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         setConversation(prev => prev.filter(msg => !msg.isThinking));
         await addMessageToConversation('interviewer', textResponse);
 
-        if (audio_url || activeVoicePreset.mode === 'browser') {
+        if (audio_url) {
           try {
-            await playInterviewerResponseAudio(textResponse, audio_url, should_delete_audio);
+            await playInterviewerResponseAudio(audio_url, should_delete_audio);
           } catch (error) {
             console.error('❌ Audio playback failed:', error);
           }
@@ -502,10 +436,10 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           };
           setConversation(prev => [...prev, finalMessage]);
 
-          if (audio_url || activeVoicePreset.mode === 'browser') {
+          if (audio_url) {
             setCanEndInterview(false);
             try {
-              await playInterviewerResponseAudio(textResponse, audio_url, should_delete_audio);
+              await playInterviewerResponseAudio(audio_url, should_delete_audio);
             } catch (error) {
               console.error('❌ Final audio playback failed:', error);
             } finally {
@@ -1064,10 +998,10 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         };
         setConversation(prev => [...prev, finalMessage]);
 
-        if (audio_url || activeVoicePreset.mode === 'browser') {
+        if (audio_url) {
           setCanEndInterview(false);
           try {
-            await playInterviewerResponseAudio(textResponse, audio_url, should_delete_audio);
+            await playInterviewerResponseAudio(audio_url, should_delete_audio);
           } catch (error) {
             console.error('❌ Final audio playback failed:', error);
           } finally {
