@@ -207,7 +207,6 @@ Monthly estimate (on-demand):
   QUESTION_GEN_FORCE_LOCAL=true
   JD_PARSE_USE_OLLAMA=false
   INTERVIEW_SERVER_TTS=false
-  INTERVIEW_FAST_WRAPUP=true
   INTERVIEW_RESPONSE_TIMEOUT_SECONDS=45
   OLLAMA_MODEL=${OLLAMA_MODEL}
   $( [[ -f "${SCRIPT_DIR}/outputs.env" ]] && cat "${SCRIPT_DIR}/outputs.env" | grep OLLAMA || true )

@@ -66,7 +66,7 @@ export default function HowItWorks() {
               Land Your Dream Job in 4 Smart Steps
             </h2>
             <p className="mt-3 sm:mt-4 text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto md:mx-0 leading-relaxed">
-              Upload your resume, get matched with job descriptions, and practice real-time interviews with AI — it's your edge in today's job market.
+              Upload your resume, get matched with job descriptions, and practice real-time interviews with AI . It's your edge in today's job market.
             </p>
           </div>
 

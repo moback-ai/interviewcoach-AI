@@ -311,7 +311,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           },
         );
       } catch (streamErr) {
-        if (streamErr.busy || streamErr.closed) {
+        if (streamErr.busy) {
           throw streamErr;
         }
         devLog('Stream unavailable, falling back to POST', streamErr.message);
@@ -421,8 +421,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           'interviewer',
           error.message || 'The interview AI is busy. Please wait a few seconds and try again.',
         );
-      } else if (error.closed) {
-        await addMessageToConversation('interviewer', error.message || 'Service is outside operating hours.');
       }
       setConversation(prev => prev.filter(msg => !msg.isThinking));
       setIsResponseInProgress(false);

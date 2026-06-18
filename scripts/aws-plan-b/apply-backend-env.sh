@@ -35,7 +35,6 @@ updates = {
     "QUESTION_GEN_FORCE_LOCAL": "true",
     "JD_PARSE_USE_OLLAMA": "false",
     "INTERVIEW_SERVER_TTS": "false",
-    "INTERVIEW_FAST_WRAPUP": "true",
     "INTERVIEW_UNIFIED_TURNS": "true",
     "INTERVIEW_RESPONSE_TIMEOUT_SECONDS": "90",
     "INTERVIEW_QUEUE_WAIT_SECONDS": "90",
@@ -47,10 +46,6 @@ updates = {
     "ENABLE_AI_WARMUP": "false",
     "WHISPER_BEAM_SIZE": "1",
     "OLLAMA_DIAGNOSTICS_CACHE_SECONDS": "30",
-    "ENFORCE_SERVICE_HOURS": "true",
-    "SERVICE_HOURS_TZ": "Asia/Kolkata",
-    "SERVICE_HOURS_START": "10:00",
-    "SERVICE_HOURS_END": "20:00",
     "ADMIN_LOG_VIEWER_EMAILS": "neerajs@moback.com,mohammeda@moback.com,ganesh.prasad@ugaanlabs.com,alokk@moback.com,kavitas@moback.com,gayathri.nayak@ugaanlabs.com",
 }
 import os as _os

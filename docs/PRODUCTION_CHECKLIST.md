@@ -63,7 +63,6 @@ Store in **AWS Secrets Manager** (`interviewcoach/prod/app`) or API `.env`. Do n
 | Variable | Production value |
 |----------|------------------|
 | `INTERVIEW_SERVER_TTS` | `false` (use browser voices in UI) |
-| `INTERVIEW_FAST_WRAPUP` | `true` |
 | `INTERVIEW_RESPONSE_TIMEOUT_SECONDS` | `45` |
 | `QUESTION_GEN_FORCE_LOCAL` | `true` |
 | `JD_PARSE_USE_OLLAMA` | `false` |
@@ -176,7 +175,7 @@ curl -s https://ugaanlabs.ai/api/health | python3 -m json.tool
 | `INTERVIEW_MAX_CONCURRENT` | Queue when too many live interviews |
 | `/api/generate-response-stream` | SSE + fallback POST |
 | `TRANSCRIBE_SERVICE_URL` | Optional Whisper on second host |
-| `ENFORCE_SERVICE_HOURS` | Block API outside 10am–8pm IST |
+| Daily EC2/RDS schedule | Stop/start 10am–8pm IST via `setup-daily-schedule.sh` |
 | Browser voice default (Ava) | No server TTS wait |
 
 ---
