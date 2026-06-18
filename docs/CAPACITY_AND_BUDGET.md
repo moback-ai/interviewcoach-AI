@@ -51,7 +51,7 @@ To approach 100 parallel interviews you would need **multiple AI instances + a j
 | Streaming | `/api/generate-response-stream` — SSE `token` events while model writes |
 | Capacity | `INTERVIEW_MAX_CONCURRENT=12`, `INTERVIEW_QUEUE_WAIT_SECONDS=90` |
 | Whisper | `TRANSCRIBE_SERVICE_URL` → AI sidecar (`setup-transcribe-on-ai.sh`) |
-| Hours | `ENFORCE_SERVICE_HOURS=true`, Asia/Kolkata 10:00–20:00 |
+| Hours | EC2/RDS daily schedule 10:00–20:00 IST (`setup-daily-schedule.sh`) |
 | Frontend | Lazy routes, lazy syntax highlighter, prod strips `console` |
 
 ### If you split API from Ollama (Plan B)

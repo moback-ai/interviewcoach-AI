@@ -66,10 +66,6 @@ updates = {
     "INTERVIEW_RESPONSE_TIMEOUT_SECONDS": "90",
     "OLLAMA_MODEL": os.environ.get("OLLAMA_MODEL", "llama3.2:3b"),
     "OLLAMA_NUM_PREDICT": "384",
-    "ENFORCE_SERVICE_HOURS": "true",
-    "SERVICE_HOURS_TZ": "Asia/Kolkata",
-    "SERVICE_HOURS_START": "10:00",
-    "SERVICE_HOURS_END": "20:00",
 }
 data.update({k: v for k, v in updates.items() if v})
 with open(path, "w") as f:
