@@ -1791,7 +1791,6 @@ def health_check():
             "jd_parse_local_default": not _jd_parse_use_ollama(),
             "question_gen_local_default": _question_gen_force_local(),
             "interview_server_tts": _env_truthy("INTERVIEW_SERVER_TTS", "false"),
-            "interview_fast_wrapup": _env_truthy("INTERVIEW_FAST_WRAPUP", "true"),
         },
         "services": {
             "ollama": {

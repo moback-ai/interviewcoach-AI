@@ -59,7 +59,6 @@ updates = {
     "INFRA_UPDATED_AT": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
     "TRANSCRIBE_SERVICE_URL": f"http://{os.environ['AI_PRIVATE_IP']}:5001",
     "INTERVIEW_UNIFIED_TURNS": "true",
-    "INTERVIEW_FAST_WRAPUP": "true",
     "INTERVIEW_SERVER_TTS": "false",
     "INTERVIEW_MAX_CONCURRENT": "12",
     "INTERVIEW_QUEUE_WAIT_SECONDS": "90",
