@@ -69,7 +69,6 @@ export async function apiPostInterviewStream(endpoint, body, { onEvent, signal }
         const err = new Error(parsed.message || 'Interview stream failed');
         err.payload = parsed;
         err.busy = parsed.busy;
-        err.closed = parsed.closed;
         throw err;
       }
     }
