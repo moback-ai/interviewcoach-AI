@@ -19,7 +19,6 @@
 - One Ollama call per interview turn
 - Live text streaming during AI replies in the interview UI
 - Queue when interview AI is busy
-- Service blocked outside **10:00–20:00 IST**
 - Voice transcription on the **AI server** (internal, not public)
 - Deploy checks: lint, build, tests, merge conflicts before production
 
@@ -157,7 +156,7 @@ python -m pytest backend/tests/ -q
 | Symptom | Likely cause | Where to look |
 |---------|----------------|---------------|
 | `503` / “AI is busy” on interview | Too many parallel interviews | Admin logs → `api-failures` |
-| “Outside operating hours” | Before 10:00 or after 20:00 IST | Service hours banner |
+| Connection / timeout errors | Before 10:00 or after 20:00 IST | EC2/RDS stopped by daily schedule |
 | Interview slow / timeout message | Ollama slow or overloaded | `server-ai`, `backend-error` |
 | Voice not transcribing | Whisper sidecar down on AI | `server-ai`, `pm2 logs transcribe` |
 | Login page blank / no password field | Bad frontend chunk split | Re-run login bundle script locally |

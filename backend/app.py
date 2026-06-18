@@ -54,7 +54,6 @@ from common.storage import save_bytes, save_from_path, read_bytes, list_folder, 
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
-from common.service_hours import service_hours_status
 from common.transcribe_remote import transcribe_via_remote_service
 
 try:
@@ -1792,7 +1791,6 @@ def health_check():
             "jd_parse_local_default": not _jd_parse_use_ollama(),
             "question_gen_local_default": _question_gen_force_local(),
             "interview_server_tts": _env_truthy("INTERVIEW_SERVER_TTS", "false"),
-            "interview_fast_wrapup": _env_truthy("INTERVIEW_FAST_WRAPUP", "true"),
         },
         "services": {
             "ollama": {
@@ -2926,11 +2924,6 @@ def transcribe_audio_internal():
     return jsonify({"success": True, "transcription": result.get("transcription", "")})
 
 
-@app.route('/api/service-hours', methods=['GET'])
-def api_service_hours():
-    return jsonify({"success": True, "data": service_hours_status()})
-
-
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/transcribe-audio', methods=['POST', 'OPTIONS'])
 @verify_auth_token
@@ -3216,16 +3209,6 @@ def generate_response():
         if not data.get('interview_id'):
             return jsonify({"success": False, "message": "interview_id required"}), 400
 
-        if _env_truthy("ENFORCE_SERVICE_HOURS", "true"):
-            hours = service_hours_status()
-            if not hours.get("is_open"):
-                return jsonify({
-                    "success": False,
-                    "closed": True,
-                    "message": hours.get("message") or "Service is outside operating hours.",
-                    "service_hours": hours,
-                }), 503
-
         with interview_turn_slot():
             payload, status_code = _build_generate_response_payload(request.user, data)
         return jsonify(payload), status_code
@@ -3258,18 +3241,6 @@ def generate_response_stream():
                 err = {"success": False, "message": "interview_id required"}
                 yield f"event: error\ndata: {json.dumps(err)}\n\n"
                 return
-            if _env_truthy("ENFORCE_SERVICE_HOURS", "true"):
-                hours = service_hours_status()
-                if not hours.get("is_open"):
-                    err = {
-                        "success": False,
-                        "closed": True,
-                        "message": hours.get("message"),
-                        "service_hours": hours,
-                    }
-                    yield f"event: error\ndata: {json.dumps(err)}\n\n"
-                    return
-
             event_q = queue.Queue()
             user = request.user
 
