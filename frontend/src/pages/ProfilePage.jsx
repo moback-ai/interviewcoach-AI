@@ -1192,9 +1192,6 @@ function ProfilePage() {
 
       setProfileData(buildProfileState(nextUser));
       clearAvatarDraft();
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('interviewcoach.voicePresetManual');
-      }
       setIsEditing(false);
       setProfileStatus({
         tone: 'success',
