@@ -18,6 +18,44 @@ def _public_storage_url():
     return optional_env("PUBLIC_STORAGE_URL", "").rstrip("/")
 
 
+def _storage_root() -> str:
+    return os.path.realpath(_storage_path())
+
+
+def _path_segments_valid(normalized: str) -> bool:
+    parts = normalized.split("/")
+    return not any(part in ("", ".", "..") for part in parts)
+
+
+def normalize_relative_path(relative_path: str) -> str | None:
+    """Normalize a relative path and reject traversal segments."""
+    clean = (relative_path or "").strip().replace("\\", "/")
+    if not clean or os.path.isabs(clean):
+        return None
+
+    raw_parts = clean.split("/")
+    if any(part in ("", ".", "..") for part in raw_parts):
+        return None
+
+    normalized = os.path.normpath(clean).replace("\\", "/")
+    if normalized in ("", ".", "..") or normalized.startswith("../"):
+        return None
+    if not _path_segments_valid(normalized):
+        return None
+    return normalized
+
+
+def validated_protected_relative_path(relative_path: str) -> str | None:
+    """Normalize and require resumes/audio/avatars scoped storage paths."""
+    clean = normalize_relative_path(relative_path)
+    if not clean:
+        return None
+    parts = clean.split("/")
+    if len(parts) < 2 or parts[0] not in PROTECTED_STORAGE_PREFIXES:
+        return None
+    return clean
+
+
 def _ensure(folder: str) -> str:
     path = os.path.join(_storage_path(), folder)
     os.makedirs(path, exist_ok=True)
@@ -46,59 +84,47 @@ def normalize_file_url(url_or_path: str | None) -> str | None:
 
 
 def resolve_relative_path(url_or_path: str | None) -> str | None:
-    """Normalize storage URLs or raw paths to a relative storage path."""
+    """Normalize storage URLs or raw paths to a validated relative storage path."""
     if not url_or_path:
         return None
     value = str(url_or_path).strip().replace("\\", "/")
     if not value:
         return None
 
+    candidate = None
     if value.startswith(FILES_API_PREFIX):
-        return value[len(FILES_API_PREFIX):].lstrip("/")
+        candidate = value[len(FILES_API_PREFIX):].lstrip("/")
+    else:
+        public_base = _public_storage_url()
+        if public_base and value.startswith(public_base):
+            candidate = value[len(public_base):].lstrip("/")
+        else:
+            parsed = urlparse(value)
+            if parsed.scheme and parsed.path:
+                path = parsed.path.lstrip("/")
+                if path.startswith("storage/"):
+                    candidate = path[len("storage/"):]
+                elif path.startswith("api/files/"):
+                    candidate = path[len("api/files/"):]
+            elif value.startswith("/storage/"):
+                candidate = value[len("/storage/"):]
+            elif value.startswith("storage/"):
+                candidate = value[len("storage/"):]
+            elif "/" in value and not value.startswith("/") and "://" not in value:
+                candidate = value.lstrip("/")
 
-    public_base = _public_storage_url()
-    if public_base and value.startswith(public_base):
-        return value[len(public_base):].lstrip("/")
-
-    parsed = urlparse(value)
-    if parsed.scheme and parsed.path:
-        path = parsed.path.lstrip("/")
-        if path.startswith("storage/"):
-            return path[len("storage/"):]
-        if path.startswith("api/files/"):
-            return path[len("api/files/"):]
-
-    if value.startswith("/storage/"):
-        return value[len("/storage/"):]
-
-    if value.startswith("storage/"):
-        return value[len("storage/"):]
-
-    if "/" in value and not value.startswith("/") and "://" not in value:
-        return value.lstrip("/")
-
-    return None
+    if not candidate:
+        return None
+    return validated_protected_relative_path(candidate)
 
 
 def user_owns_storage_path(user_id: str, relative_path: str) -> bool:
-    clean = (relative_path or "").strip().replace("\\", "/").lstrip("/")
+    clean = validated_protected_relative_path(relative_path)
+    if not clean:
+        return False
     parts = clean.split("/")
-    if len(parts) < 2:
-        return False
     folder, owner_id = parts[0], parts[1]
-    if folder not in PROTECTED_STORAGE_PREFIXES:
-        return False
     return str(owner_id) == str(user_id)
-
-
-def normalize_relative_path(relative_path: str) -> str | None:
-    clean = (relative_path or "").strip().replace("\\", "/")
-    if not clean or os.path.isabs(clean):
-        return None
-    normalized = os.path.normpath(clean).replace("\\", "/")
-    if normalized in ("", ".", "..") or normalized.startswith("../"):
-        return None
-    return normalized
 
 
 def _path_within_root(root: str, target: str) -> bool:
@@ -110,11 +136,11 @@ def _path_within_root(root: str, target: str) -> bool:
 
 def safe_storage_file_path(relative_path: str) -> str | None:
     """Resolve relative path under STORAGE_PATH; return None if outside root."""
-    clean = normalize_relative_path(relative_path)
+    clean = validated_protected_relative_path(relative_path)
     if not clean:
         return None
 
-    storage_root = os.path.realpath(_storage_path())
+    storage_root = _storage_root()
     file_path = os.path.realpath(os.path.join(storage_root, clean))
     if not _path_within_root(storage_root, file_path):
         return None
@@ -125,11 +151,11 @@ def safe_storage_file_path(relative_path: str) -> str | None:
 
 def safe_storage_dir_path(folder: str) -> str | None:
     """Resolve folder under STORAGE_PATH; return None if outside root."""
-    clean = normalize_relative_path(folder)
+    clean = validated_protected_relative_path(folder)
     if not clean:
         return None
 
-    storage_root = os.path.realpath(_storage_path())
+    storage_root = _storage_root()
     dir_path = os.path.realpath(os.path.join(storage_root, clean))
     if not _path_within_root(storage_root, dir_path):
         return None
@@ -170,7 +196,10 @@ def save_from_path(src: str, folder: str, filename: str) -> dict:
 
 def read_bytes(relative_path: str) -> bytes:
     """Read file from storage."""
-    file_path = safe_storage_file_path(relative_path)
+    clean = validated_protected_relative_path(relative_path)
+    if not clean:
+        raise FileNotFoundError(f"Storage file not found: {relative_path}")
+    file_path = safe_storage_file_path(clean)
     if not file_path:
         raise FileNotFoundError(f"Storage file not found: {relative_path}")
     with open(file_path, 'rb') as f:
@@ -182,21 +211,35 @@ def list_folder(folder: str) -> list:
     dir_path = safe_storage_dir_path(folder)
     if not dir_path:
         return []
+    clean_folder = validated_protected_relative_path(folder)
+    if not clean_folder:
+        return []
+
+    storage_root = _storage_root()
     files = []
     for fname in os.listdir(dir_path):
-        fpath = os.path.join(dir_path, fname)
-        if os.path.isfile(fpath):
-            relative = f"{folder}/{fname}"
-            entry = _file_result(relative, fpath, os.path.getsize(fpath))
-            entry["name"] = fname
-            files.append(entry)
+        safe_name = os.path.basename(fname)
+        if safe_name != fname or safe_name in ("", ".", ".."):
+            continue
+        fpath = os.path.realpath(os.path.join(dir_path, safe_name))
+        if not _path_within_root(storage_root, fpath):
+            continue
+        if not os.path.isfile(fpath):
+            continue
+        relative = f"{clean_folder}/{safe_name}"
+        entry = _file_result(relative, fpath, os.path.getsize(fpath))
+        entry["name"] = safe_name
+        files.append(entry)
     return files
 
 
 def delete_files(relative_paths: list):
     """Delete a list of files by relative path."""
     for rel in relative_paths:
-        file_path = safe_storage_file_path(rel)
+        clean = validated_protected_relative_path(rel)
+        if not clean:
+            continue
+        file_path = safe_storage_file_path(clean)
         if file_path:
             os.remove(file_path)
 
