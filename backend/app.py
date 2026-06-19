@@ -62,6 +62,7 @@ from common.storage import (
     normalize_file_url,
     resolve_relative_path,
     validated_protected_relative_path,
+    build_protected_storage_path,
     user_owns_storage_path,
     safe_storage_file_path,
 )
@@ -3243,9 +3244,11 @@ def _build_generate_response_payload(user, data, on_token=None):
         # Clean up per-turn audio files only after feedback has been persisted.
         if feedback_saved and merged_path:
             try:
-                per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
-                            if f['name'].startswith(('interviewer_', 'user_'))]
-                delete_files([f['relative_path'] for f in per_turn])
+                audio_folder = build_protected_storage_path("audio", user_id, interview_id)
+                if audio_folder:
+                    per_turn = [f for f in list_folder(audio_folder)
+                                if f['name'].startswith(('interviewer_', 'user_'))]
+                    delete_files([f['relative_path'] for f in per_turn])
             except Exception as cleanup_exc:
                 print(f"[WARN] Audio cleanup failed after feedback save: {cleanup_exc}")
 
@@ -3369,7 +3372,9 @@ def _audio_turn_timestamp(filename):
     return match.group(1) if match else filename
 
 def _merge_interview_audio(user_id, interview_id):
-    folder = f"audio/{user_id}/{interview_id}"
+    folder = build_protected_storage_path("audio", user_id, interview_id)
+    if not folder:
+        return None
     files = list_folder(folder)
     if not files:
         return None
@@ -4631,7 +4636,8 @@ def delete_account():
         return jsonify({'error': 'Password confirmation failed'}), 403
     try:
         # Delete stored audio/resume files
-        audio_files = list_folder(f'audio/{user_id}')
+        audio_folder = build_protected_storage_path("audio", user_id)
+        audio_files = list_folder(audio_folder) if audio_folder else []
         if audio_files:
             delete_files([f['relative_path'] for f in audio_files])
         resume_rows = query_all('SELECT stored_path FROM resumes WHERE user_id=%s', (user_id,))

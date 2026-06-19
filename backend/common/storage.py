@@ -2,6 +2,9 @@ import os
 import shutil
 from urllib.parse import urlparse
 
+from werkzeug.security import safe_join
+from werkzeug.utils import secure_filename
+
 from common.runtime_config import load_runtime_config, optional_env, require_env
 
 load_runtime_config()
@@ -54,6 +57,53 @@ def validated_protected_relative_path(relative_path: str) -> str | None:
     if len(parts) < 2 or parts[0] not in PROTECTED_STORAGE_PREFIXES:
         return None
     return clean
+
+
+def _sanitize_path_segment(segment: str) -> str | None:
+    value = str(segment).strip()
+    if not value or value in (".", ".."):
+        return None
+    if "/" in value or "\\" in value:
+        return None
+    safe = secure_filename(value)
+    if not safe or safe != value:
+        return None
+    return safe
+
+
+def build_protected_storage_path(prefix: str, *segments: str) -> str | None:
+    """Build a validated storage path from trusted prefix and sanitized segments."""
+    if prefix not in PROTECTED_STORAGE_PREFIXES:
+        return None
+    parts = [prefix]
+    for segment in segments:
+        clean_segment = _sanitize_path_segment(segment)
+        if not clean_segment:
+            return None
+        parts.append(clean_segment)
+    return validated_protected_relative_path("/".join(parts))
+
+
+def _path_within_root(root: str, target: str) -> bool:
+    try:
+        return os.path.commonpath([root, target]) == root
+    except ValueError:
+        return False
+
+
+def _resolve_under_storage_root(relative_path: str) -> str | None:
+    """Resolve a validated relative path under STORAGE_PATH using safe_join."""
+    clean = validated_protected_relative_path(relative_path)
+    if not clean:
+        return None
+    joined = safe_join(_storage_path(), *clean.split("/"))
+    if not joined:
+        return None
+    storage_root = _storage_root()
+    resolved = os.path.realpath(joined)
+    if not _path_within_root(storage_root, resolved):
+        return None
+    return resolved
 
 
 def _ensure(folder: str) -> str:
@@ -127,39 +177,18 @@ def user_owns_storage_path(user_id: str, relative_path: str) -> bool:
     return str(owner_id) == str(user_id)
 
 
-def _path_within_root(root: str, target: str) -> bool:
-    try:
-        return os.path.commonpath([root, target]) == root
-    except ValueError:
-        return False
-
-
 def safe_storage_file_path(relative_path: str) -> str | None:
     """Resolve relative path under STORAGE_PATH; return None if outside root."""
-    clean = validated_protected_relative_path(relative_path)
-    if not clean:
-        return None
-
-    storage_root = _storage_root()
-    file_path = os.path.realpath(os.path.join(storage_root, clean))
-    if not _path_within_root(storage_root, file_path):
-        return None
-    if not os.path.isfile(file_path):
+    file_path = _resolve_under_storage_root(relative_path)
+    if not file_path or not os.path.isfile(file_path):
         return None
     return file_path
 
 
 def safe_storage_dir_path(folder: str) -> str | None:
     """Resolve folder under STORAGE_PATH; return None if outside root."""
-    clean = validated_protected_relative_path(folder)
-    if not clean:
-        return None
-
-    storage_root = _storage_root()
-    dir_path = os.path.realpath(os.path.join(storage_root, clean))
-    if not _path_within_root(storage_root, dir_path):
-        return None
-    if not os.path.isdir(dir_path):
+    dir_path = _resolve_under_storage_root(folder)
+    if not dir_path or not os.path.isdir(dir_path):
         return None
     return dir_path
 
@@ -211,9 +240,6 @@ def list_folder(folder: str) -> list:
     dir_path = safe_storage_dir_path(folder)
     if not dir_path:
         return []
-    clean_folder = validated_protected_relative_path(folder)
-    if not clean_folder:
-        return []
 
     storage_root = _storage_root()
     files = []
@@ -221,13 +247,18 @@ def list_folder(folder: str) -> list:
         safe_name = os.path.basename(fname)
         if safe_name != fname or safe_name in ("", ".", ".."):
             continue
-        fpath = os.path.realpath(os.path.join(dir_path, safe_name))
-        if not _path_within_root(storage_root, fpath):
+        joined = safe_join(dir_path, safe_name)
+        if not joined:
             continue
-        if not os.path.isfile(fpath):
+        canonical_fpath = os.path.realpath(joined)
+        if not _path_within_root(storage_root, canonical_fpath):
             continue
-        relative = f"{clean_folder}/{safe_name}"
-        entry = _file_result(relative, fpath, os.path.getsize(fpath))
+        if not os.path.isfile(canonical_fpath):
+            continue
+        relative = os.path.relpath(canonical_fpath, storage_root).replace("\\", "/")
+        if not validated_protected_relative_path(relative):
+            continue
+        entry = _file_result(relative, canonical_fpath, os.path.getsize(canonical_fpath))
         entry["name"] = safe_name
         files.append(entry)
     return files
