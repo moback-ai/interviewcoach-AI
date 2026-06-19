@@ -16,6 +16,18 @@ function buildFileUrl(endpoint) {
   return `${normalizedBase}${clean}`;
 }
 
+export function isSafeImageSrc(url) {
+  if (!url) return false;
+  if (url.startsWith('blob:')) return true;
+  if (url.startsWith('data:image/')) return true;
+  try {
+    const { protocol } = new URL(url, window.location.origin);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export function toProtectedFileUrl(urlOrPath) {
   if (!urlOrPath) return '';
   const value = String(urlOrPath).trim();
