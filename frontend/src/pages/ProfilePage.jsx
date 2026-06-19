@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
+import { useAuthenticatedBlobUrl } from '../hooks/useAuthenticatedBlobUrl';
 import { 
   FiUser, 
   FiMail, 
@@ -99,6 +100,8 @@ const ProfileSection = ({
   handleAvatarFileChange,
 }) => {
   const avatarSource = avatarPreview || profileData.avatar_url;
+  const authenticatedAvatarUrl = useAuthenticatedBlobUrl(avatarPreview ? '' : avatarSource);
+  const avatarDisplayUrl = avatarPreview || authenticatedAvatarUrl;
   const displayName = profileData.full_name || profileData.nickname || profileData.email || 'InterviewCoach';
 
   return (
@@ -153,9 +156,9 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {avatarSource ? (
+                {avatarDisplayUrl ? (
                   <img
-                    src={avatarSource}
+                    src={avatarDisplayUrl}
                     alt="Profile"
                     className="h-full w-full object-cover"
                   />

@@ -15,6 +15,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
 import ipaddress
+import mimetypes
 from urllib.parse import urlencode
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context
@@ -50,7 +51,19 @@ if SUPPORT_BOT_PATH not in sys.path:
 from common.auth import verify_auth_token, create_token, hash_password, check_password
 from common.db import query_one, query_all, execute, execute_many
 from common.email_utils import send_email, smtp_is_configured
-from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
+from common.storage import (
+    save_bytes,
+    save_from_path,
+    read_bytes,
+    list_folder,
+    delete_files,
+    public_url,
+    protected_file_url,
+    normalize_file_url,
+    resolve_relative_path,
+    user_owns_storage_path,
+    safe_storage_file_path,
+)
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
@@ -316,7 +329,24 @@ def normalize_feedback_row(row):
     normalized['metrics'] = _normalize_metrics(normalized.get('metrics'))
     normalized['key_strengths'] = _normalize_list(normalized.get('key_strengths'))
     normalized['improvement_areas'] = _normalize_list(normalized.get('improvement_areas'))
+    if normalized.get('audio_url'):
+        normalized['audio_url'] = normalize_file_url(normalized['audio_url'])
     return normalized
+
+
+def _serialize_file_url(url_or_path):
+    return normalize_file_url(url_or_path)
+
+
+def _serialize_resume_row(row):
+    if not row:
+        return row
+    data = dict(row)
+    if data.get('file_url'):
+        data['file_url'] = normalize_file_url(data['file_url'])
+    elif data.get('stored_path'):
+        data['file_url'] = protected_file_url(data['stored_path'])
+    return data
 
 
 def ensure_questions_schema():
@@ -335,7 +365,7 @@ def serialize_user(user):
     payload["id"] = str(payload["id"])
     payload["email_verified"] = bool(payload.get("email_verified_at"))
     payload["nickname"] = payload.get("nickname") or ""
-    payload["avatar_url"] = payload.get("avatar_url") or ""
+    payload["avatar_url"] = _serialize_file_url(payload.get("avatar_url") or "") or ""
     payload["date_of_birth"] = serialize_date_value(payload.get("date_of_birth"))
     payload["gender"] = payload.get("gender") or ""
     payload.setdefault("user_metadata", {})
@@ -2839,11 +2869,9 @@ def generate_questions():
         if not is_valid_jd:
             return jsonify({"success": False, "message": jd_validation_error}), 400
 
-        # Download resume from local storage or URL
-        public_storage_url = require_env("PUBLIC_STORAGE_URL")
-        if resume_url.startswith(public_storage_url):
-            # Local storage file
-            relative = resume_url.replace(public_storage_url, "").lstrip("/")
+        # Load resume from local protected storage or external URL
+        relative = resolve_relative_path(resume_url)
+        if relative:
             resume_data = read_bytes(relative)
             ext = relative.rsplit('.', 1)[-1]
         else:
@@ -3011,6 +3039,43 @@ def _fetch_interview_question_rows(interview_row, interview_id, user_id):
             ),
         )
     return questions_rows
+
+
+_END_INTERVIEW_LATER_STAGES = frozenset({
+    "custom_questions",
+    "candidate_questions",
+    "wrapup_evaluation",
+    "manual_end",
+    "timeout",
+})
+
+
+def _interview_session_ui_state(interview_id: str, user_id: str) -> dict:
+    """Restore interview UI flags from the persisted manager session."""
+    saved_state = load_session(f"{interview_id}:{user_id}")
+    if not saved_state:
+        return {
+            "interview_stage": "introduction",
+            "has_answered_resume_question": False,
+            "can_end_interview": False,
+        }
+
+    stage = str(saved_state.get("stage") or "introduction")
+    has_answered = bool(str(saved_state.get("last_resume_response") or "").strip())
+    if not has_answered:
+        for entry in saved_state.get("evaluation_log") or []:
+            if isinstance(entry, dict) and entry.get("stage") == "resume":
+                has_answered = True
+                break
+
+    can_end = stage in _END_INTERVIEW_LATER_STAGES or (
+        stage == "resume_discussion" and has_answered
+    )
+    return {
+        "interview_stage": stage,
+        "has_answered_resume_question": has_answered,
+        "can_end_interview": can_end,
+    }
 
 
 def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state):
@@ -3190,7 +3255,7 @@ def _build_generate_response_payload(user, data, on_token=None):
             "stage": response.get("stage", "unknown"),
             "interview_done": response.get("interview_done", False),
             "feedback_saved_successfully": feedback_saved,
-            "audio_url": audio_url,
+            "audio_url": _serialize_file_url(audio_url),
             "should_delete_audio": False,
             "requires_code": response.get("requires_code"),
             "code_language": response.get("code_language"),
@@ -3367,7 +3432,7 @@ def generate_speech():
         result = save_bytes(audio_data, f"audio/{user_id}/general", filename)
         os.unlink(temp_path)
         return jsonify({"success": True, "data": {
-            "audio_url": result['public_url'],
+            "audio_url": result['protected_url'],
             "file_size": result['file_size']
         }})
     except Exception as e:
@@ -3697,14 +3762,53 @@ def _normalize_list(value):
 
 @app.route('/storage/<path:relative_path>', methods=['GET'])
 def serve_storage_file(relative_path):
-    storage_root = require_env("STORAGE_PATH")
-    safe_root = os.path.abspath(storage_root)
-    file_path = os.path.abspath(os.path.join(safe_root, relative_path))
-    if not file_path.startswith(f"{safe_root}{os.sep}"):
+    """Legacy public storage route — disabled; use /api/files/ with JWT."""
+    return jsonify({"error": "Direct storage access is not allowed. Use authenticated file API."}), 403
+
+
+@app.route('/api/files/<path:relative_path>', methods=['GET', 'OPTIONS'])
+@app.route('/functions/v1/files/<path:relative_path>', methods=['GET', 'OPTIONS'])
+@app.route('/api/functions/v1/files/<path:relative_path>', methods=['GET', 'OPTIONS'])
+@verify_auth_token
+def download_protected_file(relative_path):
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+
+    clean_path = (relative_path or "").strip().replace("\\", "/").lstrip("/")
+    if not user_owns_storage_path(request.user['id'], clean_path):
+        return jsonify({"error": "Forbidden"}), 403
+
+    file_path = safe_storage_file_path(clean_path)
+    if not file_path:
         abort(404)
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
-        abort(404)
-    return send_from_directory(safe_root, relative_path, as_attachment=False)
+
+    directory = os.path.dirname(file_path)
+    filename = os.path.basename(file_path)
+    mimetype = mimetypes.guess_type(filename)[0]
+    return send_from_directory(directory, filename, mimetype=mimetype, as_attachment=False)
+
+
+@app.route('/api/delete-audio', methods=['DELETE', 'POST', 'OPTIONS'])
+@verify_auth_token
+def delete_audio_file():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+
+    data = request.get_json(silent=True) or {}
+    audio_url = data.get('audio_url', '').strip()
+    if not audio_url:
+        return jsonify({"success": False, "message": "audio_url required"}), 400
+
+    relative = resolve_relative_path(audio_url)
+    if not relative:
+        return jsonify({"success": False, "message": "Invalid audio_url"}), 400
+    if not relative.startswith(f"audio/{request.user['id']}/"):
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    if not safe_storage_file_path(relative):
+        return jsonify({"success": True, "message": "Already deleted"})
+
+    delete_files([relative])
+    return jsonify({"success": True})
 
 
 def _pairing_key(resume_id, jd_id):
@@ -3809,7 +3913,12 @@ def _build_dashboard_pairings(user_id):
                 'resume_id': str(resume_id),
                 'jd_id': str(jd_id),
                 'resumeName': resume.get('file_name', 'Resume'),
-                'resumeUrl': resume.get('file_url') or public_url(resume.get('stored_path', '')) if resume.get('stored_path') else resume.get('file_url'),
+                'resumeUrl': _serialize_file_url(
+                    resume.get('file_url') or (
+                        protected_file_url(resume.get('stored_path', ''))
+                        if resume.get('stored_path') else None
+                    )
+                ),
                 'jobTitle': jd.get('title', 'Untitled role'),
                 'jobDescription': jd.get('description', ''),
                 'technical': jd.get('technical', True),
@@ -3847,7 +3956,7 @@ def _build_dashboard_pairings(user_id):
             'summary': feedback.get('summary') if feedback else None,
             'key_strengths': _normalize_list(feedback.get('key_strengths') if feedback else None),
             'improvement_areas': _normalize_list(feedback.get('improvement_areas') if feedback else None),
-            'audio_url': feedback.get('audio_url') if feedback else None,
+            'audio_url': _serialize_file_url(feedback.get('audio_url')) if feedback else None,
         })
 
     result = []
@@ -3957,9 +4066,9 @@ def resumes_api():
     user_id = request.user['id']
     if request.method == 'GET':
         rows = query_all('SELECT * FROM resumes WHERE user_id=%s ORDER BY uploaded_at DESC', (user_id,))
-        return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+        return jsonify({'success': True, 'data': [_serialize_resume_row(row) for row in rows]})
     data = request.get_json() or {}
-    file_url = data.get('file_url')
+    file_url = _serialize_file_url(data.get('file_url'))
     file_name = data.get('file_name') or 'resume'
     stored_path = data.get('stored_path')
     row = execute(
@@ -4305,7 +4414,12 @@ def legacy_chat_history():
     if request.method == 'GET':
         rows = query_all('SELECT * FROM chat_history WHERE interview_id=%s ORDER BY created_at ASC', (interview_id,))
         content = '\n'.join(f"{row['role']}:{row['content']}" for row in rows)
-        return jsonify({'success': True, 'history': [{'content': content}] if content else []})
+        ui_state = _interview_session_ui_state(interview_id, request.user['id'])
+        return jsonify({
+            'success': True,
+            'history': [{'content': content}] if content else [],
+            **ui_state,
+        })
     if request.method == 'DELETE':
         execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
         return jsonify({'success': True})
