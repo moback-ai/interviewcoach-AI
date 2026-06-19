@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
 import { useAuthenticatedBlobUrl } from '../hooks/useAuthenticatedBlobUrl';
+import { isSafeImageSrc } from '../utils/protectedFiles';
 import { 
   FiUser, 
   FiMail, 
@@ -156,7 +157,7 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {avatarDisplayUrl ? (
+                {isSafeImageSrc(avatarDisplayUrl) ? (
                   <img
                     src={avatarDisplayUrl}
                     alt="Profile"

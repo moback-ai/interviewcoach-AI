@@ -91,15 +91,51 @@ def user_owns_storage_path(user_id: str, relative_path: str) -> bool:
     return str(owner_id) == str(user_id)
 
 
+def normalize_relative_path(relative_path: str) -> str | None:
+    clean = (relative_path or "").strip().replace("\\", "/")
+    if not clean or os.path.isabs(clean):
+        return None
+    normalized = os.path.normpath(clean).replace("\\", "/")
+    if normalized in ("", ".", "..") or normalized.startswith("../"):
+        return None
+    return normalized
+
+
+def _path_within_root(root: str, target: str) -> bool:
+    try:
+        return os.path.commonpath([root, target]) == root
+    except ValueError:
+        return False
+
+
 def safe_storage_file_path(relative_path: str) -> str | None:
     """Resolve relative path under STORAGE_PATH; return None if outside root."""
-    storage_root = os.path.abspath(_storage_path())
-    file_path = os.path.abspath(os.path.join(storage_root, relative_path))
-    if not file_path.startswith(f"{storage_root}{os.sep}") and file_path != storage_root:
+    clean = normalize_relative_path(relative_path)
+    if not clean:
         return None
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
+
+    storage_root = os.path.realpath(_storage_path())
+    file_path = os.path.realpath(os.path.join(storage_root, clean))
+    if not _path_within_root(storage_root, file_path):
+        return None
+    if not os.path.isfile(file_path):
         return None
     return file_path
+
+
+def safe_storage_dir_path(folder: str) -> str | None:
+    """Resolve folder under STORAGE_PATH; return None if outside root."""
+    clean = normalize_relative_path(folder)
+    if not clean:
+        return None
+
+    storage_root = os.path.realpath(_storage_path())
+    dir_path = os.path.realpath(os.path.join(storage_root, clean))
+    if not _path_within_root(storage_root, dir_path):
+        return None
+    if not os.path.isdir(dir_path):
+        return None
+    return dir_path
 
 
 def _file_result(relative: str, stored_path: str, file_size: int) -> dict:
@@ -134,14 +170,17 @@ def save_from_path(src: str, folder: str, filename: str) -> dict:
 
 def read_bytes(relative_path: str) -> bytes:
     """Read file from storage."""
-    with open(os.path.join(_storage_path(), relative_path), 'rb') as f:
+    file_path = safe_storage_file_path(relative_path)
+    if not file_path:
+        raise FileNotFoundError(f"Storage file not found: {relative_path}")
+    with open(file_path, 'rb') as f:
         return f.read()
 
 
 def list_folder(folder: str) -> list:
     """List files in a storage folder."""
-    dir_path = os.path.join(_storage_path(), folder)
-    if not os.path.exists(dir_path):
+    dir_path = safe_storage_dir_path(folder)
+    if not dir_path:
         return []
     files = []
     for fname in os.listdir(dir_path):
@@ -157,9 +196,9 @@ def list_folder(folder: str) -> list:
 def delete_files(relative_paths: list):
     """Delete a list of files by relative path."""
     for rel in relative_paths:
-        full = os.path.join(_storage_path(), rel)
-        if os.path.exists(full):
-            os.remove(full)
+        file_path = safe_storage_file_path(rel)
+        if file_path:
+            os.remove(file_path)
 
 
 def public_url(relative_path: str) -> str:

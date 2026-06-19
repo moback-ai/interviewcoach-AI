@@ -61,6 +61,7 @@ from common.storage import (
     protected_file_url,
     normalize_file_url,
     resolve_relative_path,
+    normalize_relative_path,
     user_owns_storage_path,
     safe_storage_file_path,
 )
@@ -3774,7 +3775,10 @@ def download_protected_file(relative_path):
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
 
-    clean_path = (relative_path or "").strip().replace("\\", "/").lstrip("/")
+    clean_path = normalize_relative_path(relative_path)
+    if not clean_path:
+        return jsonify({"error": "Forbidden"}), 403
+
     if not user_owns_storage_path(request.user['id'], clean_path):
         return jsonify({"error": "Forbidden"}), 403
 
