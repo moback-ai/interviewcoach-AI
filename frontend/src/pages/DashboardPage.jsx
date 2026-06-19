@@ -13,6 +13,7 @@ import { trackEvents } from '../services/mixpanel';
 import PerformanceGraph from '../components/PerformanceGraph';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getSession } from '../lib/authClient';
+import { downloadAuthenticatedFile } from '../utils/protectedFiles';
 import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
 
@@ -291,26 +292,10 @@ function DashboardPage() {
         throw new Error('Resume URL missing');
       }
 
-      const session = await getSession();
-      const response = await fetch(pairing.resumeUrl, {
-        headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
-      });
-      if (!response.ok) {
-        throw new Error('Download failed');
-      }
-      const data = await response.blob();
-      
-      // Create download link
-      const downloadUrl = URL.createObjectURL(data)
-      const a = document.createElement('a')
-      a.href = downloadUrl
-      a.download = pairing.resumeName || 'resume.pdf'
-      document.body.appendChild(a)
-      a.click()
-      
-      // Cleanup
-      URL.revokeObjectURL(downloadUrl)
-      document.body.removeChild(a)
+      await downloadAuthenticatedFile(
+        pairing.resumeUrl,
+        pairing.resumeName || 'resume.pdf',
+      );
       
       // Show success feedback
       setDownloadSuccess(pairing.id);

@@ -51,7 +51,7 @@ Store in **AWS Secrets Manager** (`interviewcoach/prod/app`) or API `.env`. Do n
 | `JWT_SECRET` | Strong random string |
 | `DOMAIN` | `https://ugaanlabs.ai` |
 | `STORAGE_PATH` | `/apps/storage` |
-| `PUBLIC_STORAGE_URL` | `https://ugaanlabs.ai/storage` |
+| `PUBLIC_STORAGE_URL` | Legacy only; new uploads use `/api/files/...` (JWT required) |
 | `OLLAMA_HOST` | `http://<AI_PRIVATE_IP>:11434` |
 | `OLLAMA_HEALTH_URL` | `http://<AI_PRIVATE_IP>:11434/api/tags` |
 | `OLLAMA_MODEL` | `llama3.2:3b` |
@@ -71,7 +71,11 @@ Store in **AWS Secrets Manager** (`interviewcoach/prod/app`) or API `.env`. Do n
 | `DB_POOL_MIN` | `5` |
 | `DB_POOL_MAX` | `40` |
 
-### API server only
+### File storage security
+
+- Do **not** expose `/storage/` publicly in nginx (no `alias` or open proxy).
+- Resumes, interview audio, and avatars are downloaded only via **`GET /api/files/...`** with a valid JWT and ownership check.
+- Ensure `/api/` is proxied to the Flask backend so protected downloads work.
 
 | Variable | Production value |
 |----------|------------------|

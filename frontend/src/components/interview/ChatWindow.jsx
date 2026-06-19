@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mic, MicOff, Square, Code } from 'lucide-react'; // ✅ Add Square icon for end button
+import { Mic, MicOff, Code } from 'lucide-react';
 import { uploadFile, apiPost, apiDelete } from '../../api';
 import { apiPostInterviewStream } from '../../api/interviewStream';
 import { useChatHistory } from '../../hooks/useChatHistory';
@@ -9,8 +9,32 @@ import { trackEvents } from '../../services/mixpanel';
 import CodeEditorPopup from './CodeEditorPopup';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaDevices';
 import { devLog } from '../../utils/devLog';
+import { createAuthenticatedAudioElement } from '../../hooks/useAuthenticatedBlobUrl';
+import { revokeBlobUrl } from '../../utils/protectedFiles';
 
 const GENERATE_RESPONSE_TIMEOUT_MS = 120000;
+
+const END_INTERVIEW_LATER_STAGES = new Set([
+  'custom_questions',
+  'candidate_questions',
+  'wrapup_evaluation',
+  'manual_end',
+  'timeout',
+]);
+
+function resolveEndInterviewState(stage, hasAnsweredResumeQuestion) {
+  const interviewStage = stage || 'introduction';
+  const answeredResume = !!hasAnsweredResumeQuestion;
+  const canEndInterview =
+    END_INTERVIEW_LATER_STAGES.has(interviewStage) ||
+    (interviewStage === 'resume_discussion' && answeredResume);
+
+  return {
+    interviewStage,
+    hasAnsweredResumeQuestion: answeredResume,
+    canEndInterview,
+  };
+}
 
 function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, isAudioPlaying, setIsAudioPlaying, onStateChange }) {
   const [isRecording, setIsRecording] = useState(false);
@@ -115,8 +139,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     }
   }, []);
 
-  const playServerAudio = useCallback((audioUrl) => new Promise((resolve, reject) => {
-    const audio = new Audio(audioUrl);
+  const playServerAudio = useCallback(async (audioUrl) => {
+    const { audio, blobUrl } = await createAuthenticatedAudioElement(audioUrl);
     audio.preload = 'auto';
     setCurrentAudioElement(audio);
 
@@ -124,36 +148,44 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       audio.onended = null;
       audio.onerror = null;
       audio.oncanplaythrough = null;
+      revokeBlobUrl(blobUrl);
     };
 
-    const startPlayback = () => {
-      audio.play().catch((error) => {
-        cleanupAudio();
-        reject(error);
-      });
-    };
+    try {
+      await new Promise((resolve, reject) => {
+        const startPlayback = () => {
+          audio.play().catch((error) => {
+            cleanupAudio();
+            reject(error);
+          });
+        };
 
-    if (audio.readyState >= 2) {
-      startPlayback();
-    } else {
-      audio.oncanplaythrough = startPlayback;
-      setTimeout(() => {
         if (audio.readyState >= 2) {
           startPlayback();
+        } else {
+          audio.oncanplaythrough = startPlayback;
+          setTimeout(() => {
+            if (audio.readyState >= 2) {
+              startPlayback();
+            }
+          }, 100);
         }
-      }, 100);
+
+        audio.onended = () => {
+          cleanupAudio();
+          resolve();
+        };
+
+        audio.onerror = (error) => {
+          cleanupAudio();
+          reject(error);
+        };
+      });
+    } catch (error) {
+      revokeBlobUrl(blobUrl);
+      throw error;
     }
-
-    audio.onended = () => {
-      cleanupAudio();
-      resolve();
-    };
-
-    audio.onerror = (error) => {
-      cleanupAudio();
-      reject(error);
-    };
-  }), []);
+  }, [setCurrentAudioElement]);
 
   const playInterviewerResponseAudio = useCallback(async (audioUrl, shouldDeleteAudio) => {
     if (!audioUrl) {
@@ -178,81 +210,115 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     should_delete_audio,
     interview_done,
   }) => {
-    if (audio_url) {
-      devLog('🔊 Preloading final audio response:', audio_url);
-      const audio = new Audio(audio_url);
-      audio.preload = 'auto';
-
-      let messageAdded = false;
-
-      const playFinalAudioWhenReady = () => {
-        if (messageAdded) {
-          return;
-        }
-        messageAdded = true;
-
-        setConversation((prev) => prev.filter((msg) => !msg.isThinking));
-        const finalMessage = {
-          id: Date.now(),
-          speaker: 'interviewer',
-          message: textResponse,
-          timestamp: new Date().toLocaleTimeString(),
-        };
-        setConversation((prev) => [...prev, finalMessage]);
-
-        setIsAudioPlaying(true);
-        setCurrentAudioElement(audio);
-        setCanEndInterview(false);
-
-        audio.play().catch((error) => {
-          console.error('❌ Failed to play final audio:', error);
-          setIsAudioPlaying(false);
-          setCurrentAudioElement(null);
+    const run = async () => {
+      if (audio_url) {
+        devLog('🔊 Preloading final audio response:', audio_url);
+        let blobUrl = null;
+        let audio;
+        try {
+          ({ audio, blobUrl } = await createAuthenticatedAudioElement(audio_url));
+        } catch (error) {
+          console.error('❌ Failed to load final audio:', error);
           if (interview_done) {
             window.location.href = `/interview-feedback?interview_id=${interviewId}`;
           }
-        });
-      };
+          return;
+        }
 
-      if (audio.readyState >= 2) {
-        playFinalAudioWhenReady();
-      } else {
-        audio.addEventListener('canplaythrough', playFinalAudioWhenReady, { once: true });
-        setTimeout(() => {
-          if (audio.readyState >= 2 && !messageAdded) {
-            playFinalAudioWhenReady();
+        audio.preload = 'auto';
+
+        let messageAdded = false;
+
+        const playFinalAudioWhenReady = () => {
+          if (messageAdded) {
+            return;
           }
-        }, 100);
+          messageAdded = true;
+
+          setConversation((prev) => prev.filter((msg) => !msg.isThinking));
+          const finalMessage = {
+            id: Date.now(),
+            speaker: 'interviewer',
+            message: textResponse,
+            timestamp: new Date().toLocaleTimeString(),
+          };
+          setConversation((prev) => [...prev, finalMessage]);
+
+          setIsAudioPlaying(true);
+          setCurrentAudioElement(audio);
+          setCanEndInterview(false);
+
+          audio.play().catch((error) => {
+            console.error('❌ Failed to play final audio:', error);
+            setIsAudioPlaying(false);
+            setCurrentAudioElement(null);
+            revokeBlobUrl(blobUrl);
+            if (interview_done) {
+              window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+            }
+          });
+        };
+
+        if (audio.readyState >= 2) {
+          playFinalAudioWhenReady();
+        } else {
+          audio.addEventListener('canplaythrough', playFinalAudioWhenReady, { once: true });
+          setTimeout(() => {
+            if (audio.readyState >= 2 && !messageAdded) {
+              playFinalAudioWhenReady();
+            }
+          }, 100);
+        }
+
+        audio.onended = async () => {
+          devLog('✅ Final audio playback completed');
+          setIsAudioPlaying(false);
+          setCurrentAudioElement(null);
+          setCanEndInterview(true);
+          revokeBlobUrl(blobUrl);
+
+          if (should_delete_audio) {
+            try {
+              await apiDelete('/api/delete-audio', {
+                body: { audio_url },
+              });
+            } catch (error) {
+              console.error('❌ Failed to delete final audio file:', error);
+            }
+          }
+
+          if (interview_done) {
+            setTimeout(() => {
+              window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+            }, 1000);
+          }
+        };
+
+        audio.onerror = (error) => {
+          console.error('❌ Final audio playback failed:', error);
+          setIsAudioPlaying(false);
+          setCurrentAudioElement(null);
+          revokeBlobUrl(blobUrl);
+
+          setConversation((prev) => {
+            const filtered = prev.filter((msg) => !msg.isThinking);
+            const finalMessage = {
+              id: Date.now(),
+              speaker: 'interviewer',
+              message: textResponse,
+              timestamp: new Date().toLocaleTimeString(),
+            };
+            return [...filtered, finalMessage];
+          });
+
+          if (interview_done) {
+            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+          }
+        };
+        return;
       }
 
-      audio.onended = async () => {
-        devLog('✅ Final audio playback completed');
-        setIsAudioPlaying(false);
-        setCurrentAudioElement(null);
-        setCanEndInterview(true);
-
-        if (should_delete_audio) {
-          try {
-            await apiDelete('/api/delete-audio', {
-              body: { audio_url },
-            });
-          } catch (error) {
-            console.error('❌ Failed to delete final audio file:', error);
-          }
-        }
-
-        if (interview_done) {
-          setTimeout(() => {
-            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-          }, 1000);
-        }
-      };
-
-      audio.onerror = (error) => {
-        console.error('❌ Final audio playback failed:', error);
-        setIsAudioPlaying(false);
-        setCurrentAudioElement(null);
-
+      if (interview_done) {
         setConversation((prev) => {
           const filtered = prev.filter((msg) => !msg.isThinking);
           const finalMessage = {
@@ -263,28 +329,12 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           };
           return [...filtered, finalMessage];
         });
+        devLog('🎯 Interview completed (no audio), redirecting to feedback...');
+        window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+      }
+    };
 
-        if (interview_done) {
-          window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-        }
-      };
-      return;
-    }
-
-    if (interview_done) {
-      setConversation((prev) => {
-        const filtered = prev.filter((msg) => !msg.isThinking);
-        const finalMessage = {
-          id: Date.now(),
-          speaker: 'interviewer',
-          message: textResponse,
-          timestamp: new Date().toLocaleTimeString(),
-        };
-        return [...filtered, finalMessage];
-      });
-      devLog('🎯 Interview completed (no audio), redirecting to feedback...');
-      window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-    }
+    run();
   }, [setConversation, setCurrentAudioElement, setIsAudioPlaying]);
 
   const trackInterviewCompletionEvents = useCallback((interviewId, interview_done, feedback_saved_successfully, completionMethod) => {
@@ -431,31 +481,26 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         // ✅ NEW: Update interview stage and control End Interview button
         if (stage) {
           devLog('📊 Interview stage updated from', interviewStage, 'to:', stage);
-          setInterviewStage(stage);
           
           // ✅ NEW: Auto-trigger end interview flow when timeout is detected
           if (stage === 'timeout') {
-            devLog('⏰ Timeout detected - showing timeout modal...');
-            // Show timeout modal first
+            setInterviewStage(stage);
             setShowTimeoutModal(true);
             return; // Exit early to prevent normal message handling
           }
-          
-          // Enable End Interview button only when user has answered at least one resume question
-          if (stage === 'resume_discussion' && nextHasAnsweredResumeQuestion) {
-            devLog('✅ Resume question answered - enabling End Interview button');
-            setCanEndInterview(true);
-          } else if (stage === 'custom_questions' || stage === 'candidate_questions' || stage === 'wrapup_evaluation' || stage === 'manual_end' || stage === 'timeout') {
-            devLog('✅ Later stage reached - enabling End Interview button');
-            setCanEndInterview(true);
+
+          const nextEndState = resolveEndInterviewState(stage, nextHasAnsweredResumeQuestion);
+          setInterviewStage(nextEndState.interviewStage);
+          setHasAnsweredResumeQuestion(nextEndState.hasAnsweredResumeQuestion);
+          setCanEndInterview(nextEndState.canEndInterview);
+
+          if (nextEndState.canEndInterview) {
+            devLog('✅ End Interview button enabled');
           } else {
-            devLog('⏳ Waiting for resume question answer - keeping End Interview button disabled');
-            devLog('🔍 Debug info:', {
+            devLog('⏳ End Interview button remains disabled', {
               stage,
               hasAnsweredResumeQuestion: nextHasAnsweredResumeQuestion,
-              isResumeDiscussion: stage === 'resume_discussion'
             });
-            setCanEndInterview(false);
           }
         }
         
@@ -902,9 +947,19 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       const urlParams = new URLSearchParams(window.location.search);
       const interviewId = urlParams.get('interview_id');
       if (interviewId) {
-        const history = await loadChatHistory(interviewId);
-        if (history && history.length > 0) {
-          setConversation(history);
+        const result = await loadChatHistory(interviewId);
+        if (result?.conversation?.length > 0) {
+          setConversation(result.conversation);
+        }
+        if (result) {
+          const restored = resolveEndInterviewState(
+            result.interviewStage,
+            result.hasAnsweredResumeQuestion,
+          );
+          setInterviewStage(restored.interviewStage);
+          setHasAnsweredResumeQuestion(restored.hasAnsweredResumeQuestion);
+          setCanEndInterview(restored.canEndInterview);
+          devLog('♻️ Restored interview UI state after refresh:', restored);
         }
       }
     };
@@ -1232,6 +1287,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     );
   };
 
+  const isEndInterviewDisabled =
+    !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress;
+
   return (
     <div 
       className="h-full flex flex-col p-4 lg:p-5 min-h-0"
@@ -1249,18 +1307,18 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             Interview Conversation
           </h2>
           
-          {/* End Interview — secondary until hover (less distracting during session) */}
+          {/* End Interview */}
           <button
             type="button"
             onClick={handleEndInterview}
-            disabled={!canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress}
-            className={`shrink-0 px-3 py-1.5 sm:px-3.5 sm:py-2 text-xs sm:text-sm font-medium rounded-lg border transition-all duration-200 ${
-              !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
-                ? 'border-[var(--color-border)] text-[var(--color-text-secondary)]/70 bg-[var(--color-input-bg)]/50 cursor-not-allowed'
-                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] hover:border-red-500/60 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/5'
+            disabled={isEndInterviewDisabled}
+            className={`group relative shrink-0 inline-flex items-center justify-center gap-2 overflow-hidden rounded-full px-4 py-2 sm:px-5 sm:py-2.5 text-[13px] sm:text-sm font-medium tracking-tight transition-all duration-300 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-error)]/35 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-card)] ${
+              isEndInterviewDisabled
+                ? 'cursor-not-allowed border border-[var(--color-border)]/80 bg-[var(--color-input-bg)]/25 text-[var(--color-text-secondary)]/40 shadow-none'
+                : 'border border-[color-mix(in_srgb,var(--color-error)_22%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-error)_8%,var(--color-card))] text-[color-mix(in_srgb,var(--color-error)_88%,var(--color-text-primary))] shadow-[inset_0_1px_0_color-mix(in_srgb,#fff_18%,transparent),0_1px_2px_color-mix(in_srgb,var(--color-error)_8%,transparent)] hover:border-[var(--color-error)] hover:bg-[var(--color-error)] hover:text-white hover:shadow-[0_8px_24px_color-mix(in_srgb,var(--color-error)_26%,transparent)] active:brightness-[0.97]'
             }`}
             title={
-              !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
+              isEndInterviewDisabled
                 ? (isRecording ? "Wait for recording to finish" : 
                    isLoading ? "Wait for response to generate" : 
                    isResponseInProgress ? "Response in progress..." : 
@@ -1270,6 +1328,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                 : "End Interview"
             }
           >
+            <span
+              aria-hidden="true"
+              className={`h-1.5 w-1.5 shrink-0 rounded-full transition-all duration-300 ${
+                isEndInterviewDisabled
+                  ? 'bg-[var(--color-text-secondary)]/25'
+                  : 'bg-[var(--color-error)] group-hover:bg-white/90 group-hover:shadow-[0_0_8px_rgba(255,255,255,0.45)]'
+              }`}
+            />
             <span className="hidden sm:inline">End interview</span>
             <span className="sm:hidden">End</span>
           </button>
