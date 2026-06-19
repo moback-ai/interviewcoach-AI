@@ -9,6 +9,48 @@ const normalizeChatSpeaker = (speaker = '') => {
   return normalized || 'system';
 };
 
+const defaultInterviewUiState = () => ({
+  interviewStage: 'introduction',
+  hasAnsweredResumeQuestion: false,
+  canEndInterview: false,
+});
+
+const parseHistoryContent = (content) => {
+  const lines = content.split('\n');
+  const conversation = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    const colonIndex = line.indexOf(':');
+    if (colonIndex === -1) {
+      if (conversation.length > 0) {
+        const lastMessage = conversation[conversation.length - 1];
+        lastMessage.message += '\n' + line;
+      }
+      continue;
+    }
+
+    const speaker = normalizeChatSpeaker(line.substring(0, colonIndex));
+    const message = line.substring(colonIndex + 1).trim();
+
+    const previous = conversation[conversation.length - 1];
+    if (previous?.speaker === speaker && previous?.message === message) {
+      continue;
+    }
+
+    conversation.push({
+      id: conversation.length + 1,
+      speaker,
+      message,
+      timestamp: new Date().toLocaleTimeString(),
+    });
+  }
+
+  return conversation;
+};
+
 export const useChatHistory = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -42,64 +84,38 @@ export const useChatHistory = () => {
       }
 
       const data = await response.json();
+      const uiState = {
+        interviewStage: data.interview_stage || 'introduction',
+        hasAnsweredResumeQuestion: !!data.has_answered_resume_question,
+        canEndInterview: !!data.can_end_interview,
+      };
       
       if (data.history && data.history.length > 0) {
-        // Parse the content string back to conversation array
         const content = data.history[0].content;
         console.log('🔍 Raw content from DB:', content);
-        
-        // ✅ FIXED: Better parsing to handle multi-line messages
-        const lines = content.split('\n');
-        const conversation = [];
-        
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue; // Skip empty lines
-          
-          // Find the first colon to separate speaker from message
-          const colonIndex = line.indexOf(':');
-          if (colonIndex === -1) {
-            // If no colon found, this might be a continuation of the previous message
-            if (conversation.length > 0) {
-              const lastMessage = conversation[conversation.length - 1];
-              lastMessage.message += '\n' + line;
-            }
-            continue;
-          }
-          
-          const speaker = normalizeChatSpeaker(line.substring(0, colonIndex));
-          const message = line.substring(colonIndex + 1).trim();
-
-          const previous = conversation[conversation.length - 1];
-          if (previous?.speaker === speaker && previous?.message === message) {
-            continue;
-          }
-          
-          conversation.push({
-            id: conversation.length + 1,
-            speaker: speaker,
-            message: message,
-            timestamp: new Date().toLocaleTimeString()
-          });
-        }
-
+        const conversation = parseHistoryContent(content);
         console.log(`Loaded ${conversation.length} messages from database:`, conversation);
-        return conversation;
+        return { conversation, ...uiState };
       }
 
-      // ✅ FIXED: If no history exists, return a local-only welcome message (do NOT write)
       console.log('No chat history found. Returning local welcome message only (no DB write).');
-      return [{
-        id: 1,
-        speaker: 'interviewer',
-        message: 'Speak to start the interview.',
-        timestamp: new Date().toLocaleTimeString()
-      }];
+      return {
+        conversation: [{
+          id: 1,
+          speaker: 'interviewer',
+          message: 'Speak to start the interview.',
+          timestamp: new Date().toLocaleTimeString(),
+        }],
+        ...uiState,
+      };
 
     } catch (err) {
       console.error('Error loading chat history:', err);
       setError(err.message);
-      return [];
+      return {
+        conversation: [],
+        ...defaultInterviewUiState(),
+      };
     } finally {
       setLoading(false);
     }

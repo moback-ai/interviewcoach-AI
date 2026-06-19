@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
-import { 
-  FiUser, 
+import {
+  FiUser,
   FiMail, 
   FiCalendar, 
   FiCamera,
@@ -28,6 +28,7 @@ import {
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
+import ProfileAvatarCanvas from '../components/profile/ProfileAvatarCanvas';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
@@ -93,12 +94,13 @@ const ProfileSection = ({
   formatDate,
   statusMessage,
   statusTone,
-  avatarPreview,
+  avatarPreviewTrusted,
+  savedAvatarReloadKey,
   avatarFile,
   avatarError,
   handleAvatarFileChange,
 }) => {
-  const avatarSource = avatarPreview || profileData.avatar_url;
+  const hasStoredAvatar = Boolean(profileData.avatar_url);
   const displayName = profileData.full_name || profileData.nickname || profileData.email || 'InterviewCoach';
 
   return (
@@ -153,11 +155,16 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {avatarSource ? (
-                  <img
-                    src={avatarSource}
-                    alt="Profile"
-                    className="h-full w-full object-cover"
+                {avatarPreviewTrusted && avatarFile ? (
+                  <ProfileAvatarCanvas
+                    previewFile={avatarFile}
+                    className="h-full w-full"
+                  />
+                ) : hasStoredAvatar ? (
+                  <ProfileAvatarCanvas
+                    loadSavedAvatar
+                    reloadKey={savedAvatarReloadKey}
+                    className="h-full w-full"
                   />
                 ) : (
                   <span>{getProfileInitials(displayName)}</span>
@@ -171,7 +178,7 @@ const ProfileSection = ({
                   Upload a JPG, PNG, GIF, or WEBP image up to 5 MB.
                 </p>
                 <p className="text-xs text-[var(--color-text-secondary)]">
-                  {avatarFile ? `Selected: ${avatarFile.name}` : avatarSource ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
+                  {avatarFile ? `Selected: ${avatarFile.name}` : hasStoredAvatar ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
                 </p>
               </div>
             </div>
@@ -179,7 +186,7 @@ const ProfileSection = ({
             {isEditing ? (
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-input-bg)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]">
                 <FiCamera size={16} />
-                <span>{avatarSource ? 'Change photo' : 'Upload photo'}</span>
+                <span>{hasStoredAvatar || avatarPreviewTrusted ? 'Change photo' : 'Upload photo'}</span>
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/gif"
@@ -1089,21 +1096,14 @@ function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [profileStatus, setProfileStatus] = useState(null);
   const [avatarFile, setAvatarFile] = useState(null);
-  const [avatarPreview, setAvatarPreview] = useState('');
+  const [avatarPreviewTrusted, setAvatarPreviewTrusted] = useState(false);
+  const [savedAvatarReloadKey, setSavedAvatarReloadKey] = useState(0);
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
 
   useEffect(() => {
     setProfileData(buildProfileState(user));
   }, [user]);
-
-  useEffect(() => (
-    () => {
-      if (avatarPreview?.startsWith('blob:')) {
-        URL.revokeObjectURL(avatarPreview);
-      }
-    }
-  ), [avatarPreview]);
 
   const navigationItems = [
     { id: 'profile', label: 'Profile', icon: FiUser, description: 'Personal information' },
@@ -1113,11 +1113,8 @@ function ProfilePage() {
   ];
 
   const clearAvatarDraft = () => {
-    if (avatarPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-    setAvatarPreview('');
     setAvatarFile(null);
+    setAvatarPreviewTrusted(false);
     setAvatarError('');
   };
 
@@ -1130,17 +1127,13 @@ function ProfilePage() {
     const validationMessage = validateAvatarFile(file);
     if (validationMessage) {
       setAvatarError(validationMessage);
+      setAvatarPreviewTrusted(false);
       event.target.value = '';
       return;
     }
 
-    const nextPreview = URL.createObjectURL(file);
-    if (avatarPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-
     setAvatarFile(file);
-    setAvatarPreview(nextPreview);
+    setAvatarPreviewTrusted(true);
     setAvatarError('');
     setProfileStatus(null);
     event.target.value = '';
@@ -1191,6 +1184,7 @@ function ProfilePage() {
       });
 
       setProfileData(buildProfileState(nextUser));
+      setSavedAvatarReloadKey((value) => value + 1);
       clearAvatarDraft();
       setIsEditing(false);
       setProfileStatus({
@@ -1246,7 +1240,8 @@ function ProfilePage() {
         formatDate={formatDate}
         statusMessage={profileStatus?.message || ''}
         statusTone={profileStatus?.tone || 'success'}
-        avatarPreview={avatarPreview}
+        avatarPreviewTrusted={avatarPreviewTrusted}
+        savedAvatarReloadKey={savedAvatarReloadKey}
         avatarFile={avatarFile}
         avatarError={avatarError}
         handleAvatarFileChange={handleAvatarFileChange}

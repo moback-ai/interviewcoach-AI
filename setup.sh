@@ -93,12 +93,7 @@ server {
         proxy_read_timeout 300s;
     }
 
-    # Local file storage (resumes, audio)
-    location /storage/ {
-        alias /apps/storage/;
-        add_header Access-Control-Allow-Origin *;
-        add_header Cache-Control "public, max-age=3600";
-    }
+    # Sensitive files (resumes, audio, avatars) are served only via /api/files/ with JWT.
 }
 NGINX'
 
