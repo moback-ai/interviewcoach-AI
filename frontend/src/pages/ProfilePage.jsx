@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
@@ -28,8 +28,8 @@ import {
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
+import ProfileAvatarCanvas from '../components/profile/ProfileAvatarCanvas';
 import { getBackendOrigin } from '../utils/apiConfig';
-import { fetchAuthenticatedFile } from '../utils/protectedFiles';
 
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -94,9 +94,8 @@ const ProfileSection = ({
   formatDate,
   statusMessage,
   statusTone,
-  avatarPreview,
   avatarPreviewTrusted,
-  savedAvatarBlobSrc,
+  savedAvatarReloadKey,
   avatarFile,
   avatarError,
   handleAvatarFileChange,
@@ -156,17 +155,16 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {avatarPreviewTrusted && avatarPreview ? (
-                  <img
-                    src={avatarPreview}
-                    alt="Profile"
-                    className="h-full w-full object-cover"
+                {avatarPreviewTrusted && avatarFile ? (
+                  <ProfileAvatarCanvas
+                    previewFile={avatarFile}
+                    className="h-full w-full"
                   />
-                ) : savedAvatarBlobSrc ? (
-                  <img
-                    src={savedAvatarBlobSrc}
-                    alt="Profile"
-                    className="h-full w-full object-cover"
+                ) : hasStoredAvatar ? (
+                  <ProfileAvatarCanvas
+                    loadSavedAvatar
+                    reloadKey={savedAvatarReloadKey}
+                    className="h-full w-full"
                   />
                 ) : (
                   <span>{getProfileInitials(displayName)}</span>
@@ -1098,83 +1096,14 @@ function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [profileStatus, setProfileStatus] = useState(null);
   const [avatarFile, setAvatarFile] = useState(null);
-  const [avatarPreview, setAvatarPreview] = useState('');
   const [avatarPreviewTrusted, setAvatarPreviewTrusted] = useState(false);
-  const [savedAvatarBlobSrc, setSavedAvatarBlobSrc] = useState('');
+  const [savedAvatarReloadKey, setSavedAvatarReloadKey] = useState(0);
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
-  const storedAvatarUrlRef = useRef('');
 
   useEffect(() => {
     setProfileData(buildProfileState(user));
   }, [user]);
-
-  useEffect(() => {
-    storedAvatarUrlRef.current = profileData.avatar_url || '';
-  }, [profileData.avatar_url]);
-
-  useEffect(() => {
-    if (avatarPreviewTrusted) {
-      return undefined;
-    }
-
-    let active = true;
-    let createdUrl = '';
-
-    const loadSavedAvatar = async () => {
-      const remoteAvatarUrl = storedAvatarUrlRef.current;
-      if (!remoteAvatarUrl) {
-        setSavedAvatarBlobSrc('');
-        return;
-      }
-
-      try {
-        const response = await fetchAuthenticatedFile(remoteAvatarUrl);
-        const blob = await response.blob();
-        createdUrl = URL.createObjectURL(blob);
-        if (!active) {
-          URL.revokeObjectURL(createdUrl);
-          return;
-        }
-        setSavedAvatarBlobSrc((previous) => {
-          if (previous?.startsWith('blob:')) {
-            URL.revokeObjectURL(previous);
-          }
-          return createdUrl;
-        });
-      } catch {
-        if (active) {
-          setSavedAvatarBlobSrc('');
-        }
-      }
-    };
-
-    loadSavedAvatar();
-
-    return () => {
-      active = false;
-      if (createdUrl) {
-        URL.revokeObjectURL(createdUrl);
-      }
-    };
-  }, [profileData.avatar_url, avatarPreviewTrusted]);
-
-  useEffect(() => () => {
-    setSavedAvatarBlobSrc((current) => {
-      if (current?.startsWith('blob:')) {
-        URL.revokeObjectURL(current);
-      }
-      return '';
-    });
-  }, []);
-
-  useEffect(() => (
-    () => {
-      if (avatarPreview?.startsWith('blob:')) {
-        URL.revokeObjectURL(avatarPreview);
-      }
-    }
-  ), [avatarPreview]);
 
   const navigationItems = [
     { id: 'profile', label: 'Profile', icon: FiUser, description: 'Personal information' },
@@ -1184,12 +1113,8 @@ function ProfilePage() {
   ];
 
   const clearAvatarDraft = () => {
-    if (avatarPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-    setAvatarPreview('');
-    setAvatarPreviewTrusted(false);
     setAvatarFile(null);
+    setAvatarPreviewTrusted(false);
     setAvatarError('');
   };
 
@@ -1207,13 +1132,7 @@ function ProfilePage() {
       return;
     }
 
-    const nextPreview = URL.createObjectURL(file);
-    if (avatarPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-
     setAvatarFile(file);
-    setAvatarPreview(nextPreview);
     setAvatarPreviewTrusted(true);
     setAvatarError('');
     setProfileStatus(null);
@@ -1265,6 +1184,7 @@ function ProfilePage() {
       });
 
       setProfileData(buildProfileState(nextUser));
+      setSavedAvatarReloadKey((value) => value + 1);
       clearAvatarDraft();
       setIsEditing(false);
       setProfileStatus({
@@ -1320,9 +1240,8 @@ function ProfilePage() {
         formatDate={formatDate}
         statusMessage={profileStatus?.message || ''}
         statusTone={profileStatus?.tone || 'success'}
-        avatarPreview={avatarPreview}
         avatarPreviewTrusted={avatarPreviewTrusted}
-        savedAvatarBlobSrc={savedAvatarBlobSrc}
+        savedAvatarReloadKey={savedAvatarReloadKey}
         avatarFile={avatarFile}
         avatarError={avatarError}
         handleAvatarFileChange={handleAvatarFileChange}

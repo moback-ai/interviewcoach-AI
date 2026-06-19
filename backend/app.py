@@ -2504,6 +2504,34 @@ def get_me():
         return jsonify({"error": "User not found"}), 404
     return jsonify({"user": serialize_user(user)})
 
+
+@app.route('/api/me/avatar', methods=['GET', 'OPTIONS'])
+@app.route('/functions/v1/me/avatar', methods=['GET', 'OPTIONS'])
+@verify_auth_token
+def get_my_avatar():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+
+    user = query_one(
+        "SELECT avatar_url FROM users WHERE id = %s",
+        (request.user['id'],),
+    )
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    avatar_url = (user.get('avatar_url') or '').strip()
+    relative = resolve_relative_path(avatar_url)
+    if not relative or not user_owns_storage_path(request.user['id'], relative):
+        abort(404)
+
+    clean_path = validated_protected_relative_path(relative)
+    if not clean_path or not safe_storage_file_path(clean_path):
+        abort(404)
+
+    storage_root = os.path.realpath(require_env("STORAGE_PATH"))
+    mimetype = mimetypes.guess_type(clean_path)[0] or 'application/octet-stream'
+    return send_from_directory(storage_root, clean_path, mimetype=mimetype, as_attachment=False)
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  RESUME UPLOAD  (replaces the legacy storage layer)
 # ─────────────────────────────────────────────────────────────────────────────
