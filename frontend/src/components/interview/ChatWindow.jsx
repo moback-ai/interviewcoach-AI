@@ -27,6 +27,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const [canEndInterview, setCanEndInterview] = useState(false); // Start disabled
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
 
+  const { loadChatHistory, deleteChatHistory } = useChatHistory();
+
   const buildGenerateResponsePayload = useCallback((message) => {
     const urlParams = new URLSearchParams(window.location.search);
     const interviewId = urlParams.get('interview_id');
@@ -36,16 +38,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     };
   }, []);
 
-  const userHasParticipated = conversation.some(
-    (msg) => msg.speaker !== 'interviewer' && !msg.isThinking && (msg.message || '').trim().length > 0
-  );
-
-  useEffect(() => {
-    if (userHasParticipated) {
-      setCanEndInterview(true);
-    }
-  }, [userHasParticipated]);
-  
   // ✅ NEW: Add state for timeout modal
   const [showTimeoutModal, setShowTimeoutModal] = useState(false);
   
@@ -178,6 +170,144 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       await deleteGeneratedAudio(audioUrl, shouldDeleteAudio);
     }
   }, [deleteGeneratedAudio, playServerAudio, setIsAudioPlaying]);
+
+  const processEndInterviewResponse = useCallback(({
+    interviewId,
+    textResponse,
+    audio_url,
+    should_delete_audio,
+    interview_done,
+  }) => {
+    if (audio_url) {
+      devLog('🔊 Preloading final audio response:', audio_url);
+      const audio = new Audio(audio_url);
+      audio.preload = 'auto';
+
+      let messageAdded = false;
+
+      const playFinalAudioWhenReady = () => {
+        if (messageAdded) {
+          return;
+        }
+        messageAdded = true;
+
+        setConversation((prev) => prev.filter((msg) => !msg.isThinking));
+        const finalMessage = {
+          id: Date.now(),
+          speaker: 'interviewer',
+          message: textResponse,
+          timestamp: new Date().toLocaleTimeString(),
+        };
+        setConversation((prev) => [...prev, finalMessage]);
+
+        setIsAudioPlaying(true);
+        setCurrentAudioElement(audio);
+        setCanEndInterview(false);
+
+        audio.play().catch((error) => {
+          console.error('❌ Failed to play final audio:', error);
+          setIsAudioPlaying(false);
+          setCurrentAudioElement(null);
+          if (interview_done) {
+            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+          }
+        });
+      };
+
+      if (audio.readyState >= 2) {
+        playFinalAudioWhenReady();
+      } else {
+        audio.addEventListener('canplaythrough', playFinalAudioWhenReady, { once: true });
+        setTimeout(() => {
+          if (audio.readyState >= 2 && !messageAdded) {
+            playFinalAudioWhenReady();
+          }
+        }, 100);
+      }
+
+      audio.onended = async () => {
+        devLog('✅ Final audio playback completed');
+        setIsAudioPlaying(false);
+        setCurrentAudioElement(null);
+        setCanEndInterview(true);
+
+        if (should_delete_audio) {
+          try {
+            await apiDelete('/api/delete-audio', {
+              body: { audio_url },
+            });
+          } catch (error) {
+            console.error('❌ Failed to delete final audio file:', error);
+          }
+        }
+
+        if (interview_done) {
+          setTimeout(() => {
+            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+          }, 1000);
+        }
+      };
+
+      audio.onerror = (error) => {
+        console.error('❌ Final audio playback failed:', error);
+        setIsAudioPlaying(false);
+        setCurrentAudioElement(null);
+
+        setConversation((prev) => {
+          const filtered = prev.filter((msg) => !msg.isThinking);
+          const finalMessage = {
+            id: Date.now(),
+            speaker: 'interviewer',
+            message: textResponse,
+            timestamp: new Date().toLocaleTimeString(),
+          };
+          return [...filtered, finalMessage];
+        });
+
+        if (interview_done) {
+          window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+        }
+      };
+      return;
+    }
+
+    if (interview_done) {
+      setConversation((prev) => {
+        const filtered = prev.filter((msg) => !msg.isThinking);
+        const finalMessage = {
+          id: Date.now(),
+          speaker: 'interviewer',
+          message: textResponse,
+          timestamp: new Date().toLocaleTimeString(),
+        };
+        return [...filtered, finalMessage];
+      });
+      devLog('🎯 Interview completed (no audio), redirecting to feedback...');
+      window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+    }
+  }, [setConversation, setCurrentAudioElement, setIsAudioPlaying]);
+
+  const trackInterviewCompletionEvents = useCallback((interviewId, interview_done, feedback_saved_successfully, completionMethod) => {
+    if (!interview_done) {
+      return;
+    }
+
+    trackEvents.participatedInMockInterview({
+      interview_id: interviewId,
+      completion_timestamp: new Date().toISOString(),
+      completion_method: completionMethod,
+    });
+
+    if (feedback_saved_successfully) {
+      setTimeout(() => {
+        trackEvents.mockInterviewFeedbackGenerated({
+          interview_id: interviewId,
+          generation_timestamp: new Date().toISOString(),
+          generation_method: completionMethod,
+        });
+      }, 100);
+    }
+  }, []);
 
   // Function to call Interview Manager API
   const callInterviewManager = async (userInput) => {
@@ -315,7 +445,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           if (stage === 'resume_discussion' && nextHasAnsweredResumeQuestion) {
             devLog('✅ Resume question answered - enabling End Interview button');
             setCanEndInterview(true);
-          } else if (stage === 'custom_questions' || stage === 'candidate_questions' || stage === 'wrapup_evaluation' || stage === 'manual_end' || stage === 'timeout' || stage === 'done') {
+          } else if (stage === 'custom_questions' || stage === 'candidate_questions' || stage === 'wrapup_evaluation' || stage === 'manual_end' || stage === 'timeout') {
             devLog('✅ Later stage reached - enabling End Interview button');
             setCanEndInterview(true);
           } else {
@@ -367,25 +497,31 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     
     if (confirmed) {
       devLog('✅ User confirmed ending interview');
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const interviewId = urlParams.get('interview_id');
+
+      if (interviewId) {
+        try {
+          devLog('🗑️ Deleting chat history for interview:', interviewId);
+          await deleteChatHistory(interviewId);
+          devLog('✅ Chat history deleted successfully');
+        } catch (error) {
+          console.error('❌ Failed to delete chat history:', error);
+        }
+      }
       
-      // ✅ NEW: Show loading state
       setIsEndingInterview(true);
       
       try {
-        // ✅ NEW: Send END_INTERVIEW command to backend
         devLog('📤 Sending END_INTERVIEW command to backend...');
-        
-        // Get interview_id from URL
-        const urlParams = new URLSearchParams(window.location.search);
-        const interviewId = urlParams.get('interview_id');
         
         if (!interviewId) {
           console.error('❌ No interview_id found in URL');
-          setIsEndingInterview(false); // Hide loading
+          setIsEndingInterview(false);
           return;
         }
         
-        // ✅ Use the same apiPost function that works for normal responses
         const response = await apiPost(
           '/generate-response',
           buildGenerateResponsePayload('END_INTERVIEW'),
@@ -396,75 +532,34 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         
         if (response.success) {
           const { response: textResponse, audio_url, should_delete_audio, interview_done, feedback_saved_successfully } = response.data;
-          
-          // ✅ FIXED: Track events only when interview is done AND feedback is successfully saved
-          if (interview_done) {
-            devLog('🎯 Interview completed, tracking events...');
-            
-            // Track interview completion
-            devLog('📊 Tracking participatedInMockInterview...');
-            trackEvents.participatedInMockInterview({
-              interview_id: interviewId,
-              completion_timestamp: new Date().toISOString(),
-              completion_method: 'backend_confirmed'
-            });
-            
-            // ✅ FIXED: Only track feedback generation when feedback is actually saved to database
-            if (feedback_saved_successfully) {
-              devLog('✅ Feedback successfully saved to database, tracking feedback generation...');
-              setTimeout(() => {
-                devLog('📊 Tracking mockInterviewFeedbackGenerated...');
-                trackEvents.mockInterviewFeedbackGenerated({
-                  interview_id: interviewId,
-                  generation_timestamp: new Date().toISOString(),
-                  generation_method: 'backend_confirmed'
-                });
-              }, 100); // 100ms delay
-            } else {
-              devLog('⚠️ Interview completed but feedback not saved yet, skipping feedback generation tracking');
-            }
-          }
-          
-          setConversation(prev => prev.filter(msg => !msg.isThinking));
-          const finalMessage = {
-            id: Date.now(),
-            speaker: 'interviewer',
-            message: textResponse,
-            timestamp: new Date().toLocaleTimeString()
-          };
-          setConversation(prev => [...prev, finalMessage]);
 
-          if (audio_url) {
-            setCanEndInterview(false);
-            try {
-              await playInterviewerResponseAudio(audio_url, should_delete_audio);
-            } catch (error) {
-              console.error('❌ Final audio playback failed:', error);
-            } finally {
-              setCanEndInterview(true);
-            }
-          }
+          trackInterviewCompletionEvents(
+            interviewId,
+            interview_done,
+            feedback_saved_successfully,
+            'backend_confirmed',
+          );
 
-          if (interview_done) {
-            setTimeout(() => {
-              window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-            }, 600);
-          }
-          
+          processEndInterviewResponse({
+            interviewId,
+            textResponse,
+            audio_url,
+            should_delete_audio,
+            interview_done,
+          });
         } else {
           console.error('❌ End interview API error:', response.message);
-          // ✅ NEW: Hide loading on error
           setIsEndingInterview(false);
         }
       } catch (error) {
         console.error('❌ Error ending interview:', error);
         setIsEndingInterview(false);
-        const urlParams = new URLSearchParams(window.location.search);
-        const interviewId = urlParams.get('interview_id');
-        if (interviewId && window.confirm(
+        const urlParamsOnError = new URLSearchParams(window.location.search);
+        const interviewIdOnError = urlParamsOnError.get('interview_id');
+        if (interviewIdOnError && window.confirm(
           'Ending the interview failed or timed out. Open the feedback page anyway?'
         )) {
-          window.location.href = `/interview-feedback?interview_id=${interviewId}`;
+          window.location.href = `/interview-feedback?interview_id=${interviewIdOnError}`;
         }
       }
     }
@@ -801,8 +896,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   };
 
   // Update the useChatHistory hook usage
-  const { loadChatHistory } = useChatHistory();
-
   // Load chat history when component mounts
   useEffect(() => {
     const loadHistory = async () => {
@@ -931,11 +1024,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const handleEndInterviewAutomatically = async () => {
     devLog('✅ Auto-ending interview due to timeout...');
     
-    // ✅ NEW: Show loading state
     setIsEndingInterview(true);
     
     try {
-      // ✅ Send END_INTERVIEW command to backend (same as manual end)
       devLog('📤 Sending END_INTERVIEW command to backend...');
       
       const urlParams = new URLSearchParams(window.location.search);
@@ -947,72 +1038,29 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         return;
       }
       
-      // ✅ Use the same apiPost function that works for normal responses
       const response = await apiPost(
         '/generate-response',
         buildGenerateResponsePayload('END_INTERVIEW'),
         { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
       );
       
-      // ✅ Now handle the response exactly like handleEndInterview does
-      // (Copy all the logic from handleEndInterview starting from line 316)
       if (response.success) {
         const { response: textResponse, audio_url, should_delete_audio, interview_done, feedback_saved_successfully } = response.data;
-        
-        // ✅ FIXED: Track events only when interview is done AND feedback is successfully saved
-        if (interview_done) {
-          devLog('🎯 Interview completed, tracking events...');
-          
-          // Track interview completion
-          devLog('📊 Tracking participatedInMockInterview...');
-          trackEvents.participatedInMockInterview({
-            interview_id: interviewId,
-            completion_timestamp: new Date().toISOString(),
-            completion_method: 'timeout_auto'
-          });
-          
-          // ✅ FIXED: Only track feedback generation when feedback is actually saved to database
-          if (feedback_saved_successfully) {
-            devLog('✅ Feedback successfully saved to database, tracking feedback generation...');
-            setTimeout(() => {
-              devLog('📊 Tracking mockInterviewFeedbackGenerated...');
-              trackEvents.mockInterviewFeedbackGenerated({
-                interview_id: interviewId,
-                generation_timestamp: new Date().toISOString(),
-                generation_method: 'timeout_auto'
-              });
-            }, 100); // 100ms delay
-          } else {
-            devLog('⚠️ Interview completed but feedback not saved yet, skipping feedback generation tracking');
-          }
-        }
-        
-        setConversation(prev => prev.filter(msg => !msg.isThinking));
-        const finalMessage = {
-          id: Date.now(),
-          speaker: 'interviewer',
-          message: textResponse,
-          timestamp: new Date().toLocaleTimeString()
-        };
-        setConversation(prev => [...prev, finalMessage]);
 
-        if (audio_url) {
-          setCanEndInterview(false);
-          try {
-            await playInterviewerResponseAudio(audio_url, should_delete_audio);
-          } catch (error) {
-            console.error('❌ Final audio playback failed:', error);
-          } finally {
-            setCanEndInterview(true);
-          }
-        }
+        trackInterviewCompletionEvents(
+          interviewId,
+          interview_done,
+          feedback_saved_successfully,
+          'timeout_auto',
+        );
 
-        if (interview_done) {
-          setTimeout(() => {
-            window.location.href = `/interview-feedback?interview_id=${interviewId}`;
-          }, 600);
-        }
-        
+        processEndInterviewResponse({
+          interviewId,
+          textResponse,
+          audio_url,
+          should_delete_audio,
+          interview_done,
+        });
       } else {
         console.error('❌ End interview API error:', response.message);
         setIsEndingInterview(false);
@@ -1205,22 +1253,21 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           <button
             type="button"
             onClick={handleEndInterview}
-            disabled={(!canEndInterview && !userHasParticipated) || isAudioPlaying || isRecording || isLoading || isResponseInProgress}
+            disabled={!canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress}
             className={`shrink-0 px-3 py-1.5 sm:px-3.5 sm:py-2 text-xs sm:text-sm font-medium rounded-lg border transition-all duration-200 ${
-              (!canEndInterview && !userHasParticipated) || isAudioPlaying || isRecording || isLoading || isResponseInProgress
+              !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
                 ? 'border-[var(--color-border)] text-[var(--color-text-secondary)]/70 bg-[var(--color-input-bg)]/50 cursor-not-allowed'
                 : 'border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] hover:border-red-500/60 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-500/5'
             }`}
             title={
-              (!canEndInterview && !userHasParticipated) || isAudioPlaying || isRecording || isLoading || isResponseInProgress
+              !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress
                 ? (isRecording ? "Wait for recording to finish" : 
                    isLoading ? "Wait for response to generate" : 
                    isResponseInProgress ? "Response in progress..." : 
                    isAudioPlaying ? "Wait for audio to finish" :
-                   !userHasParticipated ? "Speak at least once to end the interview" :
-                   interviewStage === 'introduction' ? "You can end the interview after your first answer" : 
+                   interviewStage === 'introduction' ? "Complete the introduction first" : 
                    interviewStage === 'resume_discussion' && !hasAnsweredResumeQuestion ? "Answer at least one resume & JD related question to end interview" : "Wait for resume questions to begin")
-                : "End interview and save progress"
+                : "End Interview"
             }
           >
             <span className="hidden sm:inline">End interview</span>
