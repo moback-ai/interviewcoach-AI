@@ -19,6 +19,7 @@ import Navbar from '@/components/Navbar';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '@/lib/authClient';
 import { getBackendOrigin } from '@/utils/apiConfig';
+import { downloadAuthenticatedFile } from '@/utils/protectedFiles';
 import NoticeModal from '@/components/common/NoticeModal';
 
 // PDF generation functions
@@ -511,35 +512,9 @@ function InterviewFeedbackPage() {
   const handleDownloadAudioTranscript = async (audioUrl) => {
     try {
       console.log('🎵 Downloading audio transcript from:', audioUrl);
-      
-      // Fetch the audio file
-      const response = await fetch(audioUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch audio: ${response.status}`);
-      }
-      
-      // Get the audio blob
-      const audioBlob = await response.blob();
-      
-      // Create download link
-      const url = window.URL.createObjectURL(audioBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      
-      // Set filename with timestamp
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      link.download = `interview_audio_transcript_${timestamp}.wav`;
-      
-      // Trigger download
-      document.body.appendChild(link);
-      link.click();
-      
-      // Cleanup
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      
+      await downloadAuthenticatedFile(audioUrl, `interview_audio_transcript_${timestamp}.wav`);
       console.log('✅ Audio transcript downloaded successfully');
-      
     } catch (error) {
       console.error('❌ Failed to download audio transcript:', error);
       setNoticeModal({
