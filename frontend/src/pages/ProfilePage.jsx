@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
-import { useAuthenticatedBlobUrl } from '../hooks/useAuthenticatedBlobUrl';
-import { 
-  FiUser, 
+import {
+  FiUser,
   FiMail, 
   FiCalendar, 
   FiCamera,
@@ -30,6 +29,7 @@ import {
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import { getBackendOrigin } from '../utils/apiConfig';
+import { fetchAuthenticatedFile } from '../utils/protectedFiles';
 
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
 const ACCEPTED_AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -96,14 +96,11 @@ const ProfileSection = ({
   statusTone,
   avatarPreview,
   avatarPreviewTrusted,
+  savedAvatarBlobSrc,
   avatarFile,
   avatarError,
   handleAvatarFileChange,
 }) => {
-  const authenticatedAvatarUrl = useAuthenticatedBlobUrl(
-    avatarPreviewTrusted ? '' : (profileData.avatar_url || '')
-  );
-  const avatarDisplayUrl = avatarPreviewTrusted ? avatarPreview : authenticatedAvatarUrl;
   const hasStoredAvatar = Boolean(profileData.avatar_url);
   const displayName = profileData.full_name || profileData.nickname || profileData.email || 'InterviewCoach';
 
@@ -159,9 +156,15 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {avatarDisplayUrl?.startsWith('blob:') ? (
+                {avatarPreviewTrusted && avatarPreview ? (
                   <img
-                    src={avatarDisplayUrl}
+                    src={avatarPreview}
+                    alt="Profile"
+                    className="h-full w-full object-cover"
+                  />
+                ) : savedAvatarBlobSrc ? (
+                  <img
+                    src={savedAvatarBlobSrc}
                     alt="Profile"
                     className="h-full w-full object-cover"
                   />
@@ -1097,12 +1100,73 @@ function ProfilePage() {
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState('');
   const [avatarPreviewTrusted, setAvatarPreviewTrusted] = useState(false);
+  const [savedAvatarBlobSrc, setSavedAvatarBlobSrc] = useState('');
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
+  const storedAvatarUrlRef = useRef('');
 
   useEffect(() => {
     setProfileData(buildProfileState(user));
   }, [user]);
+
+  useEffect(() => {
+    storedAvatarUrlRef.current = profileData.avatar_url || '';
+  }, [profileData.avatar_url]);
+
+  useEffect(() => {
+    if (avatarPreviewTrusted) {
+      return undefined;
+    }
+
+    let active = true;
+    let createdUrl = '';
+
+    const loadSavedAvatar = async () => {
+      const remoteAvatarUrl = storedAvatarUrlRef.current;
+      if (!remoteAvatarUrl) {
+        setSavedAvatarBlobSrc('');
+        return;
+      }
+
+      try {
+        const response = await fetchAuthenticatedFile(remoteAvatarUrl);
+        const blob = await response.blob();
+        createdUrl = URL.createObjectURL(blob);
+        if (!active) {
+          URL.revokeObjectURL(createdUrl);
+          return;
+        }
+        setSavedAvatarBlobSrc((previous) => {
+          if (previous?.startsWith('blob:')) {
+            URL.revokeObjectURL(previous);
+          }
+          return createdUrl;
+        });
+      } catch {
+        if (active) {
+          setSavedAvatarBlobSrc('');
+        }
+      }
+    };
+
+    loadSavedAvatar();
+
+    return () => {
+      active = false;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [profileData.avatar_url, avatarPreviewTrusted]);
+
+  useEffect(() => () => {
+    setSavedAvatarBlobSrc((current) => {
+      if (current?.startsWith('blob:')) {
+        URL.revokeObjectURL(current);
+      }
+      return '';
+    });
+  }, []);
 
   useEffect(() => (
     () => {
@@ -1258,6 +1322,7 @@ function ProfilePage() {
         statusTone={profileStatus?.tone || 'success'}
         avatarPreview={avatarPreview}
         avatarPreviewTrusted={avatarPreviewTrusted}
+        savedAvatarBlobSrc={savedAvatarBlobSrc}
         avatarFile={avatarFile}
         avatarError={avatarError}
         handleAvatarFileChange={handleAvatarFileChange}
