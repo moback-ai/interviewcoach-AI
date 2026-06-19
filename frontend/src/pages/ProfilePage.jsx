@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
 import { useAuthenticatedBlobUrl } from '../hooks/useAuthenticatedBlobUrl';
-import { isSafeImageSrc } from '../utils/protectedFiles';
 import { 
   FiUser, 
   FiMail, 
@@ -96,13 +95,16 @@ const ProfileSection = ({
   statusMessage,
   statusTone,
   avatarPreview,
+  avatarPreviewTrusted,
   avatarFile,
   avatarError,
   handleAvatarFileChange,
 }) => {
-  const avatarSource = avatarPreview || profileData.avatar_url;
-  const authenticatedAvatarUrl = useAuthenticatedBlobUrl(avatarPreview ? '' : avatarSource);
-  const avatarDisplayUrl = avatarPreview || authenticatedAvatarUrl;
+  const authenticatedAvatarUrl = useAuthenticatedBlobUrl(
+    avatarPreviewTrusted ? '' : (profileData.avatar_url || '')
+  );
+  const avatarDisplayUrl = avatarPreviewTrusted ? avatarPreview : authenticatedAvatarUrl;
+  const hasStoredAvatar = Boolean(profileData.avatar_url);
   const displayName = profileData.full_name || profileData.nickname || profileData.email || 'InterviewCoach';
 
   return (
@@ -157,7 +159,7 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {isSafeImageSrc(avatarDisplayUrl) ? (
+                {avatarDisplayUrl?.startsWith('blob:') ? (
                   <img
                     src={avatarDisplayUrl}
                     alt="Profile"
@@ -175,7 +177,7 @@ const ProfileSection = ({
                   Upload a JPG, PNG, GIF, or WEBP image up to 5 MB.
                 </p>
                 <p className="text-xs text-[var(--color-text-secondary)]">
-                  {avatarFile ? `Selected: ${avatarFile.name}` : avatarSource ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
+                  {avatarFile ? `Selected: ${avatarFile.name}` : hasStoredAvatar ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
                 </p>
               </div>
             </div>
@@ -183,7 +185,7 @@ const ProfileSection = ({
             {isEditing ? (
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-input-bg)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]">
                 <FiCamera size={16} />
-                <span>{avatarSource ? 'Change photo' : 'Upload photo'}</span>
+                <span>{hasStoredAvatar || avatarPreviewTrusted ? 'Change photo' : 'Upload photo'}</span>
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/gif"
@@ -1094,6 +1096,7 @@ function ProfilePage() {
   const [profileStatus, setProfileStatus] = useState(null);
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState('');
+  const [avatarPreviewTrusted, setAvatarPreviewTrusted] = useState(false);
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
 
@@ -1121,6 +1124,7 @@ function ProfilePage() {
       URL.revokeObjectURL(avatarPreview);
     }
     setAvatarPreview('');
+    setAvatarPreviewTrusted(false);
     setAvatarFile(null);
     setAvatarError('');
   };
@@ -1134,6 +1138,7 @@ function ProfilePage() {
     const validationMessage = validateAvatarFile(file);
     if (validationMessage) {
       setAvatarError(validationMessage);
+      setAvatarPreviewTrusted(false);
       event.target.value = '';
       return;
     }
@@ -1145,6 +1150,7 @@ function ProfilePage() {
 
     setAvatarFile(file);
     setAvatarPreview(nextPreview);
+    setAvatarPreviewTrusted(true);
     setAvatarError('');
     setProfileStatus(null);
     event.target.value = '';
@@ -1251,6 +1257,7 @@ function ProfilePage() {
         statusMessage={profileStatus?.message || ''}
         statusTone={profileStatus?.tone || 'success'}
         avatarPreview={avatarPreview}
+        avatarPreviewTrusted={avatarPreviewTrusted}
         avatarFile={avatarFile}
         avatarError={avatarError}
         handleAvatarFileChange={handleAvatarFileChange}

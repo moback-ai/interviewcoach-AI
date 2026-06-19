@@ -25,7 +25,7 @@ export function useAuthenticatedBlobUrl(sourceUrl) {
       }
 
       if (!needsAuthenticatedFetch(sourceUrl)) {
-        if (active) setBlobUrl(sourceUrl);
+        if (active) setBlobUrl('');
         return;
       }
 
@@ -53,8 +53,12 @@ export async function createAuthenticatedAudioElement(audioUrl) {
     throw new Error('Missing audio URL');
   }
 
-  if (!needsAuthenticatedFetch(audioUrl)) {
+  if (audioUrl.startsWith('blob:')) {
     return { audio: new Audio(audioUrl), blobUrl: null };
+  }
+
+  if (!needsAuthenticatedFetch(audioUrl)) {
+    throw new Error('Unsupported audio URL');
   }
 
   const blobUrl = await fetchAuthenticatedBlobUrl(audioUrl);
