@@ -20,6 +20,7 @@ import { trackEvents } from '../services/mixpanel';
 import { getSession } from '@/lib/authClient';
 import { getBackendOrigin } from '@/utils/apiConfig';
 import { downloadAuthenticatedFile } from '@/utils/protectedFiles';
+import { parseFeedbackPoints } from '@/utils/feedbackPoints';
 import NoticeModal from '@/components/common/NoticeModal';
 
 // PDF generation functions
@@ -393,31 +394,9 @@ function InterviewFeedbackPage() {
     return 'text-red-500';
   };
 
-  const formatKeyStrengths = (strengthsText) => {
-    if (!strengthsText) return [];
-    if (Array.isArray(strengthsText)) {
-      return strengthsText.map((point) => String(point).trim()).filter(Boolean);
-    }
+  const formatKeyStrengths = (strengthsText) => parseFeedbackPoints(strengthsText);
 
-    // Split by numbered points (1., 2., 3., etc.)
-    const points = String(strengthsText).split(/\d+\.\s*/).filter(point => point.trim());
-    
-    // Clean up each point and return as array
-    return points.map(point => point.trim());
-  };
-
-  const formatImprovementAreas = (improvementsText) => {
-    if (!improvementsText) return [];
-    if (Array.isArray(improvementsText)) {
-      return improvementsText.map((point) => String(point).trim()).filter(Boolean);
-    }
-
-    // Split by numbered points (1., 2., 3., etc.)
-    const points = String(improvementsText).split(/\d+\.\s*/).filter(point => point.trim());
-    
-    // Clean up each point and return as array
-    return points.map(point => point.trim());
-  };
+  const formatImprovementAreas = (improvementsText) => parseFeedbackPoints(improvementsText);
 
   const formatSummary = (summaryText) => {
     if (!summaryText) return '';
@@ -774,29 +753,31 @@ function InterviewFeedbackPage() {
                     </h3>
                   </div>
                   
-                  <div className="space-y-3">
+                  <ul className="space-y-3 list-none m-0 p-0">
                     {feedbackData.key_strengths ? (
                       formatKeyStrengths(feedbackData.key_strengths).map((strength, index) => (
-                        <div key={index} className="flex items-start gap-3">
+                        <li key={index} className="flex items-start gap-3">
                           <div className="w-6 h-6 rounded-full bg-green-100 dark:bg-green-900/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                             <span className="text-xs font-semibold text-green-600 dark:text-green-400">
                               {index + 1}
                             </span>
                           </div>
-                          <p 
-                            className="text-sm leading-relaxed"
+                          <p
+                            className="text-sm leading-relaxed flex-1 m-0"
                             style={{ color: 'var(--color-text-primary)' }}
                           >
                             {strength}
                           </p>
-                        </div>
+                        </li>
                       ))
                     ) : (
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        No key strengths data available.
-                      </p>
+                      <li>
+                        <p style={{ color: 'var(--color-text-primary)' }}>
+                          No key strengths data available.
+                        </p>
+                      </li>
                     )}
-                  </div>
+                  </ul>
                 </div>
               </motion.div>
 
@@ -825,29 +806,31 @@ function InterviewFeedbackPage() {
                     </h3>
                   </div>
                   
-                  <div className="space-y-3">
+                  <ul className="space-y-3 list-none m-0 p-0">
                     {feedbackData.improvement_areas ? (
                       formatImprovementAreas(feedbackData.improvement_areas).map((improvement, index) => (
-                        <div key={index} className="flex items-start gap-3">
+                        <li key={index} className="flex items-start gap-3">
                           <div className="w-6 h-6 rounded-full bg-orange-100 dark:bg-orange-900/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                             <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
                               {index + 1}
                             </span>
                           </div>
-                          <p 
-                            className="text-sm leading-relaxed"
+                          <p
+                            className="text-sm leading-relaxed flex-1 m-0"
                             style={{ color: 'var(--color-text-primary)' }}
                           >
                             {improvement}
                           </p>
-                        </div>
+                        </li>
                       ))
                     ) : (
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        No improvement areas data available.
-                      </p>
+                      <li>
+                        <p style={{ color: 'var(--color-text-primary)' }}>
+                          No improvement areas data available.
+                        </p>
+                      </li>
                     )}
-                  </div>
+                  </ul>
                 </div>
               </motion.div>
             </div>
