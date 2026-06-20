@@ -3762,8 +3762,9 @@ def _normalize_list(value):
         text = str(text).replace("\\n", "\n").strip()
         if not text:
             return []
-        parts = re.split(r'(?:^|\n)\s*\d+\.\s*', text)
+        parts = re.split(r'\d+\.\s*', text)
         points = [part.strip(" \n\t-•") for part in parts if part.strip(" \n\t-•")]
+        points = [part for part in points if not re.fullmatch(r'\d+', part)]
         if len(points) > 1:
             return points
         bullet_points = [part.strip(" \n\t-•") for part in re.split(r'\n\s*[-•]\s*', text) if part.strip(" \n\t-•")]
