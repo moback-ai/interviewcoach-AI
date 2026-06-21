@@ -58,6 +58,8 @@ CREATE TABLE interviews (
     retake_from UUID REFERENCES interviews(id),
     attempt_number INTEGER DEFAULT 1 CHECK (attempt_number > 0),
     scheduled_at TIMESTAMPTZ DEFAULT now(),
+    active_seconds INTEGER NOT NULL DEFAULT 0,
+    ended_at TIMESTAMPTZ,
     CONSTRAINT check_retake_not_self CHECK (retake_from != id)
 );
 

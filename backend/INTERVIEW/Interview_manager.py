@@ -56,7 +56,8 @@ class InterviewManager:
 
 # ========= Interview Time Limit ==================
         self.start_time = None
-        self.time_limit_seconds = config.get("time_limit_minutes", 150) * 60  # Default: 2 hours
+        limit_minutes = config.get("time_limit_minutes") or 0
+        self.time_limit_seconds = int(limit_minutes) * 60 if limit_minutes > 0 else 0
 
 
 # ========= Stage Flags ==================
@@ -204,9 +205,9 @@ class InterviewManager:
         return followup
 
     def is_time_exceeded(self):
-        if self.start_time is None:
-            return False  # Timer not started yet
-        elapsed = time.time() - self.start_time
+        if self.time_limit_seconds <= 0:
+            return False
+        elapsed = getattr(self, "tracked_active_seconds", 0) or 0
         return elapsed >= self.time_limit_seconds
 
 

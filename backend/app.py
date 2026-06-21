@@ -68,6 +68,12 @@ from common.storage import (
 )
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
+from common.interview_timer import (
+    TIMER_LAST_TICK_KEY,
+    tick_interview_time,
+    pause_interview_time,
+    finalize_interview_time,
+)
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
 from common.transcribe_remote import transcribe_via_remote_service
 
@@ -333,6 +339,10 @@ def normalize_feedback_row(row):
     normalized['improvement_areas'] = _normalize_list(normalized.get('improvement_areas'))
     if normalized.get('audio_url'):
         normalized['audio_url'] = normalize_file_url(normalized['audio_url'])
+    active = normalized.get('active_seconds') or 0
+    normalized['interview_duration_minutes'] = (
+        max(1, round(active / 60)) if active > 0 else None
+    )
     return normalized
 
 
@@ -2630,6 +2640,45 @@ def update_interview(interview_id):
             (data.get('status', 'ACTIVE'), interview_id, request.user['id']))
     return jsonify({"success": True})
 
+
+def _interview_timer_response(interview_id: str, user_id: str, action: str):
+    row = query_one(
+        "SELECT id, status, active_seconds FROM interviews WHERE id=%s AND user_id=%s",
+        (interview_id, user_id),
+    )
+    if not row:
+        return jsonify({"success": False, "message": "Interview not found"}), 404
+    if row.get("status") != "STARTED":
+        return jsonify({
+            "success": True,
+            "data": {"active_seconds": int(row.get("active_seconds") or 0)},
+        })
+    if action == "tick":
+        active_seconds = tick_interview_time(interview_id, user_id)
+    else:
+        active_seconds = pause_interview_time(interview_id, user_id)
+    return jsonify({"success": True, "data": {"active_seconds": active_seconds}})
+
+
+@app.route('/api/interviews/<interview_id>/timer-tick', methods=['POST', 'OPTIONS'])
+@app.route('/functions/v1/interviews/<interview_id>/timer-tick', methods=['POST', 'OPTIONS'])
+@app.route('/api/functions/v1/interviews/<interview_id>/timer-tick', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def interview_timer_tick(interview_id):
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    return _interview_timer_response(interview_id, request.user['id'], "tick")
+
+
+@app.route('/api/interviews/<interview_id>/timer-pause', methods=['POST', 'OPTIONS'])
+@app.route('/functions/v1/interviews/<interview_id>/timer-pause', methods=['POST', 'OPTIONS'])
+@app.route('/api/functions/v1/interviews/<interview_id>/timer-pause', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def interview_timer_pause(interview_id):
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    return _interview_timer_response(interview_id, request.user['id'], "pause")
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  INTERVIEW DATA  (implements the app API interview-data)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2743,7 +2792,7 @@ def save_feedback():
 def get_feedback(interview_id):
     row = query_one(
         """
-        SELECT f.*
+        SELECT f.*, i.active_seconds, i.ended_at
         FROM interview_feedback f
         JOIN interviews i ON i.id = f.interview_id
         WHERE f.interview_id=%s AND i.user_id=%s
@@ -3113,7 +3162,9 @@ def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state)
         cached_id = saved_state.get('_config_interview_id')
         cached_config = saved_state.get('_dynamic_config')
         if cached_id == interview_id and isinstance(cached_config, dict):
-            return cached_config
+            config = dict(cached_config)
+            config["time_limit_minutes"] = 0
+            return config
 
     questions_rows = _fetch_interview_question_rows(interview_row, interview_id, user_id)
     return {
@@ -3121,7 +3172,7 @@ def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state)
         "job_description": interview_row.get('description') or '',
         "core_questions": _build_core_questions_list(questions_rows),
         "coding_requirement": [],
-        "time_limit_minutes": 150,
+        "time_limit_minutes": 0,
         "custom_questions": [],
     }
 
@@ -3150,8 +3201,12 @@ def _build_generate_response_payload(user, data, on_token=None):
     if saved_state:
         manager.__dict__.update({
             k: v for k, v in saved_state.items()
-            if not callable(v) and k not in ('model',)
+            if not callable(v) and k not in ('model', 'time_limit_seconds')
         })
+    manager.time_limit_seconds = 0
+
+    tracked_active_seconds = tick_interview_time(interview_id, user_id)
+    manager.tracked_active_seconds = tracked_active_seconds
 
     try:
         def _receive():
@@ -3180,6 +3235,9 @@ def _build_generate_response_payload(user, data, on_token=None):
         }
         serializable['_config_interview_id'] = interview_id
         serializable['_dynamic_config'] = dynamic_config
+        timer_session = load_session(instance_key) or {}
+        if TIMER_LAST_TICK_KEY in timer_session:
+            serializable[TIMER_LAST_TICK_KEY] = timer_session[TIMER_LAST_TICK_KEY]
         save_session(instance_key, serializable)
     except Exception as se:
         print(f"[WARN] Session save failed: {se}")
@@ -3261,6 +3319,7 @@ def _build_generate_response_payload(user, data, on_token=None):
                  merged_url)
             )
 
+            finalize_interview_time(interview_id, user_id)
             execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
 
             # Remove session from store
@@ -4404,7 +4463,7 @@ def legacy_interview_feedback():
     if interview_id:
         row = query_one(
             """
-            SELECT f.*
+            SELECT f.*, i.active_seconds, i.ended_at
             FROM interview_feedback f
             JOIN interviews i ON i.id = f.interview_id
             WHERE f.interview_id=%s AND i.user_id=%s
@@ -4417,7 +4476,7 @@ def legacy_interview_feedback():
     limit = int(request.args.get('limit', 100))
     rows = query_all(
         """
-        SELECT f.*
+        SELECT f.*, i.active_seconds, i.ended_at
         FROM interview_feedback f
         JOIN interviews i ON i.id = f.interview_id
         WHERE i.user_id=%s
