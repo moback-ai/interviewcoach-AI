@@ -12,12 +12,15 @@ import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
 import { useOperation } from '../contexts/OperationContext';
 import { devLog } from '../utils/devLog';
+import { useInterviewTimer } from '@/hooks/useInterviewTimer';
 
 function InterviewPage() {
   const { setIsOperationInProgress } = useOperation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const interviewId = searchParams.get('interview_id');
   const [isValidated, setIsValidated] = useState(false);
+  useInterviewTimer(interviewId, isValidated);
   const [isValidating, setIsValidating] = useState(true); // ✅ RENAMED: Validation loading
   
   // ✅ ADD: Separate loading state for ChatWindow

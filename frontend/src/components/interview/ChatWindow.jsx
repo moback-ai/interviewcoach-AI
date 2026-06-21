@@ -19,7 +19,6 @@ const END_INTERVIEW_LATER_STAGES = new Set([
   'candidate_questions',
   'wrapup_evaluation',
   'manual_end',
-  'timeout',
 ]);
 
 function resolveEndInterviewState(stage, hasAnsweredResumeQuestion) {
@@ -62,9 +61,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     };
   }, []);
 
-  // ✅ NEW: Add state for timeout modal
-  const [showTimeoutModal, setShowTimeoutModal] = useState(false);
-  
   // ✅ NEW: Add state to track interview stage and resume question answers
   const [interviewStage, setInterviewStage] = useState('introduction');
   const [hasAnsweredResumeQuestion, setHasAnsweredResumeQuestion] = useState(false);
@@ -481,13 +477,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         // ✅ NEW: Update interview stage and control End Interview button
         if (stage) {
           devLog('📊 Interview stage updated from', interviewStage, 'to:', stage);
-          
-          // ✅ NEW: Auto-trigger end interview flow when timeout is detected
-          if (stage === 'timeout') {
-            setInterviewStage(stage);
-            setShowTimeoutModal(true);
-            return; // Exit early to prevent normal message handling
-          }
 
           const nextEndState = resolveEndInterviewState(stage, nextHasAnsweredResumeQuestion);
           setInterviewStage(nextEndState.interviewStage);
@@ -1075,218 +1064,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         setLanguage(newLanguage);
   };
 
-  // ✅ NEW: Auto-end interview when timeout is detected (no confirmation popup)
-  const handleEndInterviewAutomatically = async () => {
-    devLog('✅ Auto-ending interview due to timeout...');
-    
-    setIsEndingInterview(true);
-    
-    try {
-      devLog('📤 Sending END_INTERVIEW command to backend...');
-      
-      const urlParams = new URLSearchParams(window.location.search);
-      const interviewId = urlParams.get('interview_id');
-      
-      if (!interviewId) {
-        console.error('❌ No interview_id found in URL');
-        setIsEndingInterview(false);
-        return;
-      }
-      
-      const response = await apiPost(
-        '/generate-response',
-        buildGenerateResponsePayload('END_INTERVIEW'),
-        { timeoutMs: GENERATE_RESPONSE_TIMEOUT_MS },
-      );
-      
-      if (response.success) {
-        const { response: textResponse, audio_url, should_delete_audio, interview_done, feedback_saved_successfully } = response.data;
-
-        trackInterviewCompletionEvents(
-          interviewId,
-          interview_done,
-          feedback_saved_successfully,
-          'timeout_auto',
-        );
-
-        processEndInterviewResponse({
-          interviewId,
-          textResponse,
-          audio_url,
-          should_delete_audio,
-          interview_done,
-        });
-      } else {
-        console.error('❌ End interview API error:', response.message);
-        setIsEndingInterview(false);
-      }
-    } catch (error) {
-      console.error('❌ Error auto-ending interview:', error);
-      setIsEndingInterview(false);
-    }
-  };
-
-  // ✅ NEW: Timeout Modal Component
-  const TimeoutModal = () => {
-    if (!showTimeoutModal) return null;
-    
-    const handleContinue = () => {
-      devLog('✅ User acknowledged timeout, ending interview...');
-      setShowTimeoutModal(false);
-      // Now trigger the end interview flow
-      handleEndInterviewAutomatically();
-    };
-    
-    return (
-      <AnimatePresence>
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-3 sm:p-4"
-        >
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0, y: 20 }}
-            animate={{ scale: 1, opacity: 1, y: 0 }}
-            exit={{ scale: 0.9, opacity: 0, y: 20 }}
-            transition={{ type: "spring", duration: 0.5 }}
-            className="relative rounded-2xl p-6 sm:p-8 max-w-md w-full shadow-2xl border"
-            style={{ 
-              backgroundColor: 'var(--color-card)',
-              borderColor: 'var(--color-border)'
-            }}
-          >
-            {/* Decorative corner elements */}
-            <div className="absolute top-4 right-4">
-              <div className="w-2 h-2 bg-orange-400/50 rounded-full animate-pulse" style={{ animationDelay: '0ms' }}></div>
-            </div>
-            <div className="absolute bottom-4 left-4">
-              <div className="w-2 h-2 bg-amber-400/50 rounded-full animate-pulse" style={{ animationDelay: '200ms' }}></div>
-            </div>
-            <div className="absolute top-4 left-4">
-              <div className="w-2 h-2 bg-yellow-400/50 rounded-full animate-pulse" style={{ animationDelay: '400ms' }}></div>
-            </div>
-            <div className="absolute bottom-4 right-4">
-              <div className="w-2 h-2 bg-orange-500/50 rounded-full animate-pulse" style={{ animationDelay: '600ms' }}></div>
-            </div>
-
-            <div className="text-center">
-              {/* Animated Clock Icon */}
-              <div className="relative mb-6">
-                <div className="w-20 h-20 mx-auto relative">
-                  {/* Outer pulsing ring */}
-                  <motion.div
-                    animate={{ scale: [1, 1.1, 1] }}
-                    transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-                    className="absolute inset-0 rounded-full border-4 border-orange-200 dark:border-orange-900/50"
-                  />
-                  {/* Inner circle with gradient */}
-                  <div className="absolute inset-2 rounded-full bg-gradient-to-br from-orange-50 via-amber-50 to-yellow-50 dark:from-orange-900/30 dark:via-amber-900/30 dark:to-yellow-900/30 flex items-center justify-center shadow-inner">
-                    {/* Clock SVG */}
-                    <svg 
-                      className="w-10 h-10 text-orange-600 dark:text-orange-400" 
-                      fill="none" 
-                      stroke="currentColor" 
-                      viewBox="0 0 24 24"
-                    >
-                      <circle cx="12" cy="12" r="10" strokeWidth="2" className="opacity-20"/>
-                      <path 
-                        strokeLinecap="round" 
-                        strokeLinejoin="round" 
-                        strokeWidth="2.5" 
-                        d="M12 6v6l4 2" 
-                      />
-                      <motion.circle
-                        cx="12"
-                        cy="12"
-                        r="1.5"
-                        fill="currentColor"
-                        animate={{ opacity: [1, 0.5, 1] }}
-                        transition={{ duration: 1.5, repeat: Infinity }}
-                      />
-                    </svg>
-                  </div>
-                </div>
-              </div>
-
-              {/* Title with gradient */}
-              <motion.h3
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-                className="text-2xl sm:text-3xl font-bold mb-3 bg-gradient-to-r from-orange-600 via-amber-600 to-yellow-600 dark:from-orange-400 dark:via-amber-400 dark:to-yellow-400 bg-clip-text text-transparent"
-              >
-                Time's Up!
-              </motion.h3>
-
-              {/* Subtitle */}
-              <motion.p
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.3 }}
-                className="text-sm font-medium mb-4"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                Interview Time Limit Reached
-              </motion.p>
-
-              {/* Message */}
-              <motion.p
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4 }}
-                className="mb-8 leading-relaxed text-sm sm:text-base px-2"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                Your interview time limit has been reached. We'll now wrap up the interview and generate your comprehensive feedback.
-              </motion.p>
-              
-              {/* Action Button with gradient */}
-              <motion.button
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5 }}
-                onClick={handleContinue}
-                className="w-full bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-500 hover:from-orange-600 hover:via-amber-600 hover:to-yellow-600 text-white font-semibold py-3.5 px-6 rounded-xl transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 text-sm sm:text-base relative overflow-hidden group"
-              >
-                {/* Shine effect on hover */}
-                <span className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></span>
-                
-                <span className="relative flex items-center justify-center gap-2">
-                  <svg 
-                    className="w-5 h-5" 
-                    fill="none" 
-                    stroke="currentColor" 
-                    viewBox="0 0 24 24"
-                  >
-                    <path 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                      strokeWidth={2} 
-                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" 
-                    />
-                  </svg>
-                  Continue to Feedback
-                </span>
-              </motion.button>
-
-              {/* Info text */}
-              <motion.p
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.6 }}
-                className="text-xs mt-4"
-                style={{ color: 'var(--color-text-secondary)' }}
-              >
-                Your responses have been saved
-              </motion.p>
-            </div>
-          </motion.div>
-        </motion.div>
-      </AnimatePresence>
-    );
-  };
-
   const isEndInterviewDisabled =
     !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress;
 
@@ -1567,9 +1344,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           />
         )}
       </AnimatePresence>
-
-      {/* ✅ NEW: Timeout modal */}
-      <TimeoutModal />
     </div>
   );
 }

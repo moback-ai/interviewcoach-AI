@@ -180,3 +180,9 @@ export const getInterviewHistory = (page = 1, limit = 10) =>
 
 export const getDashboard = (page = 1, limit = 20) =>
   apiGet(`/api/dashboard?page=${page}&limit=${limit}`);
+
+export const tickInterviewTimer = (id) =>
+  apiPost(`/api/interviews/${id}/timer-tick`, {});
+
+export const pauseInterviewTimer = (id) =>
+  apiPost(`/api/interviews/${id}/timer-pause`, {});

@@ -427,7 +427,7 @@ function InterviewFeedbackPage() {
         return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
       }
     }
-    return '25 min'; // Fallback
+    return '—';
   };
 
   const getQuestionsAnswered = () => {
