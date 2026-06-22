@@ -364,7 +364,25 @@ const PaymentsSection = () => {
       const result = await response.json();
 
       if (response.ok && result.success) {
-        setPayments(result.data || []);
+        const paymentRows = (result.data || []).map((row) => ({
+          ...row,
+          kind: 'payment',
+          display_status: row.payment_status,
+          display_date: row.recorded_at || row.paid_at,
+        }));
+        const attemptRows = (result.attempts || []).map((row) => ({
+          ...row,
+          kind: 'attempt',
+          display_status: row.status,
+          display_date: row.created_at,
+          id: row.checkout_intent_id,
+        }));
+        const merged = [...paymentRows, ...attemptRows].sort((a, b) => {
+          const aTime = new Date(a.display_date || 0).getTime();
+          const bTime = new Date(b.display_date || 0).getTime();
+          return bTime - aTime;
+        });
+        setPayments(merged);
       } else {
         setError(result.message || 'Failed to fetch payment history');
       }
@@ -388,7 +406,10 @@ const PaymentsSection = () => {
       case 'success':
         return <FiCheckCircle className="w-5 h-5 text-green-500" />;
       case 'failed':
+      case 'checkout_creation_failed':
         return <FiXCircle className="w-5 h-5 text-red-500" />;
+      case 'expired':
+        return <FiClock className="w-5 h-5 text-gray-500" />;
       case 'pending':
       case 'processing':
         return <FiClock className="w-5 h-5 text-yellow-500" />;
@@ -403,13 +424,22 @@ const PaymentsSection = () => {
       case 'success':
         return 'text-green-600 bg-green-100';
       case 'failed':
+      case 'checkout_creation_failed':
         return 'text-red-600 bg-red-100';
+      case 'expired':
+        return 'text-gray-600 bg-gray-100';
       case 'pending':
       case 'processing':
         return 'text-yellow-600 bg-yellow-100';
       default:
         return 'text-gray-600 bg-gray-100';
     }
+  };
+
+  const formatStatusLabel = (status) => {
+    if (status === 'checkout_creation_failed') return 'checkout failed';
+    if (status === 'expired') return 'expired';
+    return status;
   };
 
   const formatDate = (dateString) => {
@@ -434,8 +464,12 @@ const PaymentsSection = () => {
 
   // Calculate summary statistics
   const totalPayments = payments.length;
-  const successfulPayments = payments.filter(p => p.payment_status === 'succeeded' || p.payment_status === 'success').length;
-  const totalAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const successfulPayments = payments.filter(
+    (p) => p.display_status === 'succeeded' || p.display_status === 'success'
+  ).length;
+  const totalAmount = payments
+    .filter((p) => p.kind === 'payment')
+    .reduce((sum, p) => sum + (p.amount || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -516,41 +550,42 @@ const PaymentsSection = () => {
         <div className="space-y-4">
           {payments.map((payment) => (
             <div
-              key={payment.id}
+              key={`${payment.kind}-${payment.id}`}
               className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-6 hover:shadow-md transition-shadow"
             >
               {/* Main Payment Info */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center space-x-4">
-                  {getStatusIcon(payment.payment_status)}
+                  {getStatusIcon(payment.display_status)}
                   <div>
                     <h3 className="font-semibold text-[var(--color-text-primary)] text-lg">
-                      {payment.provider?.toUpperCase()} Payment
+                      {payment.kind === 'attempt'
+                        ? 'Checkout attempt'
+                        : `${payment.provider?.toUpperCase() || 'DODO'} Payment`}
                     </h3>
                     <p className="text-sm text-[var(--color-text-secondary)]">
-                      {formatDate(payment.paid_at)}
+                      {payment.display_date ? formatDate(payment.display_date) : '—'}
                     </p>
                   </div>
                 </div>
                 
                 <div className="text-right">
                   <div className="text-2xl font-bold text-[var(--color-text-primary)]">
-                    {formatAmount(payment.amount)}
+                    {formatAmount(payment.amount || 0)}
                   </div>
-                  <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(payment.payment_status)}`}>
-                    {payment.payment_status}
+                  <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(payment.display_status)}`}>
+                    {formatStatusLabel(payment.display_status)}
                   </span>
                 </div>
               </div>
 
-              {/* Payment IDs Section */}
+              {payment.kind === 'payment' && payment.transaction_id && (
               <div className="bg-[var(--color-bg)] rounded-lg p-4 mb-4">
                 <h4 className="font-medium text-[var(--color-text-primary)] mb-3 flex items-center">
                   <FiHash className="w-4 h-4 mr-2" />
                   Payment Identifiers
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Payment ID (Dodo's ID) */}
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wide">
                       Payment ID (Dodo)
@@ -572,7 +607,6 @@ const PaymentsSection = () => {
                     </p>
                   </div>
 
-                  {/* Transaction ID (Internal) */}
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wide">
                       Transaction ID (Internal)
@@ -595,8 +629,9 @@ const PaymentsSection = () => {
                   </div>
                 </div>
               </div>
+              )}
 
-              {/* Additional Details */}
+              {payment.kind === 'payment' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wide">
@@ -619,6 +654,7 @@ const PaymentsSection = () => {
                   </div>
                 </div>
               </div>
+              )}
             </div>
           ))}
         </div>
