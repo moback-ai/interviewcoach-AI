@@ -83,6 +83,18 @@ export default function PaymentSuccess() {
             return;
           }
 
+          if (result.status === 'expired') {
+            setStatus('error');
+            setMessage('Checkout session expired. Please schedule again.');
+            return;
+          }
+
+          if (result.status === 'checkout_creation_failed') {
+            setStatus('error');
+            setMessage('Unable to start checkout. Please try again.');
+            return;
+          }
+
           if (attempt < MAX_POLL_ATTEMPTS - 1) {
             await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
           }

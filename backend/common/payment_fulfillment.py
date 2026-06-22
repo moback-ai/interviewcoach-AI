@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 SUCCESS_STATUSES = frozenset({"succeeded", "success", "completed"})
 FAILURE_STATUSES = frozenset({"failed", "cancelled", "canceled"})
+TERMINAL_SUCCESS_STATUSES = frozenset({"fulfilled", "paid_needs_review"})
 
 STALE_PROCESSING_SECONDS = 300
 
@@ -28,6 +29,17 @@ class PaidNeedsReview(FulfillmentError):
 
 def _utcnow():
     return datetime.now(timezone.utc)
+
+
+def _failure_reason_from_status(status: str) -> str:
+    normalized = (status or "").lower()
+    if normalized in {"cancelled", "canceled"}:
+        return "provider_cancelled"
+    return "provider_failed"
+
+
+def _is_success_payment_status(payment_status: str) -> bool:
+    return (payment_status or "").lower() in SUCCESS_STATUSES
 
 
 def snapshot_question_ids(cur, user_id: str, resume_id: str, jd_id: str, question_set: int) -> list[str]:
@@ -131,18 +143,25 @@ def _upsert_payment(
     payment_status: str,
     metadata: dict,
 ) -> None:
+    is_success = _is_success_payment_status(payment_status)
     cur.execute(
         """
         INSERT INTO payments (
             user_id, checkout_intent_id, interview_id, amount, provider,
-            payment_status, transaction_id, metadata, paid_at
+            payment_status, transaction_id, metadata, paid_at, recorded_at
         )
-        VALUES (%s, %s, NULL, %s, 'dodo', %s, %s, %s::jsonb, now())
+        VALUES (%s, %s, NULL, %s, 'dodo', %s, %s, %s::jsonb,
+                CASE WHEN %s THEN now() ELSE NULL END, now())
         ON CONFLICT (transaction_id) DO UPDATE SET
             payment_status = EXCLUDED.payment_status,
             amount = COALESCE(EXCLUDED.amount, payments.amount),
             metadata = COALESCE(EXCLUDED.metadata, payments.metadata),
-            checkout_intent_id = COALESCE(payments.checkout_intent_id, EXCLUDED.checkout_intent_id)
+            checkout_intent_id = COALESCE(payments.checkout_intent_id, EXCLUDED.checkout_intent_id),
+            paid_at = CASE
+                WHEN EXCLUDED.payment_status IN ('succeeded', 'success', 'completed') THEN COALESCE(payments.paid_at, now())
+                ELSE NULL
+            END,
+            recorded_at = now()
         """,
         (
             user_id,
@@ -151,6 +170,7 @@ def _upsert_payment(
             payment_status,
             transaction_id,
             json.dumps(metadata),
+            is_success,
         ),
     )
 
@@ -165,6 +185,155 @@ def _mark_paid_needs_review(cur, intent_id: str, reason: str) -> None:
         (intent_id,),
     )
     logger.error("Checkout intent %s marked paid_needs_review: %s", intent_id, reason)
+
+
+def _expire_intent_if_stale_cur(cur, intent_id: str) -> bool:
+    cur.execute(
+        """
+        UPDATE checkout_intents
+        SET status = 'expired', failure_reason = 'abandoned'
+        WHERE id = %s
+          AND status = 'pending'
+          AND expires_at < now()
+        RETURNING id
+        """,
+        (intent_id,),
+    )
+    return cur.fetchone() is not None
+
+
+def expire_checkout_intent_if_stale(intent_id: str) -> bool:
+    def _work(cur):
+        return _expire_intent_if_stale_cur(cur, intent_id)
+
+    return run_transaction(_work)
+
+
+def expire_stale_checkout_intents(limit: int = 500) -> int:
+    def _work(cur):
+        cur.execute(
+            """
+            UPDATE checkout_intents
+            SET status = 'expired', failure_reason = 'abandoned'
+            WHERE id IN (
+                SELECT id FROM checkout_intents
+                WHERE status = 'pending' AND expires_at < now()
+                ORDER BY expires_at ASC
+                LIMIT %s
+            )
+            RETURNING id
+            """,
+            (limit,),
+        )
+        return len(cur.fetchall())
+
+    return run_transaction(_work)
+
+
+def mark_checkout_creation_failed(
+    intent_id: str,
+    *,
+    http_status: int | None = None,
+    error_kind: str = "dodo_checkout_api",
+) -> None:
+    error_metadata: dict[str, Any] = {"error_kind": error_kind}
+    if http_status is not None:
+        error_metadata["http_status"] = http_status
+
+    def _work(cur):
+        cur.execute(
+            """
+            UPDATE checkout_intents
+            SET status = 'checkout_creation_failed',
+                failure_reason = 'checkout_api_error',
+                error_metadata = %s::jsonb
+            WHERE id = %s AND status = 'pending'
+            """,
+            (json.dumps(error_metadata), intent_id),
+        )
+
+    run_transaction(_work)
+
+
+def _record_checkout_payment_failure_cur(
+    cur,
+    intent_id: str,
+    payment_payload: dict[str, Any],
+) -> bool:
+    """Record provider payment failure. Returns True if state changed, False if no-op."""
+    status = (payment_payload.get("status") or "").lower()
+    if status not in FAILURE_STATUSES:
+        return False
+
+    transaction_id = (payment_payload.get("payment_id") or "").strip()
+    metadata = payment_payload.get("metadata") or {}
+    amount_paise = payment_payload.get("amount_paise")
+    failure_reason = _failure_reason_from_status(status)
+
+    cur.execute(
+        "SELECT * FROM checkout_intents WHERE id = %s FOR UPDATE",
+        (intent_id,),
+    )
+    intent = cur.fetchone()
+    if not intent:
+        raise FulfillmentError(f"Checkout intent not found: {intent_id}")
+
+    if intent["status"] in TERMINAL_SUCCESS_STATUSES:
+        logger.warning(
+            "Ignoring failure webhook for intent %s in terminal success status %s",
+            intent_id,
+            intent["status"],
+        )
+        return False
+
+    if intent["status"] == "failed":
+        if transaction_id:
+            cur.execute(
+                "SELECT transaction_id FROM payments WHERE checkout_intent_id = %s LIMIT 1",
+                (intent_id,),
+            )
+            existing = cur.fetchone()
+            if existing and str(existing["transaction_id"]) == transaction_id:
+                return False
+        elif intent.get("failure_reason") == failure_reason:
+            return False
+
+    if intent["status"] not in {"pending", "expired", "failed"}:
+        logger.info(
+            "Skipping failure webhook for intent %s in status %s",
+            intent_id,
+            intent["status"],
+        )
+        return False
+
+    cur.execute(
+        """
+        UPDATE checkout_intents
+        SET status = 'failed', failure_reason = %s
+        WHERE id = %s
+        """,
+        (failure_reason, intent_id),
+    )
+
+    if transaction_id:
+        _upsert_payment(
+            cur,
+            user_id=str(intent["user_id"]),
+            checkout_intent_id=str(intent_id),
+            transaction_id=transaction_id,
+            amount_paise=amount_paise,
+            payment_status=status,
+            metadata=metadata if isinstance(metadata, dict) else {},
+        )
+
+    return True
+
+
+def record_checkout_payment_failure(intent_id: str, payment_payload: dict[str, Any]) -> bool:
+    def _work(cur):
+        return _record_checkout_payment_failure_cur(cur, intent_id, payment_payload)
+
+    return run_transaction(_work)
 
 
 def fulfill_checkout_intent(intent_id: str, payment_payload: dict[str, Any]) -> str | None:
@@ -191,10 +360,7 @@ def fulfill_checkout_intent(intent_id: str, payment_payload: dict[str, Any]) -> 
             return str(intent["interview_id"])
 
         if status in FAILURE_STATUSES:
-            cur.execute(
-                "UPDATE checkout_intents SET status = 'failed' WHERE id = %s AND status = 'pending'",
-                (intent_id,),
-            )
+            _record_checkout_payment_failure_cur(cur, intent_id, payment_payload)
             return None
 
         if status not in SUCCESS_STATUSES:
@@ -311,14 +477,11 @@ def fulfill_checkout_intent(intent_id: str, payment_payload: dict[str, Any]) -> 
     return run_transaction(_work)
 
 
-def mark_checkout_failed(intent_id: str) -> None:
-    def _work(cur):
-        cur.execute(
-            "UPDATE checkout_intents SET status = 'failed' WHERE id = %s AND status = 'pending'",
-            (intent_id,),
-        )
-
-    run_transaction(_work)
+def mark_checkout_failed(intent_id: str, payment_payload: dict[str, Any] | None = None) -> None:
+    """Backward-compatible wrapper; prefer record_checkout_payment_failure."""
+    if payment_payload is None:
+        payment_payload = {"status": "failed", "payment_id": "", "metadata": {}}
+    record_checkout_payment_failure(intent_id, payment_payload)
 
 
 def acquire_webhook_event(cur, event_id: str, event_type: str, payload: dict) -> str:
