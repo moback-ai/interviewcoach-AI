@@ -75,7 +75,11 @@ from common.interview_timer import (
     finalize_interview_time,
 )
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
-from common.transcribe_remote import transcribe_via_remote_service
+from common.payment_handlers import (
+    checkout_status_handler,
+    create_checkout_handler,
+    dodo_webhook_handler,
+)
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -4077,12 +4081,9 @@ def _build_dashboard_pairings(user_id):
 
 
 def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, question_set=None, status='success'):
+    """Deprecated: internal stub redirect. Kept for backward compatibility references."""
     base = require_env("DOMAIN").rstrip('/')
-    params = [
-        f"interview_id={interview_id}",
-        f"payment_id={payment_id}",
-        f"status={status}",
-    ]
+    params = [f"checkout_intent_id={payment_id}"]
     if resume_id:
         params.append(f"resume_id={resume_id}")
     if jd_id:
@@ -4176,58 +4177,85 @@ def resumes_api():
 @app.route('/api/payments', methods=['GET'])
 @verify_auth_token
 def get_payments():
-    rows = query_all('SELECT * FROM payments WHERE user_id=%s ORDER BY paid_at DESC', (request.user['id'],))
-    return jsonify({'success': True, 'data': [dict(row) for row in rows]})
-
-
-def _create_payment_impl():
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    data = request.get_json() or {}
+    if request.args.get('get_all') == 'true' or request.path.startswith('/functions/'):
+        pass  # same handler for legacy alias
     user_id = request.user['id']
-    interview_id = data.get('interview_id')
-    resume_id = data.get('resume_id')
-    jd_id = data.get('jd_id')
-    question_set = data.get('question_set')
-    retake_from = data.get('retake_from')
-    amount = data.get('amount', 49900)
-    payment_id = f"pay_{uuid.uuid4().hex[:12]}"
-
-    if interview_id:
-        execute(
-            """
-            UPDATE interviews
-            SET resume_id = COALESCE(%s, resume_id),
-                jd_id = COALESCE(%s, jd_id),
-                question_set = COALESCE(%s, question_set),
-                retake_from = COALESCE(%s, retake_from),
-                status = 'STARTED'
-            WHERE id = %s AND user_id = %s
-            """,
-            (resume_id, jd_id, question_set, retake_from, interview_id, user_id),
-        )
-
-    payment = execute(
+    rows = query_all(
         """
-        INSERT INTO payments (user_id, interview_id, amount, provider, payment_status, transaction_id)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING *
+        SELECT * FROM payments
+        WHERE user_id = %s
+        ORDER BY COALESCE(recorded_at, paid_at) DESC NULLS LAST
         """,
-        (user_id, interview_id, amount, 'internal', 'success', payment_id),
+        (user_id,),
     )
-
+    attempts = query_all(
+        """
+        SELECT
+            ci.id AS checkout_intent_id,
+            ci.status,
+            ci.amount_paise AS amount,
+            ci.created_at,
+            ci.failure_reason
+        FROM checkout_intents ci
+        WHERE ci.user_id = %s
+          AND ci.status IN ('failed', 'expired', 'checkout_creation_failed')
+          AND NOT EXISTS (
+              SELECT 1 FROM payments p WHERE p.checkout_intent_id = ci.id
+          )
+        ORDER BY ci.created_at DESC
+        """,
+        (user_id,),
+    )
+    payment_data = [dict(row) for row in rows]
+    attempt_data = [dict(row) for row in attempts]
     return jsonify({
         'success': True,
-        'payment_id': payment_id,
-        'payment_url': _payment_redirect_url(interview_id, payment_id, resume_id, jd_id, question_set, 'success'),
-        'data': dict(payment) if payment else None,
+        'data': payment_data,
+        'attempts': attempt_data,
+        'count': len(payment_data) + len(attempt_data),
     })
+
+
+@app.route('/api/internal/checkout-intents/expire-stale', methods=['POST'])
+def expire_stale_checkout_intents_internal():
+    """Expire abandoned pending checkout intents (internal maintenance token required)."""
+    from common.payment_fulfillment import expire_stale_checkout_intents
+
+    expected = (optional_env("CHECKOUT_MAINTENANCE_TOKEN", "") or "").strip()
+    if not expected or request.headers.get("X-Internal-Token") != expected:
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    limit = request.args.get("limit", 500, type=int)
+    limit = max(1, min(limit, 5000))
+    expired_count = expire_stale_checkout_intents(limit=limit)
+    return jsonify({"success": True, "expired_count": expired_count})
+
+
+@app.route('/api/checkout', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def create_checkout():
+    return create_checkout_handler()
+
+
+@app.route('/api/checkout/<intent_id>/status', methods=['GET'])
+@verify_auth_token
+def checkout_status(intent_id):
+    return checkout_status_handler(intent_id)
+
+
+@app.route('/api/webhooks/dodo', methods=['POST', 'OPTIONS'])
+def dodo_webhook():
+    return dodo_webhook_handler()
+
+
+def _legacy_checkout_redirect():
+    """Backward-compatible alias for old create-payment calls."""
+    return create_checkout_handler()
 
 
 @app.route('/api/create-payment', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def create_payment():
-    return _create_payment_impl()
+    return _legacy_checkout_redirect()
 
 
 @app.route('/api/check-payment-status', methods=['GET'])
@@ -4452,7 +4480,7 @@ def legacy_payments():
 @app.route('/api/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def legacy_create_payment():
-    return _create_payment_impl()
+    return _legacy_checkout_redirect()
 
 
 @app.route('/functions/v1/interview-feedback', methods=['GET'])
