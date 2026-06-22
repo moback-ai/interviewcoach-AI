@@ -173,7 +173,7 @@ def create_checkout_handler():
     except DodoClientError as exc:
         execute("DELETE FROM checkout_intents WHERE id = %s AND status = 'pending'", (intent_id,))
         logger.exception("Dodo checkout session failed for intent %s", intent_id)
-        return jsonify({"success": False, "message": str(exc)}), 502
+        return jsonify({"success": False, "message": "Unable to create checkout session"}), 502
 
     if session.get("session_id"):
         execute(
@@ -236,7 +236,7 @@ def dodo_webhook_handler():
         event = parse_webhook_event(raw_body)
     except WebhookVerificationError as exc:
         logger.warning("Webhook verification failed: %s", exc)
-        return jsonify({"error": str(exc)}), 401
+        return jsonify({"error": "invalid webhook signature"}), 401
 
     payment_payload = extract_payment_payload(event)
     event_id = payment_payload.get("event_id") or ""
