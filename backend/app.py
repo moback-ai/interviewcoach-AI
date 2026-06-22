@@ -4179,8 +4179,55 @@ def resumes_api():
 def get_payments():
     if request.args.get('get_all') == 'true' or request.path.startswith('/functions/'):
         pass  # same handler for legacy alias
-    rows = query_all('SELECT * FROM payments WHERE user_id=%s ORDER BY paid_at DESC', (request.user['id'],))
-    return jsonify({'success': True, 'data': [dict(row) for row in rows], 'count': len(rows)})
+    user_id = request.user['id']
+    rows = query_all(
+        """
+        SELECT * FROM payments
+        WHERE user_id = %s
+        ORDER BY COALESCE(recorded_at, paid_at) DESC NULLS LAST
+        """,
+        (user_id,),
+    )
+    attempts = query_all(
+        """
+        SELECT
+            ci.id AS checkout_intent_id,
+            ci.status,
+            ci.amount_paise AS amount,
+            ci.created_at,
+            ci.failure_reason
+        FROM checkout_intents ci
+        WHERE ci.user_id = %s
+          AND ci.status IN ('failed', 'expired', 'checkout_creation_failed')
+          AND NOT EXISTS (
+              SELECT 1 FROM payments p WHERE p.checkout_intent_id = ci.id
+          )
+        ORDER BY ci.created_at DESC
+        """,
+        (user_id,),
+    )
+    payment_data = [dict(row) for row in rows]
+    attempt_data = [dict(row) for row in attempts]
+    return jsonify({
+        'success': True,
+        'data': payment_data,
+        'attempts': attempt_data,
+        'count': len(payment_data) + len(attempt_data),
+    })
+
+
+@app.route('/api/internal/checkout-intents/expire-stale', methods=['POST'])
+def expire_stale_checkout_intents_internal():
+    """Expire abandoned pending checkout intents (internal maintenance token required)."""
+    from common.payment_fulfillment import expire_stale_checkout_intents
+
+    expected = (optional_env("CHECKOUT_MAINTENANCE_TOKEN", "") or "").strip()
+    if not expected or request.headers.get("X-Internal-Token") != expected:
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    limit = request.args.get("limit", 500, type=int)
+    limit = max(1, min(limit, 5000))
+    expired_count = expire_stale_checkout_intents(limit=limit)
+    return jsonify({"success": True, "expired_count": expired_count})
 
 
 @app.route('/api/checkout', methods=['POST', 'OPTIONS'])

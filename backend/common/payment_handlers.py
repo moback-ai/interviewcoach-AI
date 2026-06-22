@@ -28,8 +28,10 @@ from common.payment_fulfillment import (
     PaidNeedsReview,
     acquire_webhook_event,
     complete_webhook_event,
+    expire_checkout_intent_if_stale,
     fulfill_checkout_intent,
-    mark_checkout_failed,
+    mark_checkout_creation_failed,
+    record_checkout_payment_failure,
     resolve_intent_id_from_payload,
     snapshot_question_ids,
 )
@@ -171,8 +173,20 @@ def create_checkout_handler():
             return_url=_return_url(intent_id),
         )
     except DodoClientError as exc:
-        execute("DELETE FROM checkout_intents WHERE id = %s AND status = 'pending'", (intent_id,))
-        logger.exception("Dodo checkout session failed for intent %s", intent_id)
+        mark_checkout_creation_failed(
+            intent_id,
+            http_status=exc.status_code,
+            error_kind="dodo_checkout_api",
+        )
+        if exc.response_body:
+            logger.error(
+                "Dodo checkout session failed for intent %s (status=%s): %s",
+                intent_id,
+                exc.status_code,
+                exc.response_body[:500],
+            )
+        else:
+            logger.exception("Dodo checkout session failed for intent %s", intent_id)
         return jsonify({"success": False, "message": "Unable to create checkout session"}), 502
 
     if session.get("session_id"):
@@ -193,6 +207,8 @@ def checkout_status_handler(intent_id: str):
     err = _validate_uuid(intent_id, "checkout_intent_id")
     if err:
         return jsonify({"success": False, "message": err}), 400
+
+    expire_checkout_intent_if_stale(intent_id)
 
     intent = query_one(
         "SELECT * FROM checkout_intents WHERE id = %s AND user_id = %s",
@@ -271,7 +287,7 @@ def dodo_webhook_handler():
     try:
         status = (payment_payload.get("status") or "").lower()
         if status in {"failed", "cancelled", "canceled"}:
-            mark_checkout_failed(intent_id)
+            record_checkout_payment_failure(intent_id, payment_payload)
             complete_webhook_event(event_id, True)
             return jsonify({"success": True, "message": "payment failure recorded"}), 200
 

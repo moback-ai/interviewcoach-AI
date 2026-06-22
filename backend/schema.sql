@@ -135,13 +135,20 @@ CREATE TABLE checkout_intents (
     interview_id UUID REFERENCES interviews(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     fulfilled_at TIMESTAMPTZ,
+    failure_reason TEXT,
+    error_metadata JSONB,
     CONSTRAINT checkout_intents_status_check CHECK (
-        status IN ('pending', 'failed', 'fulfilled', 'paid_needs_review')
+        status IN (
+            'pending', 'failed', 'fulfilled', 'paid_needs_review',
+            'expired', 'checkout_creation_failed'
+        )
     )
 );
 
 CREATE INDEX idx_checkout_intents_user_created ON checkout_intents(user_id, created_at DESC);
 CREATE INDEX idx_checkout_intents_status ON checkout_intents(status);
+CREATE INDEX idx_checkout_intents_pending_expires
+    ON checkout_intents(expires_at) WHERE status = 'pending';
 CREATE UNIQUE INDEX idx_checkout_intents_dodo_session
     ON checkout_intents(dodo_session_id) WHERE dodo_session_id IS NOT NULL;
 
@@ -172,7 +179,8 @@ CREATE TABLE payments (
     payment_status TEXT NOT NULL DEFAULT 'pending',
     transaction_id TEXT NOT NULL,
     metadata JSONB,
-    paid_at TIMESTAMPTZ DEFAULT now()
+    paid_at TIMESTAMPTZ,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX idx_payments_transaction_id ON payments(transaction_id);
