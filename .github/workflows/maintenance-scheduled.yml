@@ -7,7 +7,6 @@ on:
       - '.github/actions/setup-deploy-ssh/**'
   schedule:
     - cron: '0 2 * * *'    # Daily — prune GitHub Actions runs
-    - cron: '30 3 * * *'   # Daily — expire abandoned checkout intents
     - cron: '30 4 * * 0'   # Sunday — log cleanup
     - cron: '0 4 * * 0'    # Sunday — host artifact cleanup
     - cron: '0 3 1 * *'    # 1st of month — stale branches
@@ -24,7 +23,6 @@ on:
           - branch-cleanup
           - sync-main
           - actions-cleanup
-          - checkout-expiry
         default: all
       dry_run:
         description: Host cleanup dry run (no deletes)
@@ -95,33 +93,6 @@ jobs:
           echo '```json' >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/log-maintenance.json" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-
-  checkout-intents-expiry:
-    name: Checkout · expire stale intents
-    if: >-
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.task == 'all' || github.event.inputs.task == 'checkout-expiry'))
-      || github.event.schedule == '30 3 * * *'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/setup-deploy-ssh
-        env:
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-
-      - name: Expire stale checkout intents on API host
-        env:
-          CHECKOUT_MAINTENANCE_TOKEN: ${{ secrets.CHECKOUT_MAINTENANCE_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CHECKOUT_MAINTENANCE_TOKEN:-}" ]; then
-            echo "CHECKOUT_MAINTENANCE_TOKEN not set; skipping checkout expiry"
-            exit 0
-          fi
-          ssh $SSH_OPTS "${{ secrets.EC2_USER }}@${{ secrets.BACKEND_HOST }}" \
-            "curl -fsS -X POST 'http://127.0.0.1:5000/api/internal/checkout-intents/expire-stale' \
-              -H 'X-Internal-Token: ${CHECKOUT_MAINTENANCE_TOKEN}' \
-              -H 'Content-Type: application/json'"
 
   host-cleanup:
     name: Hosts · prune old releases
