@@ -72,92 +72,66 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
     setRetakeModalOpen(true);
   };
 
-  const handleRetakeConfirm = async () => {
+  const startCheckout = async ({ retakeFrom } = {}) => {
+    setLoading(true);
     try {
-      setLoading(true);
-      
-      // Close modal first
-      setRetakeModalOpen(false);
-      
-      // Get the original interview ID for retake context
-      const originalInterviewId = questionSet.interviews[0]?.id;
-      if (!originalInterviewId) {
-        throw new Error('No original interview found for retake');
-      }
-      
-      // ✅ STEP 1: Create blank interview record first
       const session = await getSession();
       if (!session?.access_token) {
         throw new Error('No active session');
       }
 
-      // Create blank interview with PENDING status
-      const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          user_id: session.user.id,
-          status: 'PENDING',
-          scheduled_at: new Date().toISOString()
-          // Don't store resume_id, jd_id, question_set, retake_from here yet
-        })
-      });
-
-      if (!blankInterviewResponse.ok) {
-        throw new Error('Failed to create interview record');
+      const body = {
+        resume_id: pairing.resume_id,
+        jd_id: pairing.jd_id,
+        question_set: questionSet.questionSetNumber,
+      };
+      if (retakeFrom) {
+        body.retake_from = retakeFrom;
       }
 
-      const blankInterviewResult = await blankInterviewResponse.json();
-      const blankInterviewId = blankInterviewResult.data.id;
-
-      console.log('✅ Blank interview created:', blankInterviewId);
-
-      // ✅ STEP 2: Create payment with interview_id in metadata
-      const response = await fetch(`${getBackendOrigin()}/functions/v1/create-payment`, {
+      const response = await fetch(`${getBackendOrigin()}/api/checkout`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          resume_id: pairing.resume_id,
-          jd_id: pairing.jd_id,
-          question_set: questionSet.questionSetNumber,
-          retake_from: originalInterviewId,
-          interview_id: blankInterviewId // ✅ NOW INCLUDED!
-        })
+        body: JSON.stringify(body),
       });
-      
-      if (!response.ok) {
-        // ✅ If payment creation fails, delete the blank interview
-        await fetch(`${getBackendOrigin()}/functions/v1/interviews/${blankInterviewId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        });
-        throw new Error('Failed to create payment');
-      }
-      
+
       const result = await response.json();
-      console.log('Payment created:', result);
-      
-      // ✅ STEP 3: Redirect to Dodo payment page
-      window.location.href = result.payment_url;
-      
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || 'Failed to start checkout');
+      }
+
+      const checkoutUrl = result.checkout_url || result.payment_url;
+      if (!checkoutUrl) {
+        throw new Error('Checkout URL missing from server response');
+      }
+
+      window.location.href = checkoutUrl;
     } catch (error) {
-      console.error('Error initiating retake:', error);
+      console.error('Error starting checkout:', error);
       setNoticeModal({
         isOpen: true,
-        title: 'Could not start retake',
+        title: retakeFrom ? 'Could not start retake' : 'Could not schedule interview',
         message: error.message,
       });
-    } finally {
       setLoading(false);
     }
+  };
+
+  const handleRetakeConfirm = async () => {
+    setRetakeModalOpen(false);
+    const originalInterviewId = questionSet.interviews[0]?.id;
+    if (!originalInterviewId) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Retake unavailable',
+        message: 'No original interview found for retake',
+      });
+      return;
+    }
+    await startCheckout({ retakeFrom: originalInterviewId });
   };
 
   const hasCompletedInterviews = questionSet.interviews.some(interview => 
@@ -190,81 +164,8 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
             {/* Schedule Interview Button - Show when no interviews exist */}
             {questionSet.total_attempts === 0 && (
               <button
-                onClick={async () => {
-                  try {
-                    // ✅ STEP 1: Create blank interview record first
-                    const session = await getSession();
-                    if (!session?.access_token) {
-                      throw new Error('No active session');
-                    }
-
-                    // Create blank interview with PENDING status
-                    const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
-                      method: 'POST',
-                      headers: {
-                        'Authorization': `Bearer ${session.access_token}`,
-                        'Content-Type': 'application/json'
-                      },
-                      body: JSON.stringify({
-                        // ✅ Only store what we need to identify the interview
-                        user_id: session.user.id, // For security/ownership
-                        status: 'PENDING', // Status to track payment state
-                        scheduled_at: new Date().toISOString() // Timestamp
-                        // ❌ Don't store resume_id, jd_id, question_set, retake_from here
-                      })
-                    });
-
-                    if (!blankInterviewResponse.ok) {
-                      throw new Error('Failed to create interview record');
-                    }
-
-                    const blankInterviewResult = await blankInterviewResponse.json();
-                    const blankInterviewId = blankInterviewResult.data.id;
-
-                    console.log('✅ Blank interview created:', blankInterviewId);
-
-                    // ✅ STEP 2: Create payment with interview_id in metadata
-                    const response = await fetch(`${getBackendOrigin()}/functions/v1/create-payment`, {
-                      method: 'POST',
-                      headers: {
-                        'Authorization': `Bearer ${session.access_token}`,
-                        'Content-Type': 'application/json'
-                      },
-                      body: JSON.stringify({
-                        resume_id: pairing.resume_id,
-                        jd_id: pairing.jd_id,
-                        question_set: questionSet.questionSetNumber,
-                        interview_id: blankInterviewId // ✅ Pass the blank interview ID
-                      })
-                    });
-                    
-                    if (!response.ok) {
-                      // ✅ If payment creation fails, delete the blank interview
-                      await fetch(`${getBackendOrigin()}/functions/v1/interviews/${blankInterviewId}`, {
-                        method: 'DELETE',
-                        headers: {
-                          'Authorization': `Bearer ${session.access_token}`
-                        }
-                      });
-                      throw new Error('Failed to create payment');
-                    }
-                    
-                    const result = await response.json();
-                    console.log('Payment created:', result);
-                    
-                    // ✅ STEP 3: Redirect to Dodo payment page
-                    window.location.href = result.payment_url;
-                    
-                  } catch (error) {
-                    console.error('Error creating payment:', error);
-                    setNoticeModal({
-                      isOpen: true,
-                      title: 'Could not schedule interview',
-                      message: error.message,
-                    });
-                  }
-                }}
-                disabled={isDisabled}
+                onClick={() => startCheckout()}
+                disabled={isDisabled || loading}
                 className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center shadow-md hover:shadow-lg transform hover:scale-105 ${
                   isDisabled
                     ? 'bg-gray-400 cursor-not-allowed opacity-50'
