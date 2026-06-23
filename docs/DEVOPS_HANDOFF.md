@@ -12,7 +12,7 @@
 ### Infrastructure
 
 - Split setup: Frontend | API | AI (Ollama) | RDS
-- Servers run **10:00–20:00 IST** only (off outside those hours)
+- Servers run **Mon–Fri 10:00–19:30 IST** only (off weekends and outside those hours)
 
 ### Application
 
@@ -20,7 +20,7 @@
 - Live text streaming during AI replies in the interview UI
 - Queue when interview AI is busy
 - Voice transcription on the **AI server** (internal, not public)
-- Deploy checks: lint, build, tests, merge conflicts before production
+- Deploy checks on PR: lint, pytest, gitleaks (quick check); full Security scan weekly or manual
 
 ### Related docs
 
@@ -87,50 +87,54 @@
 
 ## Code checks — what runs, pass vs fail
 
-### On every PR (workflow: **Security**)
+### On every PR (workflow: **Security · PR quick check**)
 
-Runs when you open/update a PR to `develop` or `main` (only changed areas, unless full scheduled run).
+Runs when you open/update a PR to `develop` or `main` (changed areas only).
 
 | Check | Pass | Fail (PR shows red) |
 |-------|------|---------------------|
-| Frontend ESLint | No blocking errors (up to **200 warnings** allowed) | Lint errors over limit |
+| Frontend ESLint | No blocking errors on changed files | Lint errors |
+| Backend pytest | `backend/tests/` pass (if backend changed) | Any test failure |
+| Gitleaks | No secrets in changed commits | Secret detected |
+
+**Fix:** open the failed PR → **Checks** tab → read the red job log → fix code → push again.
+
+---
+
+### Full Security scan (weekly Mon or manual)
+
+| Check | Pass | Fail |
+|-------|------|------|
 | Frontend production build | `npm run build` succeeds | Build error |
-| Login bundle guard | Password field not broken by bad JS chunks | `verify-frontend-login-bundle.sh` fails |
+| Login bundle guard | Password field not broken by bad JS chunks | Bundle script fail |
 | Playwright smoke | `/login` and `/forgot-password` e2e | E2E timeout or assertion fail |
-| Backend pytest | `backend/tests/` all pass | Any test failure |
 | npm audit | No **high+** vulnerabilities | High/critical npm issues |
 | pip-audit | Production deps clean | Known vulns in requirements |
 | Bandit | Python security scan (backend) | High-severity findings |
 | Semgrep | `p/ci` rules | Rule violations (`--error`) |
 | Trivy | Filesystem scan | **CRITICAL** or **HIGH** CVEs |
 | CodeQL | JS/TS + Python SAST | GitHub security alerts (advisory) |
-| Gitleaks | No secrets in git history | Secret detected in commit |
-| Governance scripts | Workflow YAML + shell scripts valid | Syntax/check script fail |
 
-**Fix:** open the failed PR → **Checks** tab → read the red job log → fix code → push again.
+Run manually: **Actions → Security → Run workflow**.
 
 ---
 
-### Before production deploy (workflow: **Quality gate**)
+### On merge to develop (workflow: **Deploy · Production**)
 
-Runs automatically before **Deploy · Production**. **Deploy is blocked** if any step below fails.
+**No** separate quality gate or Security run on push. Merge triggers **one** Deploy · Production run.
 
-| Check | Pass | Fail (deploy stopped) |
-|-------|------|------------------------|
-| Merge conflicts | No `<<<<<<<` vs `develop` | Conflicts with `develop` |
-| Frontend ESLint | `npm run lint` clean | Lint errors |
-| Frontend build | Production build OK | Build error |
-| Login bundle guard | Login page bundle OK | Bundle script fail |
-| Backend pytest | All unit tests pass | Test failure |
-
-**Pass message in CI:** `Quality gate passed` — then production deploy can continue (after admin environment approval).
+| Step | What happens |
+|------|----------------|
+| Resolve context | Validates PR merge (skips direct push to `develop`) |
+| Authorize | Confirms admin-approved merge |
+| Approve production | Admin approves GitHub `production` environment |
+| Deploy | SSH to EC2 + RDS migrations; rollback on failure |
 
 **Common deploy failures (not code):**
 
 | Issue | What devs see |
 |-------|----------------|
-| Direct push to `develop` (no PR merge) | Auto-deploy skipped |
-| Quality gate red | Fix code/conflicts, merge again or manual redeploy |
+| Direct push to `develop` (no PR merge) | Deploy skipped |
 | Production environment not approved | Deploy job waits/fails until admin approves in Actions |
 
 ---
@@ -156,7 +160,7 @@ python -m pytest backend/tests/ -q
 | Symptom | Likely cause | Where to look |
 |---------|----------------|---------------|
 | `503` / “AI is busy” on interview | Too many parallel interviews | Admin logs → `api-failures` |
-| Connection / timeout errors | Before 10:00 or after 20:00 IST | EC2/RDS stopped by daily schedule |
+| Connection / timeout errors | Before 10:00 or after 19:30 IST Mon–Fri, or anytime Sat–Sun | EC2/RDS stopped by daily schedule |
 | Interview slow / timeout message | Ollama slow or overloaded | `server-ai`, `backend-error` |
 | Voice not transcribing | Whisper sidecar down on AI | `server-ai`, `pm2 logs transcribe` |
 | Login page blank / no password field | Bad frontend chunk split | Re-run login bundle script locally |

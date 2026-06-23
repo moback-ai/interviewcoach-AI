@@ -24,7 +24,7 @@ See [scripts/aws-plan-b/README.md](../scripts/aws-plan-b/README.md) (~$430–500
 | AI | c6i.2xlarge | Ollama only (`llama3.2:3b`) |
 | RDS | db.t3.medium | PostgreSQL |
 
-**Daily schedule** (10:00–20:00 IST stop/start) in `scripts/aws-plan-b/setup-daily-schedule.sh` saves cost outside business hours.
+**Daily schedule** (Mon–Fri 10:00–19:30 IST stop/start; weekends off) in `scripts/aws-plan-b/setup-daily-schedule.sh` saves cost outside business hours.
 
 ---
 
@@ -51,7 +51,7 @@ To approach 100 parallel interviews you would need **multiple AI instances + a j
 | Streaming | `/api/generate-response-stream` — SSE `token` events while model writes |
 | Capacity | `INTERVIEW_MAX_CONCURRENT=12`, `INTERVIEW_QUEUE_WAIT_SECONDS=90` |
 | Whisper | `TRANSCRIBE_SERVICE_URL` → AI sidecar (`setup-transcribe-on-ai.sh`) |
-| Hours | EC2/RDS daily schedule 10:00–20:00 IST (`setup-daily-schedule.sh`) |
+| Hours | EC2/RDS Mon–Fri 10:00–19:30 IST (`setup-daily-schedule.sh`); weekends off |
 | Frontend | Lazy routes, lazy syntax highlighter, prod strips `console` |
 
 ### If you split API from Ollama (Plan B)
