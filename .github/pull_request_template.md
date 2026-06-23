@@ -6,10 +6,9 @@
 
 - [ ] Target branch is `develop` (feature PR) or `main` (release PR from `develop` only)
 - [ ] Tested locally
-- [ ] Security workflow green (if code changed)
 
 ## Deploy
 
-**Feature PRs:** merge to `develop` → deploy runs automatically (admin approves production in Actions).
+**Feature PRs:** merge to `develop` → **Deploy · Production** (Veracode scan, then deploy; admin approves production).
 
 **Release PR (`develop` → `main`):** one PR only; see [docs/DEPLOY.md](../docs/DEPLOY.md).

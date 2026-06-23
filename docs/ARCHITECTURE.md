@@ -207,23 +207,19 @@ EC2 and RDS run **Mon–Fri 10:00–19:30 IST** only (weekends off). EventBridge
 PR (develop/feature → develop)
     │
     ▼
-Security · PR quick check (lint / pytest / gitleaks on changed files)
+Merge to develop
     │
     ▼
-Admin-approved merge to develop
-    │
-    ▼
-Deploy · Production (single workflow run — no separate dispatcher)
+Deploy · Production
     │
     ├─ Resolve context + authorize merge
     ├─ Admin approves production environment
+    ├─ Veracode scan (policy upload)
     │
     ├── Frontend: SCP dist + nginx reload
     ├── API: SCP backend + pm2 restart gunicorn
     ├── AI: ollama pull + pm2 transcribe
     └── RDS: psql migrations (if database/** changed)
-
-Weekly (Mon) or manual: full Security scan (CodeQL, Trivy, Semgrep, e2e, audits).
 ```
 
 Production deploys from **`develop` only**. Branch **`main`** is never deployed.
@@ -501,7 +497,7 @@ users ──┬── resumes
 | Admin logs | `ADMIN_LOG_VIEWER_EMAILS` / `USERNAMES` allowlist |
 | Internal STT | Optional `X-Internal-Token` on transcribe sidecar |
 | Rate limiting | In-memory on API (`rate_limit.py`) |
-| CI security | Bandit, Semgrep, Trivy, CodeQL, Gitleaks |
+| CI security | Veracode on deploy (requires API secrets) |
 
 ### 3.14 Observability
 
