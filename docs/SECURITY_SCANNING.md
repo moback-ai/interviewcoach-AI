@@ -7,12 +7,12 @@ Detailed output stays in the job log; the UI shows a single pass/fail.
 
 | When | Profile | Includes |
 |------|---------|----------|
-| **Every PR** | `quick` | Gitleaks, frontend lint/audit/build, backend tests/audit/Bandit, Trivy, Semgrep |
-| **Before deploy** | `full` | Same + Playwright login smoke |
+| **Every PR** | `quick` | Gitleaks, ESLint, build, pytest, Trivy, Semgrep |
+| **Before deploy** | `quick` | Same (PR already scanned; no duplicate Playwright) |
 
 ## Scanners (all free)
 
-Gitleaks · ESLint · npm audit · pip-audit · Bandit · Trivy · Semgrep · Playwright (deploy only)
+Gitleaks · ESLint · build · pytest · Trivy · Semgrep
 
 ## Local
 

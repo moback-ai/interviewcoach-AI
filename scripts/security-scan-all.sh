@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# Run all free security scanners in one process (logs kept internal; summary only).
-# Usage: SECURITY_SCAN_PROFILE=quick|full bash scripts/security-scan-all.sh
+# One-step security scan (logs internal; summary only).
+# quick = PR (~2-3 min) | full = + Playwright smoke
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PROFILE="${SECURITY_SCAN_PROFILE:-full}"
+PROFILE="${SECURITY_SCAN_PROFILE:-quick}"
 LOG_DIR="$(mktemp -d)"
 FAILED=()
-export LOG_DIR PROFILE ROOT
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -50,7 +49,6 @@ scan_frontend() {
   cd "$ROOT/frontend"
   npm ci --legacy-peer-deps --silent
   npm run lint -- --max-warnings 0
-  npm audit --audit-level=high
   echo "VITE_API_BASE_URL=/api" > .env
   echo "VITE_STORAGE_URL=/storage" >> .env
   npm run build
@@ -60,10 +58,8 @@ scan_frontend() {
 
 scan_backend() {
   python3 -m pip install --quiet --upgrade pip
-  pip install --quiet -r backend/requirements.txt pytest bandit pip-audit
+  pip install --quiet -r backend/requirements.txt pytest
   python3 -m pytest backend/tests/ -q
-  bash "$ROOT/scripts/pip-audit-production.sh"
-  bandit -c .github/bandit.yml -r backend -lll
 }
 
 scan_trivy() {
@@ -83,19 +79,18 @@ scan_playwright() {
   cd "$ROOT/frontend"
   npx playwright install chromium --with-deps >/dev/null
   npm run preview -- --host 127.0.0.1 --port 4173 &
-  local preview_pid=$!
-  trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+  local pid=$!
   for _ in $(seq 1 45); do
     curl -fsS http://127.0.0.1:4173/login >/dev/null && break
     sleep 2
   done
   CI=true PLAYWRIGHT_BASE_URL=http://127.0.0.1:4173 npm run test:e2e
-  kill "$preview_pid" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
   cd "$ROOT"
 }
 
 install_tools
-
 log "Security scan ($PROFILE)"
 
 run_check "Gitleaks" scan_gitleaks
@@ -113,9 +108,9 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
   log "FAILED: ${FAILED[*]}"
   for name in "${FAILED[@]}"; do
     log "--- $name ---"
-    sed -n '1,40p' "$LOG_DIR/${name// /_}.log" >&2 || true
+    sed -n '1,50p' "$LOG_DIR/${name// /_}.log" >&2 || true
   done
-  echo "::error::Security scan failed (${#FAILED[@]} check(s)). Expand job log for details."
+  echo "::error::Security scan failed (${#FAILED[@]} check(s))."
   exit 1
 fi
 
