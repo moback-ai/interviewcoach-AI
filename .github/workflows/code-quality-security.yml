@@ -1,7 +1,7 @@
 name: Security
 
-# PR: minimal quick checks only (lint / pytest / secrets).
-# Full scans (CodeQL, Trivy, Semgrep, e2e, audits): weekly cron or manual dispatch.
+# PR: minimal quick checks (lint / pytest / gitleaks / actionlint on workflow edits).
+# Full scans (CodeQL, Trivy, OSV-Scanner, Semgrep, e2e, audits): weekly cron or manual dispatch.
 # No scan on push to develop — merge triggers Deploy · Production directly (one run).
 
 on:
@@ -40,6 +40,9 @@ jobs:
               - 'frontend/**'
             backend:
               - 'backend/**'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actions/**'
 
       - name: Setup Node
         if: steps.changes.outputs.frontend == 'true'
@@ -71,6 +74,10 @@ jobs:
           pip install -r backend/requirements.txt pytest
           python -m pytest backend/tests/ -q
 
+      - name: Lint GitHub Actions workflows
+        if: steps.changes.outputs.workflows == 'true'
+        uses: rhysd/actionlint@v1.7.8
+
       - name: Install Gitleaks CLI
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz \
@@ -93,6 +100,9 @@ jobs:
           bash -n scripts/log-maintenance.sh
           bash -n scripts/cleanup-host-artifacts.sh
           bash -n scripts/verify-frontend-login-bundle.sh
+
+      - name: Lint GitHub Actions workflows
+        uses: rhysd/actionlint@v1.7.8
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -257,3 +267,20 @@ jobs:
 
       - name: Gitleaks detect
         run: gitleaks detect --source . --config .gitleaks.toml --verbose
+
+  osv-scanner:
+    name: OSV-Scanner (deps)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@v2
+        with:
+          scan-args: |-
+            --lockfile=frontend/package-lock.json
+            --recursive=backend
+            --skip-git
+            --skip-dirs=backend/Piper,frontend/node_modules,frontend/dist,.git
