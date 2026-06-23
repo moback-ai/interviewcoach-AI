@@ -122,6 +122,16 @@ def create_checkout_handler():
     if not _verify_resume_jd_owned(user_id, resume_id, jd_id):
         return jsonify({"success": False, "message": "Resume or job description not found"}), 404
 
+    from common.interview_start import interview_quota
+
+    quota = interview_quota(user_id)
+    if not quota["payment_required"]:
+        return jsonify({
+            "success": False,
+            "message": "Free interview available — use /api/interviews/start instead of checkout.",
+            "data": quota,
+        }), 400
+
     amount_paise = checkout_amount_paise()
     expiry_minutes = checkout_expiry_minutes()
     intent_id = str(uuid.uuid4())

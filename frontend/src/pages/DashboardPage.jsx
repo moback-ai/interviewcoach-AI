@@ -326,7 +326,6 @@ function DashboardPage() {
         resume_url: pairing.resumeUrl,
         job_title: pairing.jobTitle,
         job_description: pairing.jobDescription,
-        prefer_local: false,
         question_counts: {
           beginner: questionSettings.easy || 1,
           medium: questionSettings.medium || 1,
@@ -493,7 +492,7 @@ function DashboardPage() {
             </p>
           </div>
 
-          {/* Performance Graph - Only shows when user has 2+ completed interviews */}
+          {/* Performance Graph - Only shows when user has 3+ completed interviews with metrics */}
           {resumeJobPairings.length > 0 && (
             <div className="mb-6 sm:mb-8">
               <PerformanceGraph resumeJobPairings={resumeJobPairings} />
