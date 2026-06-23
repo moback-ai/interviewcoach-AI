@@ -11,7 +11,7 @@ Automated security checks run on **PRs** (quick) and **weekly / manual** (full).
 | **ESLint** | Frontend lint on changed files | `pr-quick` |
 | **pytest** | Backend unit tests (if backend changed) | `pr-quick` |
 | **Gitleaks** | Secrets committed to git | `pr-quick` |
-| **actionlint** | GitHub Actions workflow mistakes | `pr-quick` (if workflows changed) |
+| **actionlint** | GitHub Actions workflow syntax | `pr-quick` (if workflows changed) / `full-scan` |
 
 ### Weekly (Mon 06:00 UTC) or manual dispatch (full scan)
 
