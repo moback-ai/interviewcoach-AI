@@ -1,20 +1,11 @@
 # Security Policy
 
-## Supported versions
+## Reporting vulnerabilities
 
-| Branch    | Supported |
-|-----------|-----------|
-| `develop` | Yes       |
-| `main`    | Yes       |
-
-## Reporting a vulnerability
-
-Email security concerns to your team admin (do not open public issues for exploitable bugs).
+Email your team admin (no public issues for exploitable bugs).
 
 ## Automated scanning
 
-**Veracode only** — runs on every production deploy after `production` environment approval.
-
-Requires repository secrets: `VERACODE_API_ID`, `VERACODE_API_KEY`.
+One **Security scan** runs on every PR and before deploy (Gitleaks, audits, Bandit, Trivy, Semgrep, etc.).
 
 See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).

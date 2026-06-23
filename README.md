@@ -68,7 +68,7 @@ cd frontend && npm run test:e2e
 cd backend && python -m pytest tests/ -q
 ```
 
-Security scans run via **Veracode on deploy** only. See [SECURITY.md](SECURITY.md) and [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
+Security scans run as one **Security scan** step (PR + deploy). See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
 
 ## Security
 

@@ -108,13 +108,13 @@ systemctl is-active ollama
 ### Before merge
 
 - [ ] All release changes in **one PR** → `develop`
-- [ ] `VERACODE_API_ID` and `VERACODE_API_KEY` set in GitHub Actions secrets
+- [ ] **Security scan** green on the PR (one check)
 - [ ] **Admin Approve** on PR (@govardhanreddy66 or @KFKishore23) — required for auto-deploy
 
 ### Option A — Auto (normal)
 
 1. Merge approved PR into `develop`
-2. **Deploy · Production** → admin approves **`production`** → **Veracode scan** → deploy
+2. **Deploy · Production** → approve **production** → **Security scan** → deploy
 3. Admin approves **`production`** environment in GitHub
 4. Wait for green (~10–15 min); failed deploys roll back
 
