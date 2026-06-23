@@ -10,14 +10,11 @@ Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
 
 ## Release flow
 
-1. Open PR: `develop/<feature>` → **`develop`**
-2. **Merge** the PR
-3. **Deploy · Production** starts automatically
-4. Admin approves **`production`** environment
-5. **Veracode scan** runs, then deploy (~15–60 min for scan + deploy)
-6. Verify https://ugaanlabs.ai/api/health and /login
-
-**Veracode secrets required:** `VERACODE_API_ID`, `VERACODE_API_KEY` in GitHub Actions secrets.
+1. Open PR → **`develop`**
+2. Wait for **Security scan** (one check — all free scanners inside)
+3. **Merge**
+4. **Deploy · Production** → approve **production** → **Security scan** again → deploy
+5. Verify https://ugaanlabs.ai/api/health and /login
 
 ---
 

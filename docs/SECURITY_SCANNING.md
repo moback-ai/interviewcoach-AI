@@ -1,35 +1,25 @@
 # Security scanning
 
-Production deploys run **Veracode only** — no other CI security scanners.
+One **Security scan** step runs every free checker in the background (`scripts/security-scan-all.sh`).  
+Detailed output stays in the job log; the UI shows a single pass/fail.
 
-## Veracode on deploy
+## When it runs
 
-Every **Deploy · Production** run (after admin approves the `production` environment):
+| When | Profile | Includes |
+|------|---------|----------|
+| **Every PR** | `quick` | Gitleaks, frontend lint/audit/build, backend tests/audit/Bandit, Trivy, Semgrep |
+| **Before deploy** | `full` | Same + Playwright login smoke |
 
-1. Packages `frontend`, `backend`, and `scripts`
-2. Uploads to Veracode
-3. Starts a policy scan in sandbox `develop`
-4. Continues to build and deploy servers
+## Scanners (all free)
 
-### Setup (one time)
+Gitleaks · ESLint · npm audit · pip-audit · Bandit · Trivy · Semgrep · Playwright (deploy only)
 
-1. Veracode account with API credentials
-2. GitHub → **Settings → Secrets → Actions**:
-   - `VERACODE_API_ID`
-   - `VERACODE_API_KEY`
+## Local
 
-Deploy **fails** if these secrets are missing.
+```bash
+SECURITY_SCAN_PROFILE=quick bash scripts/security-scan-all.sh
+```
 
-### Results
+## Veracode
 
-- Upload status: GitHub Actions log for **Veracode scan**
-- Full report: [Veracode portal](https://analysiscenter.veracode.com/) (often 15–60 min after upload)
-
-## What was removed
-
-No automatic PR scans (Gitleaks, CodeQL, Trivy, Semgrep, npm/pip audit, etc.).  
-No separate **Security** workflow.
-
-## Reporting vulnerabilities
-
-See [SECURITY.md](../SECURITY.md).
+Paid only — not used. Optional later if your org buys a license.
