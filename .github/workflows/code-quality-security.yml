@@ -76,9 +76,11 @@ jobs:
 
       - name: Lint GitHub Actions workflows
         if: steps.changes.outputs.workflows == 'true'
-        uses: rhysd/actionlint@v1.7.8
-        with:
-          args: -shellcheck=false
+        run: |
+          curl -sSfL -o /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.8/actionlint_1.7.8_linux_amd64.tar.gz
+          tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
+          actionlint -shellcheck=false .github/workflows/*.yml
 
       - name: Install Gitleaks CLI
         run: |
@@ -104,9 +106,11 @@ jobs:
           bash -n scripts/verify-frontend-login-bundle.sh
 
       - name: Lint GitHub Actions workflows
-        uses: rhysd/actionlint@v1.7.8
-        with:
-          args: -shellcheck=false
+        run: |
+          curl -sSfL -o /tmp/actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.8/actionlint_1.7.8_linux_amd64.tar.gz
+          tar -xzf /tmp/actionlint.tar.gz -C /usr/local/bin actionlint
+          actionlint -shellcheck=false .github/workflows/*.yml
 
       - name: Setup Node
         uses: actions/setup-node@v6
