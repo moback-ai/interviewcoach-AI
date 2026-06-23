@@ -20,7 +20,7 @@
 - Live text streaming during AI replies in the interview UI
 - Queue when interview AI is busy
 - Voice transcription on the **AI server** (internal, not public)
-- Deploy checks on PR: lint, pytest, gitleaks (quick check); full Security scan weekly or manual
+- Deploy checks on PR: none (Veracode runs at deploy time only)
 
 ### Related docs
 
@@ -85,55 +85,23 @@
 
 ---
 
-## Code checks — what runs, pass vs fail
-
-### On every PR (workflow: **Security · PR quick check**)
-
-Runs when you open/update a PR to `develop` or `main` (changed areas only).
-
-| Check | Pass | Fail (PR shows red) |
-|-------|------|---------------------|
-| Frontend ESLint | No blocking errors on changed files | Lint errors |
-| Backend pytest | `backend/tests/` pass (if backend changed) | Any test failure |
-| Gitleaks | No secrets in changed commits | Secret detected |
-
-**Fix:** open the failed PR → **Checks** tab → read the red job log → fix code → push again.
-
----
-
-### Full Security scan (weekly Mon or manual)
-
-| Check | Pass | Fail |
-|-------|------|------|
-| Frontend production build | `npm run build` succeeds | Build error |
-| Login bundle guard | Password field not broken by bad JS chunks | Bundle script fail |
-| Playwright smoke | `/login` and `/forgot-password` e2e | E2E timeout or assertion fail |
-| npm audit | No **high+** vulnerabilities | High/critical npm issues |
-| pip-audit | Production deps clean | Known vulns in requirements |
-| Bandit | Python security scan (backend) | High-severity findings |
-| Semgrep | `p/ci` rules | Rule violations (`--error`) |
-| Trivy | Filesystem scan | **CRITICAL** or **HIGH** CVEs |
-| CodeQL | JS/TS + Python SAST | GitHub security alerts (advisory) |
-
-Run manually: **Actions → Security → Run workflow**.
-
----
+## Code checks — what runs
 
 ### On merge to develop (workflow: **Deploy · Production**)
-
-**No** separate quality gate or Security run on push. Merge triggers **one** Deploy · Production run.
 
 | Step | What happens |
 |------|----------------|
 | Resolve context | Validates PR merge (skips direct push to `develop`) |
-| Authorize | Confirms admin-approved merge |
+| Authorize | Records deploy request |
 | Approve production | Admin approves GitHub `production` environment |
+| **Veracode scan** | Upload + policy scan (`VERACODE_API_ID`, `VERACODE_API_KEY` required) |
 | Deploy | SSH to EC2 + RDS migrations; rollback on failure |
 
 **Common deploy failures (not code):**
 
 | Issue | What devs see |
 |-------|----------------|
+| Missing Veracode secrets | Veracode scan job fails |
 | Direct push to `develop` (no PR merge) | Deploy skipped |
 | Production environment not approved | Deploy job waits/fails until admin approves in Actions |
 

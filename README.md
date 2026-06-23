@@ -68,7 +68,7 @@ cd frontend && npm run test:e2e
 cd backend && python -m pytest tests/ -q
 ```
 
-Security quick check runs on every PR via the **Security** workflow. Full scan runs weekly or manually. See [SECURITY.md](SECURITY.md) and [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
+Security scans run via **Veracode on deploy** only. See [SECURITY.md](SECURITY.md) and [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
 
 ## Security
 
