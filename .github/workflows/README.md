@@ -1,19 +1,27 @@
 # Workflows
 
-Five workflows (not counting Dependabot). Fewer **runs**: feature branches only trigger **Security** on the PR; deploy runs after a **merged PR** to `develop` or manual dispatch.
+| Workflow | When | Runs |
+|----------|------|------|
+| **Security** | PR only (quick check) | Lint / pytest / Gitleaks on changed files |
+| **Security** | Weekly Mon or manual | Full CodeQL, Trivy, Semgrep, e2e |
+| **Deploy · Production** | **Merge PR → develop** | **One run**: approve production → deploy |
+| **Deploy · Production** | Manual dispatch | Same single workflow |
+| **Maintenance · Scheduled** | Cron | Log cleanup, etc. |
 
-| Workflow | When it runs | What you do |
-|----------|----------------|-------------|
-| **Security** | PR to `develop` / `main`; push to `develop` after merge; weekly cron | Nothing — automatic |
-| **Deploy · Auto (develop)** | **Merged PR** to `develop`, or **Run workflow** (Option A) | Quality gate → approve `production` |
-| **Deploy · Production** | Manual or triggered by Auto (Option B) | Quality gate → approve `production` |
-| **Maintenance · Scheduled** | Weekly / monthly cron, or manual | Nothing — automatic |
-| **Security · Veracode** | Manual only | Add Veracode secrets, then Run |
+## On merge to develop (one workflow run)
 
-Direct pushes to `develop` do **not** deploy (use one merged PR or Option B).
+```
+Merge PR #92 → develop
+    ↓
+Deploy · Production  (single run #63)
+    ├─ Resolve context
+    ├─ Authorize
+    ├─ Approve production  ← admin
+    └─ Deploy to servers
+```
 
-Clear old runs: `./scripts/cleanup-github-actions-runs.sh --max 10 --days 2` (also daily via **Maintenance · Scheduled**)
+**No** separate Deploy · Auto run. **No** Security run on push to develop.
 
-`main` is **not** deployed.
+PR **Security · quick check** runs once while the PR is open (before merge).
 
-Simple steps: [docs/DEPLOY.md](../../docs/DEPLOY.md)
+Details: [docs/DEPLOY.md](../../docs/DEPLOY.md)

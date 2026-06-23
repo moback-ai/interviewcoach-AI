@@ -114,7 +114,7 @@ systemctl is-active ollama
 ### Option A — Auto (normal)
 
 1. Merge approved PR into `develop`
-2. **Deploy · Auto (develop)** → quality gate → **Deploy · Production**
+2. **Deploy · Production** (auto on merge) → admin approves **`production`**
 3. Admin approves **`production`** environment in GitHub
 4. Wait for green (~10–15 min); failed deploys roll back
 

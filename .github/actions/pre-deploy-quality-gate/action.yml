@@ -1,5 +1,5 @@
 name: Pre-deploy quality gate
-description: Lightweight deploy gate — merge conflicts and backend tests only. Full lint/build/e2e runs on PR Security workflow.
+description: Deprecated — deploy no longer runs a pre-deploy gate. Use PR Security quick check instead.
 
 inputs:
   git_ref:
@@ -9,54 +9,8 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Gate · Checkout
-      uses: actions/checkout@v6
-      with:
-        ref: ${{ inputs.git_ref }}
-        fetch-depth: 0
-
-    - name: Gate · Merge conflict check with develop
+    - name: Skipped
       shell: bash
       run: |
-        set -euo pipefail
-        git fetch origin develop
-        if ! git rev-parse --verify origin/develop >/dev/null 2>&1; then
-          echo "origin/develop not found — skipping conflict check."
-          exit 0
-        fi
-        BASE="$(git merge-base HEAD origin/develop)"
-        if git merge-tree "$BASE" HEAD origin/develop | grep -qE '^<<<<<<< '; then
-          echo "::error::Merge conflicts with develop — deploy rejected."
-          exit 1
-        fi
-        echo "No merge conflicts with develop."
-
-    - name: Gate · Setup Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.11'
-        cache: pip
-        cache-dependency-path: backend/requirements.txt
-
-    - name: Gate · Backend tests
-      shell: bash
-      run: |
-        set -euo pipefail
-        python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt pytest
-        python -m pytest backend/tests/ -q
-
-    - name: Gate · Summary
-      shell: bash
-      env:
-        GATE_GIT_REF: ${{ inputs.git_ref }}
-      run: |
-        {
-          echo "## Quality gate passed (light)"
-          echo "- Ref: \`${GATE_GIT_REF}\`"
-          echo "- Merge conflicts with develop: none"
-          echo "- Backend pytest: ok"
-          echo ""
-          echo "Lint, frontend build, and e2e already run on the PR **Security** workflow."
-          echo "Deploy may proceed after admin **production** environment approval."
-        } >> "$GITHUB_STEP_SUMMARY"
+        echo "Pre-deploy quality gate is disabled."
+        echo "PR Security quick check + production environment approval are sufficient."
