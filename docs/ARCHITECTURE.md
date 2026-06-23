@@ -32,7 +32,7 @@ The production system runs on AWS with a **four-tier split**:
 | AI | AI EC2 (c6i.2xlarge) | Ollama LLM + Whisper transcription sidecar |
 | Data | RDS PostgreSQL (db.t3.medium) | Persistent storage |
 
-EC2 instances run **10:00–20:00 IST** daily. RDS may remain available 24/7.
+EC2 and RDS run **Mon–Fri 10:00–19:30 IST** only (weekends off). EventBridge schedules in `Asia/Kolkata`.
 
 ---
 
@@ -139,7 +139,7 @@ EC2 instances run **10:00–20:00 IST** daily. RDS may remain available 24/7.
 │  │ db.t3.medium :5432          │    │ (DB creds, JWT, Ollama URLs, etc.)   │ │
 │  └─────────────────────────────┘    └──────────────────────────────────────┘ │
 │                                                                               │
-│  EventBridge + Lambda: EC2/RDS stop-start 10:00–20:00 IST                    │
+│  EventBridge + Lambda: EC2/RDS Mon–Fri 10:00–19:30 IST; weekends off         │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -191,7 +191,7 @@ EC2 instances run **10:00–20:00 IST** daily. RDS may remain available 24/7.
 
 | NFR | Target |
 |-----|--------|
-| EC2 availability | 10:00–20:00 IST (scheduled) |
+| EC2 availability | Mon–Fri 10:00–19:30 IST (scheduled); off Sat–Sun |
 | RDS availability | 24/7 |
 | Concurrent logged-in users | ~100 |
 | Concurrent live AI interviews | ~10–15 |
@@ -207,21 +207,23 @@ EC2 instances run **10:00–20:00 IST** daily. RDS may remain available 24/7.
 PR (develop/feature → develop)
     │
     ▼
-Security workflow (lint, build, pytest, SAST, dependency scans)
+Security · PR quick check (lint / pytest / gitleaks on changed files)
     │
     ▼
 Admin-approved merge to develop
     │
     ▼
-Deploy · Auto (develop) → Quality gate
+Deploy · Production (single workflow run — no separate dispatcher)
     │
-    ▼
-Deploy · Production (admin approves production environment)
+    ├─ Resolve context + authorize merge
+    ├─ Admin approves production environment
     │
     ├── Frontend: SCP dist + nginx reload
     ├── API: SCP backend + pm2 restart gunicorn
     ├── AI: ollama pull + pm2 transcribe
     └── RDS: psql migrations (if database/** changed)
+
+Weekly (Mon) or manual: full Security scan (CodeQL, Trivy, Semgrep, e2e, audits).
 ```
 
 Production deploys from **`develop` only**. Branch **`main`** is never deployed.
@@ -480,8 +482,8 @@ users ──┬── resumes
 
 ### 3.12 Deploy sequence
 
-1. GitHub Actions runs quality gate (lint, build, pytest, merge-conflict check).
-2. Admin approves `production` environment.
+1. Merge to `develop` triggers **Deploy · Production** (PR quick check already ran on the PR).
+2. Admin approves `production` environment in that same workflow run.
 3. **Frontend:** SCP `dist/` + nginx config → `nginx -t && reload`.
 4. **API:** SCP backend release → `pip install` → `pm2 restart backend`.
 5. **AI:** `ollama pull llama3.2:3b` → restart transcribe sidecar if needed.
@@ -523,7 +525,7 @@ users ──┬── resumes
 | `OLLAMA_MODEL` | llama3.2:3b | Model loaded on AI host |
 | `DB_POOL_MIN` / `DB_POOL_MAX` | 5 / 40 | PostgreSQL connection pool |
 | gunicorn | 1 worker × 8 threads | API concurrency |
-| EC2 schedule | 10:00–20:00 IST | Cost optimization |
+| EC2/RDS schedule | Mon–Fri 10:00–19:30 IST | Cost optimization; weekends off |
 
 ### 3.16 Local development
 
@@ -575,8 +577,10 @@ users ──┬── resumes
 | Red shield | **Security Group** | Firewall rules per tier |
 | Orange arch | **Internet Gateway** | Public internet entry |
 | Green VPC box | **VPC / Subnet** | Network boundaries |
-| Orange λ | **Lambda** | Daily EC2 schedule |
-| Pink bus | **EventBridge** | Schedule trigger |
+| Orange λ | **Lambda** | Weekday EC2/RDS schedule |
+| Pink bus | **EventBridge** | Mon–Fri 10:00 / 19:30 IST + weekend force-stop |
+
+**Raster exports** (`*.png`, `*.pdf`, `*.jpg` in this folder) may lag the `.drawio` source. After editing a diagram, re-export from diagrams.net: **File → Export as → PNG / PDF**.
 
 ### 4.2 Regenerate Word/PDF exports
 

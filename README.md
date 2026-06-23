@@ -29,7 +29,7 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 
 ### Is a manual deploy button required?
 
-**Usually no** — merging an admin-approved PR into `develop` triggers **Deploy · Auto (develop)**, which starts **Deploy · Production**.
+**Usually no** — merging an admin-approved PR into `develop` triggers **Deploy · Production** automatically (one workflow run).
 
 **Use the manual button when you need to:**
 
@@ -39,7 +39,7 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 
 **Where to find it:** GitHub → **Actions** → **Deploy · Production** → **Run workflow** (top right).
 
-You can also run **Deploy · Auto (develop)** manually with a branch name if the auto trigger did not fire.
+If auto deploy did not start after merge, use **Deploy · Production** manually with `git_ref` = `develop` or a commit SHA.
 
 Both paths still require **production environment approval** before anything reaches servers. Failed deploys roll back to the last stable release.
 
@@ -68,7 +68,7 @@ cd frontend && npm run test:e2e
 cd backend && python -m pytest tests/ -q
 ```
 
-Security scans run on every PR via the **Security** workflow. See [SECURITY.md](SECURITY.md) and [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
+Security quick check runs on every PR via the **Security** workflow. Full scan runs weekly or manually. See [SECURITY.md](SECURITY.md) and [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
 
 ## Security
 

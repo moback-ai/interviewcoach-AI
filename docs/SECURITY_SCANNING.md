@@ -1,21 +1,34 @@
 # Security scanning
 
-This repo runs automated security checks on every PR and push to `develop`. Optional commercial scanners (Veracode, Snyk) can be added when your org provides API credentials.
+Automated security checks run on **PRs** (quick) and **weekly / manual** (full). Optional commercial scanners (Veracode, Snyk) can be added when your org provides API credentials.
 
 ## What runs automatically (GitHub Actions)
 
+### On every PR (quick check)
+
 | Tool | What it finds | Workflow job |
 |------|----------------|--------------|
-| **npm audit** | Vulnerable npm packages (frontend) | `lint-and-scan` |
-| **pip-audit** | Vulnerable Python packages (core deps patched; ML CVEs without PyPI fix are documented ignores) | `lint-and-scan` |
-| **Bandit** | Common Python security issues in source | `lint-and-scan` |
+| **ESLint** | Frontend lint on changed files | `pr-quick` |
+| **pytest** | Backend unit tests (if backend changed) | `pr-quick` |
+| **Gitleaks** | Secrets committed to git | `pr-quick` |
+
+### Weekly (Mon 06:00 UTC) or manual dispatch (full scan)
+
+| Tool | What it finds | Workflow job |
+|------|----------------|--------------|
+| **npm audit** | Vulnerable npm packages (frontend) | `full-scan` |
+| **pip-audit** | Vulnerable Python packages | `full-scan` |
+| **Bandit** | Common Python security issues in source | `full-scan` |
 | **CodeQL** | SQL injection, XSS, auth bugs (JS + Python) | `codeql` |
-| **Trivy** | CVEs in dependencies and misconfigurations | `trivy` |
-| **Semgrep** | OWASP-style patterns (SAST) | `semgrep` |
-| **Gitleaks** | Secrets committed to git | `secret-scan` |
-| **Login bundle guard** | Broken login after bad Vite chunk splits | `lint-and-scan` |
-| **Playwright** | `/login` and `/forgot-password` smoke tests | `lint-and-scan` |
+| **Trivy** | CVEs in dependencies and misconfigurations | `full-scan` |
+| **Semgrep** | OWASP-style patterns (SAST) | `full-scan` |
+| **Login bundle guard** | Broken login after bad Vite chunk splits | `full-scan` |
+| **Playwright** | `/login` and `/forgot-password` smoke tests | `full-scan` |
 | **Dependabot** | Weekly PRs for outdated npm/pip/actions | (bot) |
+
+**No** Security workflow runs on push to `develop` — merge goes straight to **Deploy · Production**.
+
+Manual full scan: **Actions → Security → Run workflow**.
 
 ## Veracode (optional — requires license)
 
