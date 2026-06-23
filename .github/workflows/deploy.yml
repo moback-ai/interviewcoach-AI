@@ -1,6 +1,6 @@
 name: Deploy · Production
 
-# Single workflow on merge to develop: resolve → approve production → Veracode scan → deploy.
+# Single workflow on merge to develop: resolve → approve production → security scan → deploy.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -401,56 +401,39 @@ jobs:
             echo "- On failure, production is restored to the last stable release."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  veracode_scan:
-    name: Veracode scan
+  security_scan:
+    name: Security scan
     runs-on: ubuntu-latest
     needs: [resolve_context, authorize_and_prepare, deployment_approval]
     if: needs.resolve_context.outputs.proceed == 'true'
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
-      - name: Checkout release ref
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           ref: ${{ needs.authorize_and_prepare.outputs.requested_ref }}
+          fetch-depth: 0
 
-      - name: Verify Veracode secrets
-        run: |
-          if [ -z "${{ secrets.VERACODE_API_ID }}" ] || [ -z "${{ secrets.VERACODE_API_KEY }}" ]; then
-            echo "::error::Missing VERACODE_API_ID or VERACODE_API_KEY repository secrets."
-            echo "Add secrets under Settings → Secrets and variables → Actions."
-            exit 1
-          fi
-
-      - name: Package application for Veracode
-        run: |
-          zip -r veracode-app.zip frontend backend scripts \
-            -x "**/node_modules/**" "**/dist/**" "**/.git/**" "backend/Piper/**" "**/__pycache__/**"
-          ls -lh veracode-app.zip
-
-      - name: Upload and scan (Veracode)
-        uses: veracode/veracode-uploadandscan-action@0.2.7
+      - uses: actions/setup-node@v6
         with:
-          vid: ${{ secrets.VERACODE_API_ID }}
-          vkey: ${{ secrets.VERACODE_API_KEY }}
-          filepath: veracode-app.zip
-          appname: interviewcoach-AI
-          createprofile: true
-          version: ${{ needs.authorize_and_prepare.outputs.requested_ref }}
-          sandboxname: develop
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: Veracode summary
-        run: |
-          {
-            echo "## Veracode scan"
-            echo "- Ref: \`${{ needs.authorize_and_prepare.outputs.requested_ref }}\`"
-            echo "- Sandbox: \`develop\`"
-            echo "- Deploy continues after upload; full results in the Veracode portal."
-          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Security scan
+        env:
+          SECURITY_SCAN_PROFILE: full
+        run: bash scripts/security-scan-all.sh
 
   build_and_audit:
     name: Build & audit
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, deployment_approval, veracode_scan]
+    needs: [authorize_and_prepare, deployment_approval, security_scan]
     outputs:
       release_sha: ${{ steps.resolve.outputs.release_sha }}
       release_ref: ${{ steps.resolve.outputs.release_ref }}
