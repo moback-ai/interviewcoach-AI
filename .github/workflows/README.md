@@ -1,19 +1,31 @@
 # Workflows
 
-Five workflows (not counting Dependabot). Fewer **runs**: feature branches only trigger **Security** on the PR; deploy runs after a **merged PR** to `develop` or manual dispatch.
-
 | Workflow | When it runs | What you do |
 |----------|----------------|-------------|
-| **Security** | PR to `develop` / `main`; push to `develop` after merge; weekly cron | Nothing — automatic |
-| **Deploy · Auto (develop)** | **Merged PR** to `develop`, or **Run workflow** (Option A) | Quality gate → approve `production` |
-| **Deploy · Production** | Manual or triggered by Auto (Option B) | Quality gate → approve `production` |
-| **Maintenance · Scheduled** | Weekly / monthly cron, or manual | Nothing — automatic |
-| **Security · Veracode** | Manual only | Add Veracode secrets, then Run |
+| **Security** | PR → quick check only; full scan weekly (Mon) or manual | Nothing on PR merge |
+| **Deploy · Auto (develop)** | **Merged PR** to `develop` | Approve `production` in deploy.yml |
+| **Deploy · Production** | Auto-dispatch or manual | Approve `production` → deploy |
+| **Maintenance · Scheduled** | Weekly / monthly cron | Nothing |
+| **Security · Veracode** | Manual only | Optional |
 
-Direct pushes to `develop` do **not** deploy (use one merged PR or Option B).
+## Auto-deploy flow (fast)
 
-Clear old runs: `./scripts/cleanup-github-actions-runs.sh --max 10 --days 2` (also daily via **Maintenance · Scheduled**)
+```
+Merge PR → develop
+    ↓
+Deploy · Auto (develop)     ~30 sec — dispatches deploy.yml
+    ↓
+Deploy · Production
+    ↓
+Admin approves production   @govardhanreddy66 / @KFKishore23
+    ↓
+Deploy to servers           ~10–15 min
+```
+
+No pre-deploy quality gate. PR **Security · quick check** runs lint/pytest/gitleaks on changed files only.
+
+Full CodeQL / Trivy / Semgrep / e2e: **weekly** or **Actions → Security → Run workflow**.
 
 `main` is **not** deployed.
 
-Simple steps: [docs/DEPLOY.md](../../docs/DEPLOY.md)
+Details: [docs/DEPLOY.md](../../docs/DEPLOY.md)

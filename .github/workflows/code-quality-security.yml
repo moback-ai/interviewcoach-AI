@@ -1,15 +1,14 @@
 name: Security
 
+# PR: minimal quick checks only (lint / pytest / secrets).
+# Full scans (CodeQL, Trivy, Semgrep, e2e, audits): weekly cron or manual dispatch.
+# No scan on push to develop — merge triggers Deploy · Auto immediately.
+
 on:
   pull_request:
     branches: [main, develop]
-  # After merge to develop only — feature branches are scanned on the PR.
-  push:
-    branches:
-      - develop
   workflow_dispatch:
   schedule:
-    # Weekly security pass (Monday 06:00 UTC)
     - cron: '0 6 * * 1'
 
 permissions:
@@ -22,16 +21,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-and-scan:
-    name: Lint & dependency audit
+  pr-quick:
+    name: PR quick check
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Detect changed areas
         id: changes
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule'
         uses: dorny/paths-filter@v4
         with:
           filters: |
@@ -39,17 +40,54 @@ jobs:
               - 'frontend/**'
             backend:
               - 'backend/**'
-            governance:
-              - '.github/**'
-              - 'scripts/**'
-              - 'docs/**'
+
+      - name: Setup Node
+        if: steps.changes.outputs.frontend == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend lint
+        if: steps.changes.outputs.frontend == 'true'
+        working-directory: frontend
+        run: |
+          npm ci --legacy-peer-deps
+          npm run lint -- --max-warnings 0
+
+      - name: Setup Python
+        if: steps.changes.outputs.backend == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Backend unit tests
+        if: steps.changes.outputs.backend == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pytest
+          python -m pytest backend/tests/ -q
+
+      - name: Install Gitleaks CLI
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+
+      - name: Gitleaks detect
+        run: gitleaks detect --source . --config .gitleaks.toml --verbose
+
+  full-scan:
+    name: Full security scan
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Validate governance files
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || github.event_name == 'push'
-          || steps.changes.outputs.governance == 'true'
         run: |
           ruby -e 'require "yaml"; ARGV.each { |file| YAML.load_file(file); puts "ok #{file}" }' .github/workflows/*.yml
           bash -n scripts/log-maintenance.sh
@@ -57,10 +95,6 @@ jobs:
           bash -n scripts/verify-frontend-login-bundle.sh
 
       - name: Setup Node
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 24
@@ -68,34 +102,18 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Frontend install
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npm ci --legacy-peer-deps
 
       - name: Frontend lint
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npm run lint -- --max-warnings 0
 
       - name: Frontend dependency audit
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npm audit --audit-level=high
 
       - name: Frontend production build + login bundle guard
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: |
           echo "VITE_API_BASE_URL=/api" > .env
@@ -104,18 +122,10 @@ jobs:
           bash ../scripts/verify-frontend-login-bundle.sh dist
 
       - name: Install Playwright browser
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         run: npx playwright install chromium --with-deps
 
       - name: E2E smoke — login and forgot-password
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.frontend == 'true'
         working-directory: frontend
         env:
           CI: true
@@ -134,10 +144,6 @@ jobs:
           kill "$preview_pid" || true
 
       - name: Setup Python
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.backend == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -145,38 +151,23 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Backend dependency install
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.backend == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install bandit pip-audit pytest
 
       - name: Backend unit tests
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.backend == 'true'
         run: python -m pytest backend/tests/ -q
 
       - name: Security scan (Python dependencies)
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.backend == 'true'
         run: bash scripts/pip-audit-production.sh
 
       - name: Security scan (Python source)
-        if: >-
-          github.event_name == 'workflow_dispatch'
-          || github.event_name == 'schedule'
-          || steps.changes.outputs.backend == 'true'
         run: bandit -c .github/bandit.yml -r backend -lll
 
   codeql:
     name: CodeQL (SAST)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -213,6 +204,7 @@ jobs:
 
   trivy:
     name: Trivy (CVE scan)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -225,7 +217,6 @@ jobs:
             https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
           tar -xzf /tmp/trivy.tar.gz -C "$HOME/.local/bin" trivy
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          trivy --version
 
       - name: Filesystem vulnerability scan
         run: |
@@ -238,6 +229,7 @@ jobs:
 
   semgrep:
     name: Semgrep (SAST rules)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     container:
       image: semgrep/semgrep
@@ -248,8 +240,9 @@ jobs:
       - name: Run Semgrep CI rules
         run: semgrep scan --config p/ci --error
 
-  secret-scan:
+  secret-scan-full:
     name: Secret scan (Gitleaks)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -261,27 +254,6 @@ jobs:
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz \
             | tar -xz -C /usr/local/bin gitleaks
-          gitleaks version
 
       - name: Gitleaks detect
         run: gitleaks detect --source . --config .gitleaks.toml --verbose
-
-  # Optional: enable when SNYK_TOKEN is added to repository secrets.
-  # snyk:
-  #   name: Snyk
-  #   runs-on: ubuntu-latest
-  #   if: ${{ secrets.SNYK_TOKEN != '' }}
-  #   steps:
-  #     - uses: actions/checkout@v6
-  #     - uses: snyk/actions/node@master
-  #       env:
-  #         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-  #       with:
-  #         command: test
-  #         args: --severity-threshold=high
-  #     - uses: snyk/actions/python@master
-  #       env:
-  #         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-  #       with:
-  #         command: test
-  #         args: --file=backend/requirements.txt --severity-threshold=high
