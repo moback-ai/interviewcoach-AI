@@ -25,11 +25,10 @@ Avoid direct pushes to `develop` and avoid many small merges — each merge trig
 1. Open PR: `develop/<your-feature>` → **`develop`**
 2. Get **admin approval** on the PR (@govardhanreddy66 or @KFKishore23) — **required before merge** or auto-deploy will fail
 3. **Merge** the PR into `develop`
-4. **Deploy · Auto (develop)** runs a **quality gate** (lint, build, login bundle check, pytest, merge-conflict scan with `develop`). If it fails, deploy is **rejected** — fix and merge again.
-5. On pass, **Deploy · Production** starts automatically.
-6. Second admin: open the run → **Review deployments** → **Approve** `production`
-7. Wait for green (~10–15 min). Failed deploys **roll back** automatically.
-8. Check:
+4. **Deploy · Auto (develop)** dispatches **Deploy · Production** (light gate: conflicts + pytest).
+5. Admin approves **`production`** environment in **Deploy · Production**.
+6. Wait for green (~10–15 min). Failed deploys **roll back** automatically.
+7. Check:
    - https://ugaanlabs.ai/api/health → `"status":"healthy"`
    - https://ugaanlabs.ai/login → password field visible
 
@@ -94,20 +93,18 @@ Monthly sync can also open this PR automatically (`Maintenance · Scheduled`).
 
 ---
 
-## Pre-deploy quality gate (blocks bad releases)
+## Pre-deploy quality gate (light — blocks bad releases)
 
-Runs **before** production approval in **Deploy · Production** and **Deploy · Auto (develop)**:
+Runs **once** in **Deploy · Production** before admin approves the `production` environment.
 
 | Check | What it does |
 |-------|----------------|
 | Merge conflicts | Fails if the deploy ref would conflict with `develop` |
-| Frontend lint | `npm run lint` |
-| Frontend build | Production build + login bundle script (password field must not depend on heavy vendor-only chunks) |
 | Backend tests | `pytest backend/tests/` |
 
-If any step fails, the workflow stops — **no deploy**. Fix on `develop`, merge, and try again.
+**Not repeated here** (already on every PR via **Security**): frontend lint, production build, login bundle check, e2e smoke, Bandit, Trivy, etc.
 
-Action: `.github/actions/pre-deploy-quality-gate/`
+**Auto-deploy flow:** merge PR → **Deploy · Auto (develop)** dispatches **Deploy · Production** → light gate → admin approves `production` → deploy (~10–15 min).
 
 ---
 
