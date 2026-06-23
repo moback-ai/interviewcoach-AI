@@ -2,7 +2,7 @@ name: Security
 
 # PR: minimal quick checks only (lint / pytest / secrets).
 # Full scans (CodeQL, Trivy, Semgrep, e2e, audits): weekly cron or manual dispatch.
-# No scan on push to develop — merge triggers Deploy · Auto immediately.
+# No scan on push to develop — merge triggers Deploy · Production directly (one run).
 
 on:
   pull_request:
