@@ -2,26 +2,25 @@
 
 | Workflow | When | Runs |
 |----------|------|------|
-| **Security** | PR only (quick check) | Lint / pytest / Gitleaks on changed files |
-| **Security** | Weekly Mon or manual | Full CodeQL, Trivy, OSV-Scanner, Semgrep, e2e |
-| **Deploy · Production** | **Merge PR → develop** | **One run**: approve production → deploy |
-| **Deploy · Production** | Manual dispatch | Same single workflow |
+| **Security** | **Every PR** | **PR security gate** — must pass before merge |
+| **Security** | Weekly Mon or manual | Full CodeQL, Trivy, Semgrep, e2e |
+| **Deploy · Production** | **Merge PR → develop** | Approve production → **security gate** → deploy |
+| **Veracode Scan** | Manual | One policy scan (needs API secrets) |
 | **Maintenance · Scheduled** | Cron | Log cleanup, etc. |
 
-## On merge to develop (one workflow run)
+## On merge to develop
 
 ```
-Merge PR #92 → develop
+Merge PR → develop
     ↓
-Deploy · Production  (single run #63)
+Deploy · Production
     ├─ Resolve context
     ├─ Authorize
     ├─ Approve production  ← admin
+    ├─ Security gate       ← scan before SSH deploy
     └─ Deploy to servers
 ```
 
-**No** separate Deploy · Auto run. **No** Security run on push to develop.
-
-PR **Security · quick check** runs once while the PR is open (before merge).
+PR **security gate** runs while the PR is open. The same checks run again at deploy time on the merged commit.
 
 Details: [docs/DEPLOY.md](../../docs/DEPLOY.md)
