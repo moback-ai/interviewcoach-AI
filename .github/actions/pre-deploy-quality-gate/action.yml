@@ -1,5 +1,5 @@
 name: Pre-deploy quality gate
-description: Block deploy when lint, build, tests, or merge conflicts fail.
+description: Lightweight deploy gate — merge conflicts and backend tests only. Full lint/build/e2e runs on PR Security workflow.
 
 inputs:
   git_ref:
@@ -31,33 +31,6 @@ runs:
         fi
         echo "No merge conflicts with develop."
 
-    - name: Gate · Setup Node
-      uses: actions/setup-node@v6
-      with:
-        node-version: 24
-        cache: npm
-        cache-dependency-path: frontend/package-lock.json
-
-    - name: Gate · Frontend install
-      shell: bash
-      working-directory: frontend
-      run: npm ci --legacy-peer-deps
-
-    - name: Gate · Frontend lint
-      shell: bash
-      working-directory: frontend
-      run: npm run lint -- --max-warnings 0
-
-    - name: Gate · Frontend build and login bundle
-      shell: bash
-      run: |
-        set -euo pipefail
-        cd frontend
-        echo "VITE_API_BASE_URL=/api" > .env
-        echo "VITE_STORAGE_URL=/storage" >> .env
-        npm run build
-        bash ../scripts/verify-frontend-login-bundle.sh dist
-
     - name: Gate · Setup Python
       uses: actions/setup-python@v6
       with:
@@ -79,11 +52,11 @@ runs:
         GATE_GIT_REF: ${{ inputs.git_ref }}
       run: |
         {
-          echo "## Quality gate passed"
+          echo "## Quality gate passed (light)"
           echo "- Ref: \`${GATE_GIT_REF}\`"
           echo "- Merge conflicts with develop: none"
-          echo "- Frontend lint, build, login bundle: ok"
           echo "- Backend pytest: ok"
           echo ""
-          echo "Deploy may proceed after admin production approval."
+          echo "Lint, frontend build, and e2e already run on the PR **Security** workflow."
+          echo "Deploy may proceed after admin **production** environment approval."
         } >> "$GITHUB_STEP_SUMMARY"

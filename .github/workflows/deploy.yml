@@ -56,7 +56,7 @@ on:
 
 jobs:
   quality_gate:
-    name: Quality gate
+    name: Quality gate (light)
     runs-on: ubuntu-latest
     steps:
       - name: Gate · Checkout (required for local composite action)
