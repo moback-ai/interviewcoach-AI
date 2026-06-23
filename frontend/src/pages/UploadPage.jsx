@@ -49,7 +49,7 @@ function UploadPage() {
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
 
-  useBodyScrollLock(loading || successModal.isOpen);
+  useBodyScrollLock(successModal.isOpen);
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -334,12 +334,9 @@ function UploadPage() {
 
       const generationDebug = questionsResult.debug || {};
       const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-      const usedLocalFallback = generationDebug.generator === 'local_fallback';
-      const generationWarning = usedLocalFallback
-        ? 'The live backend fell back to template-based generation because Ollama was unavailable or the configured model was missing.'
-        : fallbackAnswerCount > 0
-          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-          : '';
+      const generationWarning = fallbackAnswerCount > 0
+        ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+        : '';
 
       // Step 4: Save questions to database via edge function
       console.log('[DEBUG] Step 4: Saving questions to database...');
@@ -442,7 +439,6 @@ function UploadPage() {
           resume_url: resumeUrl,
           job_title: jobTitle,
           job_description: jobDescription,
-          prefer_local: false,
           question_counts: {
             beginner: easyQuestions,
             medium: mediumQuestions,

@@ -1,14 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw } from 'react-icons/fi';
-import { getSession } from '../lib/authClient';
-import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from './common/NoticeModal';
+import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
 
 const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegenerating = false }) => {
   const [loading, setLoading] = useState(false);
   const [retakeModalOpen, setRetakeModalOpen] = useState(false);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '' });
+  const [interviewQuota, setInterviewQuota] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadQuota = async () => {
+      try {
+        const quota = await fetchInterviewQuota();
+        if (!cancelled) {
+          setInterviewQuota(quota);
+        }
+      } catch (error) {
+        console.warn('Could not load interview quota:', error);
+      }
+    };
+    loadQuota();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!retakeModalOpen) return;
@@ -72,45 +90,17 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
     setRetakeModalOpen(true);
   };
 
-  const startCheckout = async ({ retakeFrom } = {}) => {
+  const runScheduleInterview = async ({ retakeFrom } = {}) => {
     setLoading(true);
     try {
-      const session = await getSession();
-      if (!session?.access_token) {
-        throw new Error('No active session');
-      }
-
-      const body = {
-        resume_id: pairing.resume_id,
-        jd_id: pairing.jd_id,
-        question_set: questionSet.questionSetNumber,
-      };
-      if (retakeFrom) {
-        body.retake_from = retakeFrom;
-      }
-
-      const response = await fetch(`${getBackendOrigin()}/api/checkout`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
+      await scheduleInterview({
+        resumeId: pairing.resume_id,
+        jdId: pairing.jd_id,
+        questionSet: questionSet.questionSetNumber,
+        retakeFrom,
       });
-
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to start checkout');
-      }
-
-      const checkoutUrl = result.checkout_url || result.payment_url;
-      if (!checkoutUrl) {
-        throw new Error('Checkout URL missing from server response');
-      }
-
-      window.location.href = checkoutUrl;
     } catch (error) {
-      console.error('Error starting checkout:', error);
+      console.error('Error scheduling interview:', error);
       setNoticeModal({
         isOpen: true,
         title: retakeFrom ? 'Could not start retake' : 'Could not schedule interview',
@@ -119,6 +109,8 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
       setLoading(false);
     }
   };
+
+  const handleScheduleClick = () => runScheduleInterview();
 
   const handleRetakeConfirm = async () => {
     setRetakeModalOpen(false);
@@ -131,8 +123,14 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
       });
       return;
     }
-    await startCheckout({ retakeFrom: originalInterviewId });
+    await runScheduleInterview({ retakeFrom: originalInterviewId });
   };
+
+  const scheduleButtonLabel = loading
+    ? 'Creating...'
+    : interviewQuota?.free_remaining > 0
+      ? 'Schedule Interview (Free)'
+      : 'Schedule Interview';
 
   const hasCompletedInterviews = questionSet.interviews.some(interview => 
     interview.status === 'completed' || interview.status === 'ENDED'
@@ -164,7 +162,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
             {/* Schedule Interview Button - Show when no interviews exist */}
             {questionSet.total_attempts === 0 && (
               <button
-                onClick={() => startCheckout()}
+                onClick={handleScheduleClick}
                 disabled={isDisabled || loading}
                 className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all duration-200 flex items-center justify-center shadow-md hover:shadow-lg transform hover:scale-105 ${
                   isDisabled
@@ -173,8 +171,8 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
                 }`}
               >
                 <FiPlay className="mr-1 sm:mr-2" size={12} />
-                <span className="hidden sm:inline">Schedule Interview</span>
-                <span className="sm:hidden">Schedule</span>
+                <span className="hidden sm:inline">{scheduleButtonLabel}</span>
+                <span className="sm:hidden">{loading ? 'Creating...' : 'Schedule'}</span>
               </button>
             )}
             

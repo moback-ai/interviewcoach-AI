@@ -75,11 +75,13 @@ from common.interview_timer import (
     finalize_interview_time,
 )
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
+from common.transcribe_remote import transcribe_via_remote_service
 from common.payment_handlers import (
     checkout_status_handler,
     create_checkout_handler,
     dodo_webhook_handler,
 )
+from common.interview_handlers import interview_quota_handler, start_interview_handler
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -1833,11 +1835,6 @@ def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
         "api_revision": "fast-upload-v3",
-        "fast_paths": {
-            "jd_parse_local_default": not _jd_parse_use_ollama(),
-            "question_gen_local_default": _question_gen_force_local(),
-            "interview_server_tts": _env_truthy("INTERVIEW_SERVER_TTS", "false"),
-        },
         "services": {
             "ollama": {
                 "ready": ollama_diagnostics.get("ready", False),
@@ -1943,152 +1940,6 @@ def classify_job_description_is_technical(job_title, job_description):
     return _classify(job_title, job_description)
 
 
-def infer_candidate_name_from_text(raw_text):
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    for line in lines[:5]:
-        words = line.split()
-        if 1 <= len(words) <= 4 and sum(1 for word in words if word[:1].isupper()) >= max(1, len(words) - 1):
-            return line[:80]
-    return "Candidate"
-
-
-def extract_keywords_for_questions(resume_text, job_description):
-    combined = f"{resume_text}\n{job_description}".lower()
-    keyword_order = [
-        "python", "flask", "django", "fastapi", "javascript", "typescript", "react",
-        "node", "sql", "postgresql", "mysql", "mongodb", "aws", "docker", "kubernetes",
-        "ci/cd", "linux", "rest api", "microservices", "testing", "automation", "devops",
-        "selenium", "git", "redis", "system design", "machine learning"
-    ]
-    found = []
-    for keyword in keyword_order:
-        if keyword in combined and keyword not in found:
-            found.append(keyword)
-    return found[:8]
-
-
-def build_local_question_set(job_title, job_description, resume_text, question_counts):
-    candidate_name = infer_candidate_name_from_text(resume_text)
-    keywords = extract_keywords_for_questions(resume_text, job_description)
-    primary_skill = keywords[0] if keywords else "the core skills in your background"
-    secondary_skill = keywords[1] if len(keywords) > 1 else primary_skill
-
-    templates = {
-        "beginner": [
-            (
-                f"Can you introduce yourself and explain how your experience prepares you for the {job_title} role?",
-                f"A strong answer should summarize relevant experience, highlight impact, and connect the candidate's background to the {job_title} responsibilities."
-            ),
-            (
-                f"What hands-on experience do you have with {primary_skill}?",
-                f"The answer should describe real projects, responsibilities, tools used, and measurable outcomes involving {primary_skill}."
-            ),
-            (
-                f"Which parts of this job description feel most aligned with your recent work?",
-                "A good response should map past responsibilities to the posted role and mention concrete examples."
-            ),
-        ],
-        "medium": [
-            (
-                f"Tell me about a project where you used {primary_skill} to solve a meaningful problem.",
-                f"A strong answer should cover the problem, approach, tradeoffs, implementation details, and results using {primary_skill}."
-            ),
-            (
-                f"How would you improve reliability and maintainability in a system that uses {secondary_skill}?",
-                f"The answer should discuss architecture, testing, observability, and operational tradeoffs related to {secondary_skill}."
-            ),
-            (
-                f"Describe a situation where you had to balance speed of delivery with code quality or technical debt.",
-                "A good answer should explain prioritization, stakeholder communication, and the long-term mitigation plan."
-            ),
-        ],
-        "hard": [
-            (
-                f"Design an approach for scaling a {job_title} workload while keeping performance, security, and cost under control.",
-                "A strong answer should cover architecture decisions, scaling strategy, observability, failure handling, and tradeoffs."
-            ),
-            (
-                f"What is the most complex technical decision you have made involving {primary_skill}, and how did you evaluate alternatives?",
-                f"The answer should explain constraints, alternatives considered, tradeoffs, risks, and the final outcome around {primary_skill}."
-            ),
-            (
-                "If production started failing intermittently right after a release, how would you investigate and stabilize it?",
-                "A good response should include triage steps, rollback or mitigation, logs/metrics, communication, and prevention."
-            ),
-        ],
-        "coding": [
-            (
-                f"Write or outline a solution for a practical {primary_skill} problem relevant to this role, and explain the time and space complexity.",
-                f"A strong answer should include a correct approach, clean structure, edge cases, and complexity analysis using {primary_skill} concepts."
-            ),
-            (
-                f"Implement a small utility or API handler using {secondary_skill} and explain how you would test it.",
-                f"The answer should demonstrate coding structure, correctness, testability, and reasoning using {secondary_skill}."
-            ),
-        ],
-    }
-
-    questions = []
-
-    def answer_variant(expected_answer, experience):
-        if experience == "beginner":
-            return (
-                f"A concise answer should cover the main point clearly. {expected_answer} "
-                "Keep the response direct and mention one relevant example if possible."
-            )
-        if experience == "intermediate":
-            return (
-                f"A stronger answer should add context, reasoning, and a concrete example. {expected_answer} "
-                "Include the situation, action taken, and result or tradeoff."
-            )
-        return (
-            f"An expert answer should connect the example to business impact, alternatives, risks, and lessons learned. "
-            f"{expected_answer} Explain why the approach was chosen and how success was measured."
-        )
-
-    def append_question(prompt, expected_answer, difficulty, requires_code=False):
-        normalized_difficulty = normalize_question_difficulty("medium" if requires_code else difficulty)
-        for experience in ("beginner", "intermediate", "expert"):
-            questions.append({
-                "question_text": prompt,
-                "expected_answer": answer_variant(expected_answer, experience),
-                "difficulty_level": normalized_difficulty,
-                "difficulty_category": normalized_difficulty,
-                "difficulty_experience": experience,
-                "answer_source": "template_fallback",
-                "requires_code": requires_code,
-            })
-    normalized_counts = {
-        "beginner": int((question_counts or {}).get("beginner", 0) or 0),
-        "medium": int((question_counts or {}).get("medium", 0) or 0),
-        "hard": int((question_counts or {}).get("hard", 0) or 0),
-        "coding": int((question_counts or {}).get("coding", 0) or 0),
-    }
-
-    for difficulty, count in normalized_counts.items():
-        if count <= 0:
-            continue
-        bank = templates[difficulty]
-        for index in range(count):
-            prompt, expected = bank[index % len(bank)]
-            append_question(prompt, expected, difficulty, difficulty == "coding")
-
-    return {
-        "success": True,
-        "candidate": candidate_name,
-        "questions": questions,
-        "questions_count": len(questions),
-        "generator": "local_fallback",
-        "answer_generation": {
-            "requested": True,
-            "model": None,
-            "generated_count": 0,
-            "fallback_count": len(questions),
-            "fallback_examples": [],
-        },
-    }
-
-
 def get_ollama_model_name():
     return (optional_env("OLLAMA_MODEL", "llama3") or "llama3").strip()
 
@@ -2158,10 +2009,6 @@ def get_ollama_diagnostics(timeout_seconds=2):
     )
 
 
-def ollama_ready(timeout_seconds=2):
-    return get_ollama_diagnostics(timeout_seconds=timeout_seconds).get("ready", False)
-
-
 def _env_int(name, default):
     try:
         return int(optional_env(name, str(default)) or default)
@@ -2178,46 +2025,8 @@ def _env_truthy(name, default="false"):
     return (optional_env(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _question_gen_force_local():
-    """Default true on prod so generation finishes in seconds instead of hanging on Ollama."""
-    return _env_truthy("QUESTION_GEN_FORCE_LOCAL", "true")
-
-
-def _use_ollama_question_pipeline(data, ollama_diagnostics):
-    if _question_gen_force_local():
-        return False
-    if data.get("prefer_local") or data.get("fast"):
-        return False
-    if not (data.get("use_ai") or data.get("use_ollama") or _env_truthy("QUESTION_GEN_USE_OLLAMA", "false")):
-        return False
-    return bool(ollama_diagnostics.get("ready"))
-
-
-def _jd_parse_use_ollama():
-    """Ollama JD parsing is opt-in; default is fast local extraction to avoid gateway timeouts."""
-    return _env_truthy("JD_PARSE_USE_OLLAMA", "false")
-
-
-def _parse_job_description_fast(extracted_text, temp_path=None):
-    """Local-only JD parse: completes in milliseconds, no Ollama."""
-    local_result = summarize_job_description_text(extracted_text)
-    job_title = (local_result.get("job_title") or "").strip()
-    job_description = (local_result.get("job_description") or "").strip()
-    is_technical = classify_job_description_is_technical(job_title, job_description)
-    return {
-        "job_title": job_title,
-        "job_description": job_description,
-        "is_technical": is_technical,
-        "parser": "local",
-    }
-
-
-def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
-    """Fast local parse first; optionally refine with Ollama when explicitly enabled."""
-    result = _parse_job_description_fast(extracted_text, temp_path)
-    if not _jd_parse_use_ollama() or _question_gen_force_local() or not ollama_ready():
-        return result
-
+def _parse_job_description_with_ollama(extracted_text, temp_path):
+    """Parse JD via Ollama; fall back to heuristic extraction on failure."""
     try:
         llm_result = _run_callable_with_timeout(
             lambda: _parse_job_description_file(temp_path, model=get_ollama_model_name()),
@@ -2227,9 +2036,9 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
         job_title = (llm_result.get("job_title") or "").strip()
         job_description = (llm_result.get("job_description") or "").strip()
         if not job_title or not job_description:
-            return result
+            raise ValueError("Ollama returned empty job title or description")
 
-        is_technical = result["is_technical"]
+        is_technical = classify_job_description_is_technical(job_title, job_description)
         try:
             is_technical = _run_callable_with_timeout(
                 lambda: _classify_if_technical_role(
@@ -2240,7 +2049,6 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
             )
         except Exception as classify_error:
             print(f"[WARN] LLM technical classification failed, using heuristic fallback: {classify_error}")
-            is_technical = classify_job_description_is_technical(job_title, job_description)
 
         return {
             "job_title": job_title,
@@ -2249,8 +2057,17 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
             "parser": "ollama",
         }
     except Exception as llm_error:
-        print(f"[WARN] Ollama JD enhancement skipped, using local parse: {llm_error}")
-        return result
+        print(f"[WARN] Ollama JD parse failed, using heuristic fallback: {llm_error}")
+        local_result = summarize_job_description_text(extracted_text)
+        job_title = (local_result.get("job_title") or "").strip()
+        job_description = (local_result.get("job_description") or "").strip()
+        is_technical = classify_job_description_is_technical(job_title, job_description)
+        return {
+            "job_title": job_title,
+            "job_description": job_description,
+            "is_technical": is_technical,
+            "parser": "local_fallback",
+        }
 
 
 def _run_callable_with_timeout(fn, timeout_seconds, label="operation"):
@@ -2271,54 +2088,6 @@ def _classify_if_technical_role(job_title, job_description, model=None):
     from INTERVIEW.Resumeparser import classify_if_technical_role
 
     return classify_if_technical_role(job_title, job_description, model=model)
-
-
-def _generate_questions_ollama_only(
-    temp_resume,
-    job_title,
-    job_description,
-    resume_text,
-    question_counts,
-    data,
-    ollama_diagnostics,
-):
-    """Ollama-only question generation; raises on failure (no local template fallback)."""
-    if not _use_ollama_question_pipeline(data, ollama_diagnostics):
-        raise RuntimeError(
-            "Failed to generate interview questions. Please try again."
-        )
-
-    pipeline_kwargs = {
-        "resume_path": temp_resume,
-        "job_title": job_title,
-        "job_description": job_description,
-        "question_counts": question_counts,
-        "include_answers": data.get("include_answers", True),
-        "split": data.get("split", False),
-        "resume_pct": data.get("resume_pct", 50),
-        "jd_pct": data.get("jd_pct", 50),
-        "blend": data.get("blend", False),
-        "blend_pct_resume": data.get("blend_pct_resume", 50),
-        "blend_pct_jd": data.get("blend_pct_jd", 50),
-        "max_retries": 2,
-    }
-
-    from INTERVIEW.Resumeparser import run_pipeline_from_api
-
-    try:
-        result = _run_callable_with_timeout(
-            lambda: run_pipeline_from_api(**pipeline_kwargs),
-            QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS,
-            label="Question generation pipeline",
-        )
-    except TimeoutError:
-        raise TimeoutError("Unable to generate interview questions. Please try again.") from None
-    if not result.get("success") or not result.get("questions"):
-        raise RuntimeError(result.get("error") or "Pipeline returned no questions")
-
-    result.setdefault("generator", "ollama_pipeline")
-    result["ollama_diagnostics"] = ollama_diagnostics
-    return result
 
 
 def _question_generation_error_status(exc):
@@ -2611,19 +2380,22 @@ def get_job_descriptions():
 #  INTERVIEWS
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.route('/api/interview-quota', methods=['GET', 'OPTIONS'])
+@verify_auth_token
+def get_interview_quota():
+    return interview_quota_handler()
+
+
+@app.route('/api/interviews/start', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def start_interview():
+    return start_interview_handler()
+
+
 @app.route('/api/interviews', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def create_interview():
-    if request.method == 'OPTIONS':
-        return jsonify({"message": "OK"}), 200
-    data = request.get_json() or {}
-    row = execute(
-        "INSERT INTO interviews (user_id, resume_id, jd_id, question_set, retake_from, attempt_number) "
-        "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
-        (request.user['id'], data.get('resume_id'), data.get('jd_id'),
-         data.get('question_set'), data.get('retake_from'), data.get('attempt_number', 1))
-    )
-    return jsonify({"success": True, "data": dict(row)}), 201
+    return start_interview_handler()
 
 
 @app.route('/api/interviews', methods=['GET'])
@@ -2886,7 +2658,7 @@ def parse_job_description():
             if not is_valid_jd:
                 return jsonify({"success": False, "message": jd_validation_error}), 400
 
-            parsed = _parse_job_description_with_optional_ollama(extracted_text, temp_path)
+            parsed = _parse_job_description_with_ollama(extracted_text, temp_path)
             return jsonify({"success": True, "data": {
                 "job_title": parsed["job_title"],
                 "job_description": parsed["job_description"],
@@ -2916,17 +2688,16 @@ def classify_technical_role():
         return jsonify({"success": False, "message": jd_validation_error}), 400
     try:
         is_technical = classify_job_description_is_technical(job_title, job_description)
-        if _jd_parse_use_ollama() and ollama_ready():
-            try:
-                is_technical = _run_callable_with_timeout(
-                    lambda: _classify_if_technical_role(
-                        job_title, job_description, model=get_ollama_model_name()
-                    ),
-                    10,
-                    label="Technical role classification",
-                )
-            except Exception as classify_error:
-                print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
+        try:
+            is_technical = _run_callable_with_timeout(
+                lambda: _classify_if_technical_role(
+                    job_title, job_description, model=get_ollama_model_name()
+                ),
+                10,
+                label="Technical role classification",
+            )
+        except Exception as classify_error:
+            print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
         return jsonify({"success": True, "is_technical": is_technical})
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
@@ -2977,15 +2748,26 @@ def generate_questions():
                 return jsonify({"success": False, "message": resume_validation_error}), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+            pipeline_kwargs = {
+                "resume_path": temp_resume,
+                "job_title": job_title,
+                "job_description": job_description,
+                "question_counts": question_counts,
+                "include_answers": data.get("include_answers", True),
+                "split": data.get("split", False),
+                "resume_pct": data.get("resume_pct", 50),
+                "jd_pct": data.get("jd_pct", 50),
+                "blend": data.get("blend", False),
+                "blend_pct_resume": data.get("blend_pct_resume", 50),
+                "blend_pct_jd": data.get("blend_pct_jd", 50),
+                "max_retries": 2,
+            }
+            from INTERVIEW.Resumeparser import run_pipeline_from_api
             try:
-                result = _generate_questions_ollama_only(
-                    temp_resume,
-                    job_title,
-                    job_description,
-                    resume_text,
-                    question_counts,
-                    data,
-                    ollama_diagnostics,
+                result = _run_callable_with_timeout(
+                    lambda: run_pipeline_from_api(**pipeline_kwargs),
+                    QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS,
+                    label="Question generation pipeline",
                 )
             except Exception as pipeline_error:
                 print(
@@ -2995,12 +2777,28 @@ def generate_questions():
                 status = _question_generation_error_status(pipeline_error)
                 return jsonify({
                     "success": False,
-                    "message": "Failed to generate interview questions.",
+                    "message": str(pipeline_error),
                     "debug": {
                         "generator": "ollama_failed",
                         "ollama": ollama_diagnostics,
                     },
                 }), status
+            if not result.get("success") or not result.get("questions"):
+                error_message = result.get("error") or "Pipeline returned no questions"
+                print(
+                    "[ERROR] Ollama question generation failed: "
+                    f"{error_message} | ollama={json.dumps(ollama_diagnostics)}"
+                )
+                return jsonify({
+                    "success": False,
+                    "message": error_message,
+                    "debug": {
+                        "generator": "ollama_failed",
+                        "ollama": ollama_diagnostics,
+                    },
+                }), 500
+            result.setdefault("generator", "ollama_pipeline")
+            result["ollama_diagnostics"] = ollama_diagnostics
             return jsonify({"success": True, "data": {
                 "questions": result['questions'],
                 "questions_count": result['questions_count'],
