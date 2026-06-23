@@ -11,6 +11,7 @@ import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterce
 import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from '../components/common/NoticeModal';
 import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
+import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 
 
 const getLevelColor = (level) => {
@@ -336,6 +337,10 @@ export default function QuestionsPage() {
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
+
+  useEffect(() => {
+    unlockBodyScroll();
+  }, []);
 
   // ✅ Updated useEffect - now filters by resume_id + jd_id combination
   useEffect(() => {

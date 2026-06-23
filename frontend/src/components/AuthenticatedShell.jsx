@@ -5,6 +5,7 @@ import IdleTimeoutModal from './IdleTimeoutModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdleTimeout } from '../hooks/useIdleTimeout';
 import { useTheme } from '../hooks/useTheme';
+import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 
 const SupportBot = lazy(() => import('./SupportBot'));
 
@@ -19,6 +20,10 @@ function AuthenticatedShell() {
   const isOnInterviewPage = location.pathname === '/interview';
 
   const { showWarning, timeRemaining, resetTimer } = useIdleTimeout(10, 30);
+
+  useEffect(() => {
+    unlockBodyScroll();
+  }, [location.pathname]);
 
   useEffect(() => {
     const verifySession = async () => {
