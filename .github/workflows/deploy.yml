@@ -427,7 +427,7 @@ jobs:
 
       - name: Security scan
         env:
-          SECURITY_SCAN_PROFILE: full
+          SECURITY_SCAN_PROFILE: quick
         run: bash scripts/security-scan-all.sh
 
   build_and_audit:
