@@ -10,6 +10,7 @@ import { getSession } from '../lib/authClient';
 import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from '../components/common/NoticeModal';
+import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
 
 
 const getLevelColor = (level) => {
@@ -330,6 +331,7 @@ export default function QuestionsPage() {
   const [currentJdId, setCurrentJdId] = useState(null);
   const [interviewHistory, setInterviewHistory] = useState([]);
   const [hasExistingInterviews, setHasExistingInterviews] = useState(false);
+  const [interviewQuota, setInterviewQuota] = useState(null);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   
   // Prevent duplicate event tracking
@@ -452,6 +454,24 @@ export default function QuestionsPage() {
 
     fetchQuestions();
   }, [searchParams]); // ✅ Add searchParams as dependency
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadQuota = async () => {
+      try {
+        const quota = await fetchInterviewQuota();
+        if (!cancelled) {
+          setInterviewQuota(quota);
+        }
+      } catch (error) {
+        console.warn('Could not load interview quota:', error);
+      }
+    };
+    loadQuota();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ✅ New function to fetch interview history for the current question set
   const fetchInterviewHistory = async (resumeId, jdId, questionSet, accessToken) => {
@@ -595,7 +615,7 @@ export default function QuestionsPage() {
     }
     setExpandedQuestions(newExpanded);
   };
-  const startCheckout = async ({ retakeFrom } = {}) => {
+  const runScheduleInterview = async ({ retakeFrom } = {}) => {
     if (!currentResumeId || !currentJdId || !currentQuestionSet) {
       setNoticeModal({
         isOpen: true,
@@ -606,54 +626,19 @@ export default function QuestionsPage() {
       return;
     }
 
-    trackEvents.paymentPage({
-      resume_id: currentResumeId,
-      jd_id: currentJdId,
-      question_set: currentQuestionSet,
-      payment_timestamp: new Date().toISOString(),
-    });
-
     setIsPaymentLoading(true);
     try {
-      const session = await getSession();
-      if (!session?.access_token) {
-        throw new Error('No active session');
-      }
-
-      const body = {
-        resume_id: currentResumeId,
-        jd_id: currentJdId,
-        question_set: currentQuestionSet,
-      };
-      if (retakeFrom) {
-        body.retake_from = retakeFrom;
-      }
-
-      const response = await fetch(`${getBackendOrigin()}/api/checkout`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
+      await scheduleInterview({
+        resumeId: currentResumeId,
+        jdId: currentJdId,
+        questionSet: currentQuestionSet,
+        retakeFrom,
       });
-
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || 'Failed to start checkout');
-      }
-
-      const checkoutUrl = result.checkout_url || result.payment_url;
-      if (!checkoutUrl) {
-        throw new Error('Checkout URL missing from server response');
-      }
-
-      window.location.href = checkoutUrl;
     } catch (error) {
-      console.error('Error starting checkout:', error);
+      console.error('Error scheduling interview:', error);
       setNoticeModal({
         isOpen: true,
-        title: 'Payment failed',
+        title: retakeFrom ? 'Retake failed' : 'Payment failed',
         message: error.message,
         variant: 'error',
       });
@@ -671,7 +656,7 @@ export default function QuestionsPage() {
       });
       return;
     }
-    await startCheckout();
+    await runScheduleInterview();
   };
 
   const handleRetakeInterview = async () => {
@@ -689,8 +674,28 @@ export default function QuestionsPage() {
       return;
     }
 
-    await startCheckout({ retakeFrom: originalInterview.id });
+    await runScheduleInterview({ retakeFrom: originalInterview.id });
   };
+
+  const scheduleButtonLabel = (() => {
+    if (isPaymentLoading) return 'Processing...';
+    if (interviewQuota?.free_remaining > 0) {
+      return `Schedule Interview (Free)`;
+    }
+    return 'Schedule Interview';
+  })();
+
+  const quotaBadgeText = (() => {
+    if (!interviewQuota) return null;
+    if (interviewQuota.free_remaining > 0) {
+      const n = interviewQuota.free_remaining;
+      return `${n} free interview${n !== 1 ? 's' : ''} remaining`;
+    }
+    if (interviewQuota.payment_required) {
+      return 'Payment required for next interview';
+    }
+    return null;
+  })();
   
   return (
     <>
@@ -709,6 +714,11 @@ export default function QuestionsPage() {
             <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-4">
               Review generated questions and sample answers for your interview preparation
             </p>
+            {quotaBadgeText && (
+              <p className="text-xs sm:text-sm font-medium text-[var(--color-primary)] mb-2">
+                {quotaBadgeText}
+              </p>
+            )}
             
 
             {/* Question Set Display */}
@@ -966,10 +976,13 @@ export default function QuestionsPage() {
                 {/* Retake Interview Button */}
                 <button
                   onClick={handleRetakeInterview}
-                  className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-gradient-to-r from-[var(--color-primary)] to-purple-600 hover:from-purple-600 hover:to-[var(--color-primary)] text-white shadow-lg hover:shadow-xl"
+                  disabled={isPaymentLoading}
+                  className={`inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-gradient-to-r from-[var(--color-primary)] to-purple-600 hover:from-purple-600 hover:to-[var(--color-primary)] text-white shadow-lg hover:shadow-xl ${
+                    isPaymentLoading ? 'opacity-60 cursor-not-allowed' : ''
+                  }`}
                 >
-                  <FiRefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
-                  Retake Interview
+                  <FiRefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${isPaymentLoading ? 'animate-spin' : ''}`} />
+                  {isPaymentLoading ? 'Processing...' : 'Retake Interview'}
                 </button>
                 
                 {/* View Dashboard Button */}
@@ -992,8 +1005,8 @@ export default function QuestionsPage() {
                     : 'bg-gradient-to-r from-[var(--color-primary)] to-purple-600 hover:from-purple-600 hover:to-[var(--color-primary)] text-white shadow-lg hover:shadow-xl'
                 }`}
               >
-                <FiCreditCard className="w-4 h-4 sm:w-5 sm:w-5" />
-                {isPaymentLoading ? 'Processing...' : 'Schedule Interview'}
+                <FiCreditCard className="w-4 h-4 sm:w-5 sm:h-5" />
+                {scheduleButtonLabel}
               </button>
             )}
           </motion.div>

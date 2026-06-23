@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -422,43 +421,22 @@ def fulfill_checkout_intent(intent_id: str, payment_payload: dict[str, Any]) -> 
             )
             return str(interview_id)
 
-        attempt_number = 1
-        if intent.get("retake_from"):
-            attempt_number = _compute_attempt_number(cur, user_id, resume_id, jd_id, question_set)
-
-        new_interview_id = str(uuid.uuid4())
-        cur.execute(
-            """
-            INSERT INTO interviews (
-                id, user_id, resume_id, jd_id, status, question_set,
-                retake_from, attempt_number, scheduled_at
-            )
-            VALUES (%s, %s, %s, %s, 'STARTED', %s, %s, %s, now())
-            RETURNING id
-            """,
-            (
-                new_interview_id,
-                user_id,
-                resume_id,
-                jd_id,
-                question_set,
-                intent.get("retake_from"),
-                attempt_number,
-            ),
-        )
+        from common.interview_start import create_started_interview_cur
 
         question_ids = intent.get("question_ids") or []
         if isinstance(question_ids, str):
             question_ids = json.loads(question_ids)
         question_ids = [str(qid) for qid in question_ids]
 
-        linked = _link_questions(cur, new_interview_id, question_ids)
-        if linked == 0 and question_ids:
-            linked = _fallback_link_questions(
-                cur, new_interview_id, user_id, resume_id, jd_id, question_set
-            )
-        if linked == 0:
-            logger.warning("No questions linked for interview %s intent %s", new_interview_id, intent_id)
+        new_interview_id = create_started_interview_cur(
+            cur,
+            user_id,
+            resume_id,
+            jd_id,
+            question_set,
+            retake_from=intent.get("retake_from"),
+            question_ids=question_ids,
+        )
 
         cur.execute(
             """

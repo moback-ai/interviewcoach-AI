@@ -64,12 +64,13 @@ Store in **AWS Secrets Manager** (`interviewcoach/prod/app`) or API `.env`. Do n
 |----------|------------------|
 | `INTERVIEW_SERVER_TTS` | `false` (use browser voices in UI) |
 | `INTERVIEW_RESPONSE_TIMEOUT_SECONDS` | `45` |
-| `QUESTION_GEN_FORCE_LOCAL` | `true` |
-| `JD_PARSE_USE_OLLAMA` | `false` |
+| `QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS` | `90` |
+| `JD_PARSE_OLLAMA_TIMEOUT_SECONDS` | `25` |
 | `WHISPER_MODEL` | `base` |
 | `WHISPER_BEAM_SIZE` | `1` |
 | `DB_POOL_MIN` | `5` |
 | `DB_POOL_MAX` | `40` |
+| `FREE_INTERVIEW_LIMIT` | `2` (lifetime free started interviews per user; 3rd+ requires Dodo checkout) |
 
 ### File storage security
 

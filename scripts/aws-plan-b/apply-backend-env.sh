@@ -32,8 +32,6 @@ path = sys.argv[1]
 with open(path) as f:
     data = json.load(f)
 updates = {
-    "QUESTION_GEN_FORCE_LOCAL": "true",
-    "JD_PARSE_USE_OLLAMA": "false",
     "INTERVIEW_SERVER_TTS": "false",
     "INTERVIEW_UNIFIED_TURNS": "true",
     "INTERVIEW_RESPONSE_TIMEOUT_SECONDS": "90",

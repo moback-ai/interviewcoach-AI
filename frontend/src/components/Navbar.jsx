@@ -157,7 +157,7 @@ function Navbar({ disableNavigation = false }) {
         {/* Right side icons */}
         <div className="flex items-center space-x-2 sm:space-x-3 relative">
           {/* Theme Toggle */}
-          <ThemeToggle />
+          <ThemeToggle disabled={disableNavigation} />
 
           {/* Desktop User Icon */}
           {user ? (
