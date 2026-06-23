@@ -1,55 +1,35 @@
 # Security scanning
 
-## Gates (before merge and before deploy)
+Production deploys run **Veracode only** — no other CI security scanners.
 
-| Gate | When | Job | Blocks |
-|------|------|-----|--------|
-| **PR security gate** | Every PR to `develop` / `main` | `pr-security-gate` | **Merge** if red |
-| **Deploy security gate** | Every Deploy · Production run | `security_gate` | **Deploy** if red |
+## Veracode on deploy
 
-Both use [.github/actions/security-gate](../.github/actions/security-gate/action.yml):
+Every **Deploy · Production** run (after admin approves the `production` environment):
 
-| Check | Frontend changed | Backend changed | Always |
-|-------|------------------|-----------------|--------|
-| Gitleaks (secrets) | | | yes |
-| Merge conflict vs `develop` | | | PR only |
-| ESLint + npm audit + build + login bundle | yes | | |
-| pytest + pip-audit + Bandit | | yes | |
+1. Packages `frontend`, `backend`, and `scripts`
+2. Uploads to Veracode
+3. Starts a policy scan in sandbox `develop`
+4. Continues to build and deploy servers
 
-At deploy time, scans run for boxes in the deploy plan (`frontend` / `backend` / `all`).
+### Setup (one time)
 
----
+1. Veracode account with API credentials
+2. GitHub → **Settings → Secrets → Actions**:
+   - `VERACODE_API_ID`
+   - `VERACODE_API_KEY`
 
-## Weekly / manual full scan
+Deploy **fails** if these secrets are missing.
 
-**Actions → Security → Run workflow** (or Mondays 06:00 UTC):
+### Results
 
-| Tool | Purpose |
-|------|---------|
-| CodeQL | SAST (JS + Python) |
-| Semgrep | OWASP-style rules |
-| Trivy | HIGH/CRITICAL CVEs |
-| Playwright | Login smoke tests |
-| npm audit / pip-audit / Bandit | Same as PR gate, full repo |
+- Upload status: GitHub Actions log for **Veracode scan**
+- Full report: [Veracode portal](https://analysiscenter.veracode.com/) (often 15–60 min after upload)
 
----
+## What was removed
 
-## Veracode (optional — manual)
+No automatic PR scans (Gitleaks, CodeQL, Trivy, Semgrep, npm/pip audit, etc.).  
+No separate **Security** workflow.
 
-1. Add secrets `VERACODE_API_ID`, `VERACODE_API_KEY`
-2. **Actions → Veracode Scan → Run workflow**
+## Reporting vulnerabilities
 
----
-
-## Local scans
-
-```bash
-cd frontend && npm ci --legacy-peer-deps && npm audit --audit-level=high && npm run lint
-npm run build && bash ../scripts/verify-frontend-login-bundle.sh dist
-
-pip install -r backend/requirements.txt bandit pip-audit pytest
-pip-audit && bandit -c .github/bandit.yml -r backend
-python -m pytest backend/tests/ -q
-
-gitleaks detect --source . --config .gitleaks.toml
-```
+See [SECURITY.md](../SECURITY.md).

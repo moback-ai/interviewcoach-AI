@@ -18,4 +18,4 @@
 
 ## Security
 
-Scans run on every PR. See [docs/SECURITY_SCANNING.md](../docs/SECURITY_SCANNING.md).
+**Veracode** runs on every production deploy. See [docs/SECURITY_SCANNING.md](../docs/SECURITY_SCANNING.md).
