@@ -11,7 +11,6 @@ Automated security checks run on **PRs** (quick) and **weekly / manual** (full).
 | **ESLint** | Frontend lint on changed files | `pr-quick` |
 | **pytest** | Backend unit tests (if backend changed) | `pr-quick` |
 | **Gitleaks** | Secrets committed to git | `pr-quick` |
-| **actionlint** | GitHub Actions workflow syntax | `pr-quick` (if workflows changed) / `full-scan` |
 
 ### Weekly (Mon 06:00 UTC) or manual dispatch (full scan)
 
@@ -23,7 +22,6 @@ Automated security checks run on **PRs** (quick) and **weekly / manual** (full).
 | **CodeQL** | SQL injection, XSS, auth bugs (JS + Python) | `codeql` |
 | **Trivy** | CVEs in dependencies and misconfigurations | `full-scan` |
 | **OSV-Scanner** | Cross-ecosystem dependency CVEs (npm + pip) | `osv-scanner` |
-| **actionlint** | GitHub Actions workflow syntax and best practices | `full-scan` |
 | **Semgrep** | OWASP-style patterns (SAST) | `full-scan` |
 | **Login bundle guard** | Broken login after bad Vite chunk splits | `full-scan` |
 | **Playwright** | `/login` and `/forgot-password` smoke tests | `full-scan` |
