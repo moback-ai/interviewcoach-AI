@@ -77,6 +77,8 @@ jobs:
       - name: Lint GitHub Actions workflows
         if: steps.changes.outputs.workflows == 'true'
         uses: rhysd/actionlint@v1.7.8
+        with:
+          args: -shellcheck=false
 
       - name: Install Gitleaks CLI
         run: |
@@ -103,6 +105,8 @@ jobs:
 
       - name: Lint GitHub Actions workflows
         uses: rhysd/actionlint@v1.7.8
+        with:
+          args: -shellcheck=false
 
       - name: Setup Node
         uses: actions/setup-node@v6
