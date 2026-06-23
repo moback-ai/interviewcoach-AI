@@ -84,7 +84,7 @@ jobs:
     steps:
       - name: Resolve from event
         id: resolve
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           INPUT_REF: ${{ github.event.inputs.git_ref }}
           INPUT_SOURCE: ${{ github.event.inputs.source_branch }}
@@ -1371,7 +1371,7 @@ jobs:
           success()
           && startsWith(needs.resolve_context.outputs.source_branch, 'develop/')
           && needs.resolve_context.outputs.source_branch != 'develop'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const owner = context.repo.owner;
@@ -1445,7 +1445,7 @@ jobs:
           failure()
           && startsWith(needs.resolve_context.outputs.source_branch, 'develop/')
           && needs.resolve_context.outputs.source_branch != 'develop'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const owner = context.repo.owner;
