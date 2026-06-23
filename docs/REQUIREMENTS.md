@@ -51,8 +51,7 @@ This document captures what was requested across prior setup sessions, and what 
 
 | Requirement | Status |
 |-------------|--------|
-| CI security scans on every PR | **Security · PR quick check** (lint / pytest / gitleaks) |
-| Full security scan weekly or manual | **Security** workflow `full-scan` + CodeQL |
+| CI security scans | **Veracode** on Deploy · Production (needs API secrets) |
 | Optional Veracode | **Security · Veracode (manual)** |
 | Playwright smoke: login page loads | `frontend/e2e/login.spec.js` |
 | Login bundle must not break after chunk splits | `scripts/verify-frontend-login-bundle.sh` |
