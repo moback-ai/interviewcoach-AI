@@ -1,7 +1,6 @@
 name: Deploy · Auto (develop)
 
-# Merged PR on develop → dispatches deploy.yml → light quality gate → production environment approval (admin).
-# PR GitHub "Approve" review is not required before merge; admins approve in the production environment.
+# Merged PR on develop → dispatches deploy.yml immediately → admin approves production → deploy.
 
 on:
   # Only integration merges — feature work runs Security on the PR, not deploy.
@@ -102,7 +101,7 @@ jobs:
 
             let pullRequest;
             let reviewNotes = '';
-            const approvedBy = 'develop-merge-quality-gate';
+            const approvedBy = 'develop-auto-deploy';
 
             if (isFeatureBranch) {
               const openPulls = await github.rest.pulls.list({
@@ -119,7 +118,7 @@ jobs:
                 return;
               }
               pullRequest = openPulls.data[0];
-              reviewNotes = `Feature-branch deploy for open PR #${pullRequest.number} (light gate + production approval).`;
+              reviewNotes = `Feature-branch deploy for open PR #${pullRequest.number} (production approval only).`;
             } else {
               const commitMessage =
                 context.payload.head_commit?.message || `workflow_dispatch ${ref}`;
@@ -156,7 +155,7 @@ jobs:
                 return;
               }
 
-              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} (light gate + production environment approval).`;
+              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} (production environment approval).`;
             }
 
             const deployKind = isFeatureBranch ? 'feature-branch' : 'develop-integration';
@@ -172,9 +171,7 @@ jobs:
               .addBreak()
               .addRaw(`SHA: \`${deploySha}\``)
               .addBreak()
-              .addRaw(`Gate: light pre-deploy check in deploy.yml, then **production** environment approval (@govardhanreddy66 / @KFKishore23).`)
-              .addBreak()
-              .addRaw(`PR GitHub Approve review is not required before merge.`)
+              .addRaw(`Next: admin approves **production** in deploy.yml (@govardhanreddy66 / @KFKishore23), then deploy runs.`)
               .write();
 
   dispatch_production_deploy:
@@ -214,5 +211,5 @@ jobs:
               .addHeading('Production deploy dispatched')
               .addRaw(`deploy.yml started for \`${ref}\` @ \`${sha}\`.`)
               .addBreak()
-              .addRaw(`Waiting for light quality gate + **production** environment approval in deploy.yml (admin).`)
+              .addRaw(`Open deploy.yml → approve **production** → servers update.`)
               .write();

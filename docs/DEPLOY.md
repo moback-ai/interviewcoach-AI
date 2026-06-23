@@ -23,9 +23,9 @@ Avoid direct pushes to `develop` and avoid many small merges — each merge trig
 ## Normal release — Option A (no manual button)
 
 1. Open PR: `develop/<your-feature>` → **`develop`**
-2. Get **admin approval** on the PR (@govardhanreddy66 or @KFKishore23) — **required before merge** or auto-deploy will fail
+2. **Security · PR quick check** runs on the PR (lint / pytest / gitleaks on changed files only).
 3. **Merge** the PR into `develop`
-4. **Deploy · Auto (develop)** dispatches **Deploy · Production** (light gate: conflicts + pytest).
+4. **Deploy · Auto (develop)** dispatches **Deploy · Production** immediately (~30 sec).
 5. Admin approves **`production`** environment in **Deploy · Production**.
 6. Wait for green (~10–15 min). Failed deploys **roll back** automatically.
 7. Check:
@@ -93,25 +93,15 @@ Monthly sync can also open this PR automatically (`Maintenance · Scheduled`).
 
 ---
 
-## Pre-deploy quality gate (light — blocks bad releases)
+## Security scans (minimal on PR)
 
-Runs **once** in **Deploy · Production** before admin approves the `production` environment.
+| When | What runs |
+|------|-----------|
+| **Every PR** | Lint (frontend if changed), pytest (backend if changed), Gitleaks |
+| **Weekly (Mon) or manual** | Full scan: CodeQL, Trivy, Semgrep, e2e, npm/pip audit, Bandit |
 
-| Check | What it does |
-|-------|----------------|
-| Merge conflicts | Fails if the deploy ref would conflict with `develop` |
-| Backend tests | `pytest backend/tests/` |
+No Security workflow on push to `develop` — merge goes straight to auto-deploy.
 
-**Not repeated here** (already on every PR via **Security**): frontend lint, production build, login bundle check, e2e smoke, Bandit, Trivy, etc.
-
-**Auto-deploy flow:** merge PR → **Deploy · Auto (develop)** dispatches **Deploy · Production** → light gate → admin approves `production` → deploy (~10–15 min).
-
----
-
-## Security scans
-
-Automatic on every PR to `develop` (separate from the deploy gate).
-
-Manual: **Actions** → **Security** → Run workflow.
+Manual full scan: **Actions** → **Security** → Run workflow.
 
 Details: [SECURITY_SCANNING.md](SECURITY_SCANNING.md)

@@ -43,7 +43,7 @@
 
 - Work on `develop/<your-feature>` → PR into **`develop`**
 - **Do not push directly to `develop`**
-- Merge PR into **`develop`** (no direct push) → auto-deploy runs **quality gate**, then **production** approval (**@govardhanreddy66** / **@KFKishore23** in GitHub Actions)
+- Merge PR into **`develop`** (no direct push) → **Deploy · Auto** dispatches deploy → **production** approval (**@govardhanreddy66** / **@KFKishore23** in GitHub Actions)
 - PR **GitHub Approve** review before merge is **not** required
 - Production deploys from **`develop` only** — `main` is not deployed
 - Manual deploy: **Actions → Deploy · Production** → `git_ref` = `develop` → admin approves **production** environment
