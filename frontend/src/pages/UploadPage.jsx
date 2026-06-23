@@ -12,7 +12,7 @@ import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
 import { getSession } from '../lib/authClient';
-import useBodyScrollLock from '../hooks/useBodyScrollLock';
+import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 
 function UploadPage() {
   const navigate = useNavigate();
@@ -48,8 +48,6 @@ function UploadPage() {
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
-
-  useBodyScrollLock(loading || successModal.isOpen);
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -334,12 +332,9 @@ function UploadPage() {
 
       const generationDebug = questionsResult.debug || {};
       const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-      const usedLocalFallback = generationDebug.generator === 'local_fallback';
-      const generationWarning = usedLocalFallback
-        ? 'The live backend fell back to template-based generation because Ollama was unavailable or the configured model was missing.'
-        : fallbackAnswerCount > 0
-          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-          : '';
+      const generationWarning = fallbackAnswerCount > 0
+        ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+        : '';
 
       // Step 4: Save questions to database via edge function
       console.log('[DEBUG] Step 4: Saving questions to database...');
@@ -442,7 +437,6 @@ function UploadPage() {
           resume_url: resumeUrl,
           job_title: jobTitle,
           job_description: jobDescription,
-          prefer_local: false,
           question_counts: {
             beginner: easyQuestions,
             medium: mediumQuestions,
@@ -618,7 +612,8 @@ function UploadPage() {
   // Close success modal and go to the new question set (View Questions only)
   const handleNavigateToQuestions = () => {
     setSuccessModal({ isOpen: false, title: '', message: '', details: null });
-    
+    unlockBodyScroll();
+
     if (lastCreatedIds.resumeId && lastCreatedIds.jdId && lastCreatedIds.questionSet) {
       navigate(`/questions?resume_id=${lastCreatedIds.resumeId}&jd_id=${lastCreatedIds.jdId}&question_set=${lastCreatedIds.questionSet}`);
     } else {
@@ -1090,7 +1085,10 @@ function UploadPage() {
       {/* Success Modal */}
       <SuccessModal
         isOpen={successModal.isOpen}
-        onClose={() => setSuccessModal({ isOpen: false, title: '', message: '', details: null })}
+        onClose={() => {
+          unlockBodyScroll();
+          setSuccessModal({ isOpen: false, title: '', message: '', details: null });
+        }}
         title={successModal.title}
         message={successModal.message}
         details={successModal.details}

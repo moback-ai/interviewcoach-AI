@@ -204,8 +204,6 @@ Monthly estimate (on-demand):
   ssh -i ~/.ssh/interviewcoach-deploy.pem ubuntu@${AI_PUBLIC_IP}
   bash scripts/server-repair.sh
   # Append to app .env:
-  QUESTION_GEN_FORCE_LOCAL=true
-  JD_PARSE_USE_OLLAMA=false
   INTERVIEW_SERVER_TTS=false
   INTERVIEW_RESPONSE_TIMEOUT_SECONDS=45
   OLLAMA_MODEL=${OLLAMA_MODEL}
