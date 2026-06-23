@@ -1,5 +1,9 @@
 """
-Start/stop InterviewCoach EC2 + RDS on a daily schedule (10am–8pm IST).
+Start/stop InterviewCoach EC2 + RDS on a weekday schedule (Mon–Fri 10:00–19:30 IST).
+
+Weekend: Sat/Sun 00:05 IST force-stop schedules keep instances off.
+Start runs Mon–Fri only (no weekend starts).
+
 Invoked by EventBridge Scheduler with {"action": "start"} or {"action": "stop"}.
 """
 import json
