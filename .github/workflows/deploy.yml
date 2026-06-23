@@ -1,5 +1,8 @@
 name: Deploy · Production
 
+# Single workflow on merge to develop: resolve → approve production → deploy.
+# No separate Deploy · Auto or Security run on push to develop.
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
@@ -9,6 +12,9 @@ env:
   NODE_MAJOR: 24
 
 on:
+  push:
+    branches:
+      - develop
   workflow_dispatch:
     inputs:
       git_ref:
@@ -54,34 +60,127 @@ on:
           - ai
           - database
 
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: deploy-production-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  quality_gate:
-    name: Quality gate (light)
+  resolve_context:
+    name: Resolve deploy context
     runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      git_ref: ${{ steps.resolve.outputs.git_ref }}
+      source_branch: ${{ steps.resolve.outputs.source_branch }}
+      approved_by: ${{ steps.resolve.outputs.approved_by }}
+      branch_details: ${{ steps.resolve.outputs.branch_details }}
+      code_review_notes: ${{ steps.resolve.outputs.code_review_notes }}
+      version_audit: ${{ steps.resolve.outputs.version_audit }}
+      deploy_target: ${{ steps.resolve.outputs.deploy_target }}
     steps:
-      - name: Gate · Checkout (required for local composite action)
-        uses: actions/checkout@v6
+      - name: Resolve from event
+        id: resolve
+        uses: actions/github-script@v7
+        env:
+          INPUT_REF: ${{ github.event.inputs.git_ref }}
+          INPUT_SOURCE: ${{ github.event.inputs.source_branch }}
+          INPUT_APPROVED: ${{ github.event.inputs.approved_by }}
+          INPUT_BRANCH_DETAILS: ${{ github.event.inputs.branch_details }}
+          INPUT_REVIEW_NOTES: ${{ github.event.inputs.code_review_notes }}
+          INPUT_VERSION_AUDIT: ${{ github.event.inputs.version_audit }}
+          INPUT_DEPLOY_TARGET: ${{ github.event.inputs.deploy_target }}
+          HEAD_COMMIT_MSG: ${{ github.event.head_commit.message }}
         with:
-          ref: ${{ github.event.inputs.git_ref }}
-          fetch-depth: 0
-      - name: Gate · Scan, test, and conflict check
-        uses: ./.github/actions/pre-deploy-quality-gate
-        with:
-          git_ref: ${{ github.event.inputs.git_ref }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const setManual = () => {
+              core.setOutput('proceed', 'true');
+              core.setOutput('git_ref', process.env.INPUT_REF || 'develop');
+              core.setOutput('source_branch', process.env.INPUT_SOURCE || 'develop');
+              core.setOutput('approved_by', process.env.INPUT_APPROVED || '');
+              core.setOutput('branch_details', process.env.INPUT_BRANCH_DETAILS || '');
+              core.setOutput('code_review_notes', process.env.INPUT_REVIEW_NOTES || '');
+              core.setOutput('version_audit', process.env.INPUT_VERSION_AUDIT !== 'false' ? 'true' : 'false');
+              core.setOutput('deploy_target', process.env.INPUT_DEPLOY_TARGET || 'auto');
+            };
+
+            if (context.eventName === 'workflow_dispatch') {
+              setManual();
+              return;
+            }
+
+            const msg = process.env.HEAD_COMMIT_MSG || '';
+            if (!/Merge pull request|\(#[0-9]+\)/i.test(msg)) {
+              core.setOutput('proceed', 'false');
+              core.info('Skipped: direct push to develop — merge a PR to deploy.');
+              return;
+            }
+
+            const deploySha = context.sha;
+            const ref = 'develop';
+            let pullRequest;
+            const mergeMatch = msg.match(/Merge pull request #(\d+)/i);
+            if (mergeMatch) {
+              const { data } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: Number(mergeMatch[1]),
+              });
+              if (data.base.ref === 'develop' && data.merged_at) {
+                pullRequest = data;
+              }
+            }
+            if (!pullRequest) {
+              const associated = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner,
+                repo,
+                commit_sha: deploySha,
+              });
+              pullRequest = associated.data
+                .filter((pr) => pr.base.ref === 'develop' && pr.merged_at)
+                .sort((a, b) => new Date(b.merged_at) - new Date(a.merged_at))[0];
+            }
+            if (!pullRequest) {
+              core.setFailed('develop deploy requires a merged PR into develop.');
+              return;
+            }
+
+            core.setOutput('proceed', 'true');
+            core.setOutput('git_ref', deploySha);
+            core.setOutput('source_branch', ref);
+            core.setOutput('approved_by', 'develop-auto-deploy');
+            core.setOutput('branch_details', `[develop-integration] branch=${ref}`);
+            core.setOutput('code_review_notes', `Merged PR #${pullRequest.number} — approve production to deploy.`);
+            core.setOutput('version_audit', 'true');
+            core.setOutput('deploy_target', 'auto');
+
+            await core.summary
+              .addHeading('Deploy · merged to develop')
+              .addRaw(`PR #${pullRequest.number} @ \`${deploySha.substring(0, 7)}\``)
+              .addBreak()
+              .addRaw('Approve **production** below to deploy.')
+              .write();
 
   authorize_and_prepare:
     name: Authorize
     runs-on: ubuntu-latest
-    needs: [quality_gate]
+    needs: [resolve_context]
+    if: needs.resolve_context.outputs.proceed == 'true'
     outputs:
       frontend: ${{ steps.targets.outputs.frontend }}
       backend: ${{ steps.targets.outputs.backend }}
       ai: ${{ steps.targets.outputs.ai }}
       database: ${{ steps.targets.outputs.database }}
       has_targets: ${{ steps.targets.outputs.has_targets }}
-      requested_ref: ${{ github.event.inputs.git_ref }}
-      deploy_target: ${{ github.event.inputs.deploy_target }}
-      version_audit: ${{ github.event.inputs.version_audit }}
+      requested_ref: ${{ needs.resolve_context.outputs.git_ref }}
+      deploy_target: ${{ needs.resolve_context.outputs.deploy_target }}
+      version_audit: ${{ needs.resolve_context.outputs.version_audit }}
       deploy_frontend_name: ${{ steps.targets.outputs.deploy_frontend_name }}
       deploy_backend_name: ${{ steps.targets.outputs.deploy_backend_name }}
       deploy_ai_name: ${{ steps.targets.outputs.deploy_ai_name }}
@@ -104,19 +203,19 @@ jobs:
       - name: Authorize · Checkout Selected Branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.git_ref }}
+          ref: ${{ needs.resolve_context.outputs.git_ref }}
           fetch-depth: 20
 
       - name: Authorize · Capture Branch Details and Code Review Notes
         run: |
           {
-            echo "- Requested ref: \`${{ github.event.inputs.git_ref }}\`"
-            echo "- Source branch: \`${{ github.event.inputs.source_branch }}\`"
-            echo "- Approved by: \`${{ github.event.inputs.approved_by || 'manual dispatch' }}\`"
-            echo "- Deploy target: \`${{ github.event.inputs.deploy_target }}\`"
+            echo "- Requested ref: \`${{ needs.resolve_context.outputs.git_ref }}\`"
+            echo "- Source branch: \`${{ needs.resolve_context.outputs.source_branch }}\`"
+            echo "- Approved by: \`${{ needs.resolve_context.outputs.approved_by || 'manual dispatch' }}\`"
+            echo "- Deploy target: \`${{ needs.resolve_context.outputs.deploy_target }}\`"
             echo "- Failed deploys roll back to the last stable release; failed code is not promoted."
-            echo "- Branch details: ${{ github.event.inputs.branch_details || 'Not provided' }}"
-            echo "- Code review notes: ${{ github.event.inputs.code_review_notes || 'Not provided' }}"
+            echo "- Branch details: ${{ needs.resolve_context.outputs.branch_details || 'Not provided' }}"
+            echo "- Code review notes: ${{ needs.resolve_context.outputs.code_review_notes || 'Not provided' }}"
             echo "- Requested by: \`${{ github.actor }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -125,7 +224,7 @@ jobs:
         uses: dorny/paths-filter@v4
         with:
           base: develop
-          ref: ${{ github.event.inputs.git_ref }}
+          ref: ${{ needs.resolve_context.outputs.git_ref }}
           filters: |
             frontend:
               - 'frontend/**'
@@ -150,7 +249,7 @@ jobs:
           AI_HOST: ${{ secrets.AI_HOST }}
           DB_HOST: ${{ secrets.DB_HOST }}
         run: |
-          target="${{ github.event.inputs.deploy_target }}"
+          target="${{ needs.resolve_context.outputs.deploy_target }}"
           changed_frontend="${{ steps.changes.outputs.frontend }}"
           changed_backend="${{ steps.changes.outputs.backend }}"
           changed_ai="${{ steps.changes.outputs.ai }}"
@@ -266,7 +365,7 @@ jobs:
   deployment_approval:
     name: Approve production
     runs-on: ubuntu-latest
-    needs: [authorize_and_prepare, quality_gate]
+    needs: [resolve_context, authorize_and_prepare]
     environment:
       name: production
     steps:
@@ -274,7 +373,7 @@ jobs:
         env:
           ADMINS: govardhanreddy66,KFKishore23
         run: |
-          APPROVED_BY="${{ github.event.inputs.approved_by }}"
+          APPROVED_BY="${{ needs.resolve_context.outputs.approved_by }}"
           ACTOR="${{ github.triggering_actor || github.actor }}"
           IFS=',' read -r -a ADMINS <<< "$ADMINS"
 
@@ -1205,6 +1304,7 @@ jobs:
     name: ${{ needs.authorize_and_prepare.outputs.deployed_summary_name }}
     runs-on: ubuntu-latest
     needs:
+      - resolve_context
       - authorize_and_prepare
       - build_and_audit
       - deploy_prepare
@@ -1269,14 +1369,14 @@ jobs:
       - name: Finalize · Feature branch deploy succeeded (admin merge gate)
         if: >-
           success()
-          && startsWith(github.event.inputs.source_branch, 'develop/')
-          && github.event.inputs.source_branch != 'develop'
+          && startsWith(needs.resolve_context.outputs.source_branch, 'develop/')
+          && needs.resolve_context.outputs.source_branch != 'develop'
         uses: actions/github-script@v7
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const sourceBranch = '${{ github.event.inputs.source_branch }}';
+            const sourceBranch = '${{ needs.resolve_context.outputs.source_branch }}';
             const sha = '${{ needs.build_and_audit.outputs.release_sha }}';
             const admins = ['govardhanreddy66', 'KFKishore23'];
 
@@ -1343,14 +1443,14 @@ jobs:
       - name: Finalize · Feature branch deploy failed (block merge)
         if: >-
           failure()
-          && startsWith(github.event.inputs.source_branch, 'develop/')
-          && github.event.inputs.source_branch != 'develop'
+          && startsWith(needs.resolve_context.outputs.source_branch, 'develop/')
+          && needs.resolve_context.outputs.source_branch != 'develop'
         uses: actions/github-script@v7
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const sourceBranch = '${{ github.event.inputs.source_branch }}';
+            const sourceBranch = '${{ needs.resolve_context.outputs.source_branch }}';
 
             const pulls = await github.rest.pulls.list({
               owner,
