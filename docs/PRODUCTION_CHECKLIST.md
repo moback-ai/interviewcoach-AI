@@ -12,7 +12,7 @@ Use this before/after every production release. Details: [DEPLOY.md](DEPLOY.md),
 |------|--------|
 | AWS monthly budget alert | **$650** |
 | Expected actual spend | **~$350–430** (Plan B + 10h/day EC2) |
-| Server uptime | **10:00–20:00 IST only** (`scripts/aws-plan-b/setup-daily-schedule.sh`) |
+| Server uptime | **Mon–Fri 10:00–19:30 IST** (`scripts/aws-plan-b/setup-daily-schedule.sh`) |
 | Region | **ap-south-1** |
 
 ---
@@ -108,7 +108,7 @@ systemctl is-active ollama
 ### Before merge
 
 - [ ] All release changes in **one PR** → `develop`
-- [ ] **Security** workflow green on the PR
+- [ ] **Security · PR quick check** green on the PR (lint / pytest / gitleaks)
 - [ ] **Admin Approve** on PR (@govardhanreddy66 or @KFKishore23) — required for auto-deploy
 
 ### Option A — Auto (normal)
@@ -141,7 +141,7 @@ curl -s https://ugaanlabs.ai/api/health | python3 -m json.tool
 | Check | Expected |
 |-------|----------|
 | `status` | `healthy` |
-| `ollama.ready` | `true` (during 10am–8pm IST when AI is up) |
+| `ollama.ready` | `true` (during Mon–Fri 10:00–19:30 IST when AI is up) |
 | Login page | https://ugaanlabs.ai/login — password field visible |
 | Interview | Pick **Ava / Mira / Noah** (browser voice), not Classic |
 
@@ -179,7 +179,7 @@ curl -s https://ugaanlabs.ai/api/health | python3 -m json.tool
 | `INTERVIEW_MAX_CONCURRENT` | Queue when too many live interviews |
 | `/api/generate-response-stream` | SSE + fallback POST |
 | `TRANSCRIBE_SERVICE_URL` | Optional Whisper on second host |
-| Daily EC2/RDS schedule | Stop/start 10am–8pm IST via `setup-daily-schedule.sh` |
+| Daily EC2/RDS schedule | Mon–Fri 10:00–19:30 IST via `setup-daily-schedule.sh`; weekends off |
 | Browser voice default (Ava) | No server TTS wait |
 
 ---

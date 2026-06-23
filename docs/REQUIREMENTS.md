@@ -27,12 +27,12 @@ This document captures what was requested across prior setup sessions, and what 
 | Requirement | Status |
 |-------------|--------|
 | Deploy **only from `develop` / `develop/*`** — never `main` | Done |
-| **Admin PR approval** before any deploy dispatch | `Deploy · Auto (develop)` |
+| **Admin PR approval** before merge to `develop` | GitHub PR review |
 | **Production environment approval** (second admin) | `Deploy · Production` |
 | Failed deploy **rolls back** to last stable — failed code never stays live | `deploy.yml` rollback jobs |
-| **Auto deploy** after approved merge to `develop` | `Deploy · Auto (develop)` on push |
+| **Auto deploy** after approved merge to `develop` | `Deploy · Production` on push to `develop` (single run) |
 | **Manual deploy** when auto did not run or re-deploy same SHA | `Deploy · Production` → **Run workflow** |
-| **Pre-deploy quality gate** — reject deploy if lint/build/tests/conflicts fail | `.github/actions/pre-deploy-quality-gate` in `deploy.yml` + `auto-deploy-develop.yml` |
+| **PR quick check** — lint / pytest / gitleaks on changed files before merge | `Security` workflow `pr-quick` job |
 | Simple deploy documentation (not long checklists) | [DEPLOY.md](DEPLOY.md) |
 | Workflows named consistently | [.github/workflows/README.md](../.github/workflows/README.md) |
 
@@ -51,7 +51,8 @@ This document captures what was requested across prior setup sessions, and what 
 
 | Requirement | Status |
 |-------------|--------|
-| CI security scans on every PR | **Security** workflow (CodeQL, Trivy, Semgrep, Gitleaks, audits) |
+| CI security scans on every PR | **Security · PR quick check** (lint / pytest / gitleaks) |
+| Full security scan weekly or manual | **Security** workflow `full-scan` + CodeQL |
 | Optional Veracode | **Security · Veracode (manual)** |
 | Playwright smoke: login page loads | `frontend/e2e/login.spec.js` |
 | Login bundle must not break after chunk splits | `scripts/verify-frontend-login-bundle.sh` |
@@ -82,8 +83,8 @@ This document captures what was requested across prior setup sessions, and what 
 
 ```mermaid
 flowchart LR
-  A[PR approved and merged to develop] --> B[Deploy · Auto develop]
-  B --> C[Deploy · Production]
+  A[PR quick check on PR] --> B[Admin approves and merges to develop]
+  B --> C[Deploy · Production single run]
   C --> D{Approve production env}
   D --> E[Deploy boxes + rollback on fail]
   M[Manual: Deploy · Production Run workflow] --> C

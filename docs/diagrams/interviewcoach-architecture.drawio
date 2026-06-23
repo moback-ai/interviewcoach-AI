@@ -1,0 +1,173 @@
+<mxfile host="app.diagrams.net" modified="2026-06-23T00:00:00.000Z" agent="InterviewCoach" version="22.1.0" type="device">
+  <diagram id="aws-vpc" name="AWS VPC Deployment">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Title -->
+        <mxCell id="title" value="InterviewCoach AI — AWS Production Architecture (Plan B)&#xa;Region: ap-south-1 | VPC: 172.31.0.0/16 | URL: ugaanlabs.ai" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;fontSize=16;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="200" y="20" width="900" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Internet -->
+        <mxCell id="internet" value="Public Internet&#xa;Users / Browsers" style="ellipse;shape=cloud;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="640" y="70" width="160" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- External services -->
+        <mxCell id="smtp" value="SMTP&#xa;:587" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="100" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="dodo" value="Dodo Payments&#xa;:443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="40" y="270" width="100" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="gh" value="GitHub Actions&#xa;SSH Deploy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="40" y="340" width="100" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- AWS Region -->
+        <mxCell id="region" value="AWS Region: ap-south-1 (Mumbai)" style="swimlane;startSize=30;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="180" y="170" width="1180" height="900" as="geometry"/>
+        </mxCell>
+
+        <!-- IGW -->
+        <mxCell id="igw" value="Internet Gateway" style="shape=mxgraph.aws4.internet_gateway;fillColor=#F58534;strokeColor=#ffffff;" vertex="1" parent="region">
+          <mxGeometry x="480" y="50" width="60" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- VPC -->
+        <mxCell id="vpc" value="VPC Default — 172.31.0.0/16" style="swimlane;startSize=30;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="region">
+          <mxGeometry x="40" y="130" width="1100" height="730" as="geometry"/>
+        </mxCell>
+
+        <!-- Subnet A -->
+        <mxCell id="subnetA" value="Public Subnet A&#xa;subnet-090e9d10afc24205f" style="swimlane;startSize=40;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="vpc">
+          <mxGeometry x="30" y="50" width="320" height="320" as="geometry"/>
+        </mxCell>
+        <mxCell id="fe" value="EC2 Frontend&#xa;t3.small&#xa;interviewcoach-frontend&#xa;i-0d8d448bff2dceb87" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1" vertex="1" parent="subnetA">
+          <mxGeometry x="20" y="60" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="nginx" value="nginx :80 / :443&#xa;Static React + Reverse Proxy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#82b366;" vertex="1" parent="subnetA">
+          <mxGeometry x="20" y="130" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="feip" value="Public EIP: 3.110.248.130&#xa;Private IP: 172.31.2.39&#xa;SG: sg-02d77877092e85c35" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;" vertex="1" parent="subnetA">
+          <mxGeometry x="20" y="190" width="280" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="fesched" value="Schedule: Mon–Fri 10:00–19:30 IST" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;fontColor=#666666;" vertex="1" parent="subnetA">
+          <mxGeometry x="20" y="260" width="200" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- Subnet B -->
+        <mxCell id="subnetB" value="Public Subnet B&#xa;subnet-00662d4d6964a6ee4" style="swimlane;startSize=40;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="vpc">
+          <mxGeometry x="380" y="50" width="380" height="420" as="geometry"/>
+        </mxCell>
+        <mxCell id="api" value="EC2 API&#xa;c6i.large&#xa;interviewcoach-api&#xa;i-084ba7dcceefd1636" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="subnetB">
+          <mxGeometry x="20" y="60" width="340" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="gunicorn" value="gunicorn Flask :5000&#xa;pm2 backend" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="subnetB">
+          <mxGeometry x="20" y="130" width="340" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="apiip" value="Public: 15.207.92.161 | Private: 172.31.36.78" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;" vertex="1" parent="subnetB">
+          <mxGeometry x="20" y="185" width="340" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="ai" value="EC2 AI&#xa;c6i.2xlarge&#xa;interviewcoach-backend&#xa;i-032833ba1cbb49b9b" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1" vertex="1" parent="subnetB">
+          <mxGeometry x="20" y="220" width="340" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ollama" value="Ollama :11434&#xa;llama3.2:3b" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="subnetB">
+          <mxGeometry x="20" y="290" width="160" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="whisper" value="Whisper pm2 :5001&#xa;(internal only)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;" vertex="1" parent="subnetB">
+          <mxGeometry x="200" y="290" width="160" height="45" as="geometry"/>
+        </mxCell>
+        <mxCell id="aiip" value="Public: 13.200.28.73 | Private: 172.31.46.208&#xa;SG: sg-0f83e275411e1a397" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=11;" vertex="1" parent="subnetB">
+          <mxGeometry x="20" y="345" width="340" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- RDS -->
+        <mxCell id="subnetDB" value="RDS Subnet Group (Private)" style="swimlane;startSize=30;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="vpc">
+          <mxGeometry x="790" y="50" width="280" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="rds" value="Amazon RDS PostgreSQL&#xa;interviewcoach-db&#xa;db.t3.medium :5432" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1" vertex="1" parent="subnetDB">
+          <mxGeometry x="40" y="50" width="200" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="rdsendpoint" value="interviewcoach-db.clmm8cymmic9&#xa;.ap-south-1.rds.amazonaws.com" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=10;" vertex="1" parent="subnetDB">
+          <mxGeometry x="20" y="140" width="240" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- Secrets -->
+        <mxCell id="secrets" value="AWS Secrets Manager&#xa;interviewcoach/prod/app&#xa;(DB, JWT, Ollama URLs)" style="shape=mxgraph.aws4.secrets_manager;fillColor=#759C3E;strokeColor=#ffffff;" vertex="1" parent="vpc">
+          <mxGeometry x="820" y="290" width="60" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="secretslbl" value="Secrets Manager" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontSize=11;" vertex="1" parent="vpc">
+          <mxGeometry x="780" y="355" width="140" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- Storage -->
+        <mxCell id="storage" value="EBS File Storage&#xa;/apps/storage&#xa;(resumes, audio, avatars)" style="shape=folder;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="vpc">
+          <mxGeometry x="820" y="400" width="160" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- Schedule -->
+        <mxCell id="lambda" value="EventBridge + Lambda&#xa;EC2/RDS Schedule&#xa;Mon–Fri 10:00–19:30 IST" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="vpc">
+          <mxGeometry x="820" y="510" width="160" height="60" as="geometry"/>
+        </mxCell>
+
+        <!-- Connections -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#0066CC;" edge="1" parent="region" source="internet" target="igw">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1lbl" value="HTTPS :443" style="edgeLabel;html=1;align=center;verticalAlign=middle;fontStyle=1" vertex="1" connectable="0" parent="e1">
+          <mxGeometry x="-0.2" relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#0066CC;" edge="1" parent="vpc" source="nginx" target="gunicorn">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2lbl" value="proxy /api/* :5000&#xa;172.31.36.78" style="edgeLabel;html=1;align=center;verticalAlign=middle;fontStyle=1" vertex="1" connectable="0" parent="e2">
+          <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint y="-10" as="offset"/></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#009900;" edge="1" parent="vpc" source="gunicorn" target="rds">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3lbl" value="PostgreSQL :5432" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="e3">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#CC6600;" edge="1" parent="vpc" source="gunicorn" target="ollama">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4lbl" value="OLLAMA :11434&#xa;172.31.46.208" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="e4">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#CC6600;dashed=1;" edge="1" parent="vpc" source="gunicorn" target="whisper">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5lbl" value="TRANSCRIBE :5001" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="e5">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#999999;dashed=1;" edge="1" parent="region" source="gunicorn" target="secrets">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6lbl" value="read config" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="e6">
+          <mxGeometry relative="1" as="geometry"><mxPoint as="offset"/></mxGeometry>
+        </mxCell>
+
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#999999;" edge="1" parent="region" source="gunicorn" target="smtp">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=1;strokeColor=#999999;" edge="1" parent="region" source="gunicorn" target="dodo">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend" value="Port / Security Summary&#xa;─────────────────────&#xa;Internet → Frontend: 443, 80&#xa;Frontend → API: 5000 (VPC)&#xa;API → RDS: 5432&#xa;API → Ollama: 11434 (API IP only)&#xa;API → Whisper: 5001 (VPC internal)&#xa;Frontend SG: sg-02d77877092e85c35&#xa;AI/API SG: sg-0f83e275411e1a397" style="text;html=1;strokeColor=#666666;fillColor=#ffffff;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=11;" vertex="1" parent="region">
+          <mxGeometry x="40" y="620" width="280" height="160" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
