@@ -20,17 +20,15 @@ Avoid direct pushes to `develop` and avoid many small merges — each merge trig
 
 ---
 
-## Normal release — Option A (no manual button)
+## Normal release
 
 1. Open PR: `develop/<your-feature>` → **`develop`**
-2. **Security · PR quick check** runs on the PR (lint / pytest / gitleaks on changed files only).
+2. Wait for **PR security gate** green (gitleaks + lint/tests/audits on changed code)
 3. **Merge** the PR into `develop`
-4. **Deploy · Production** starts automatically (**one workflow run**).
-5. Admin approves **`production`** environment in that same run.
-6. Wait for green (~10–15 min). Failed deploys **roll back** automatically.
-7. Check:
-   - https://ugaanlabs.ai/api/health → `"status":"healthy"`
-   - https://ugaanlabs.ai/login → password field visible
+4. **Deploy · Production** starts automatically
+5. Admin approves **`production`** environment
+6. **Security gate** runs again on the release commit, then deploy (~10–15 min)
+7. Verify https://ugaanlabs.ai/api/health and /login
 
 Do **not** merge PRs labeled `deploy-failed`.
 
@@ -93,15 +91,13 @@ Monthly sync can also open this PR automatically (`Maintenance · Scheduled`).
 
 ---
 
-## Security scans (minimal on PR)
+## Security scans (before merge and before deploy)
 
-| When | What runs |
-|------|-----------|
-| **Every PR** | Lint (frontend if changed), pytest (backend if changed), Gitleaks |
-| **Weekly (Mon) or manual** | Full scan: CodeQL, Trivy, Semgrep, e2e, npm/pip audit, Bandit |
+| When | Gate | What runs |
+|------|------|-----------|
+| **Every PR** | **PR security gate** (must pass to merge) | Gitleaks, merge-conflict check, lint, build, npm/pip audit, Bandit, pytest (on changed areas) |
+| **Before deploy** | **Security gate** in Deploy · Production | Same checks on the release commit (for boxes being deployed) |
+| **Weekly / manual** | Full Security workflow | CodeQL, Trivy, Semgrep, Playwright e2e |
+| **Manual** | **Veracode Scan** | One policy scan (needs API secrets) |
 
-No Security workflow on push to `develop` — merge goes straight to auto-deploy.
-
-Manual full scan: **Actions** → **Security** → Run workflow.
-
-Details: [SECURITY_SCANNING.md](SECURITY_SCANNING.md)
+Do **not** merge if **PR security gate** is red. Deploy is blocked if **Security gate** fails after production approval.
