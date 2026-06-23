@@ -1,6 +1,6 @@
 name: Deploy · Auto (develop)
 
-# Merged PR on develop → quality gate → dispatches deploy.yml → production environment approval (admin).
+# Merged PR on develop → dispatches deploy.yml → light quality gate → production environment approval (admin).
 # PR GitHub "Approve" review is not required before merge; admins approve in the production environment.
 
 on:
@@ -119,7 +119,7 @@ jobs:
                 return;
               }
               pullRequest = openPulls.data[0];
-              reviewNotes = `Feature-branch deploy for open PR #${pullRequest.number} (quality gate + production approval).`;
+              reviewNotes = `Feature-branch deploy for open PR #${pullRequest.number} (light gate + production approval).`;
             } else {
               const commitMessage =
                 context.payload.head_commit?.message || `workflow_dispatch ${ref}`;
@@ -156,7 +156,7 @@ jobs:
                 return;
               }
 
-              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} (quality gate + production environment approval).`;
+              reviewNotes = `Integration deploy for merged PR #${pullRequest.number} (light gate + production environment approval).`;
             }
 
             const deployKind = isFeatureBranch ? 'feature-branch' : 'develop-integration';
@@ -172,30 +172,15 @@ jobs:
               .addBreak()
               .addRaw(`SHA: \`${deploySha}\``)
               .addBreak()
-              .addRaw(`Gate: quality checks, then **production** environment approval (@govardhanreddy66 / @KFKishore23).`)
+              .addRaw(`Gate: light pre-deploy check in deploy.yml, then **production** environment approval (@govardhanreddy66 / @KFKishore23).`)
               .addBreak()
               .addRaw(`PR GitHub Approve review is not required before merge.`)
               .write();
 
-  pre_deploy_quality:
-    name: Quality gate
-    runs-on: ubuntu-latest
-    needs: [resolve_deploy]
-    steps:
-      - name: Gate · Checkout (required for local composite action)
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.resolve_deploy.outputs.deploy_sha }}
-          fetch-depth: 0
-      - name: Gate · Scan, test, and conflict check
-        uses: ./.github/actions/pre-deploy-quality-gate
-        with:
-          git_ref: ${{ needs.resolve_deploy.outputs.deploy_sha }}
-
   dispatch_production_deploy:
     name: Dispatch deploy
     runs-on: ubuntu-latest
-    needs: [resolve_deploy, pre_deploy_quality]
+    needs: [resolve_deploy]
     steps:
       - name: Dispatch deploy workflow
         uses: actions/github-script@v7
@@ -229,5 +214,5 @@ jobs:
               .addHeading('Production deploy dispatched')
               .addRaw(`deploy.yml started for \`${ref}\` @ \`${sha}\`.`)
               .addBreak()
-              .addRaw(`Quality gate passed. Waiting for **production** environment approval in deploy.yml (admin).`)
+              .addRaw(`Waiting for light quality gate + **production** environment approval in deploy.yml (admin).`)
               .write();
