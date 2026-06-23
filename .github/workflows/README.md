@@ -3,7 +3,7 @@
 | Workflow | When | Runs |
 |----------|------|------|
 | **Security** | PR only (quick check) | Lint / pytest / Gitleaks on changed files |
-| **Security** | Weekly Mon or manual | Full CodeQL, Trivy, Semgrep, e2e |
+| **Security** | Weekly Mon or manual | Full CodeQL, Trivy, OSV-Scanner, Semgrep, actionlint, e2e |
 | **Deploy · Production** | **Merge PR → develop** | **One run**: approve production → deploy |
 | **Deploy · Production** | Manual dispatch | Same single workflow |
 | **Maintenance · Scheduled** | Cron | Log cleanup, etc. |
