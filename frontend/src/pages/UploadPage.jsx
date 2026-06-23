@@ -12,7 +12,7 @@ import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
 import { getSession } from '../lib/authClient';
-import useBodyScrollLock from '../hooks/useBodyScrollLock';
+import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 
 function UploadPage() {
   const navigate = useNavigate();
@@ -48,8 +48,6 @@ function UploadPage() {
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
-
-  useBodyScrollLock(successModal.isOpen);
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -614,7 +612,8 @@ function UploadPage() {
   // Close success modal and go to the new question set (View Questions only)
   const handleNavigateToQuestions = () => {
     setSuccessModal({ isOpen: false, title: '', message: '', details: null });
-    
+    unlockBodyScroll();
+
     if (lastCreatedIds.resumeId && lastCreatedIds.jdId && lastCreatedIds.questionSet) {
       navigate(`/questions?resume_id=${lastCreatedIds.resumeId}&jd_id=${lastCreatedIds.jdId}&question_set=${lastCreatedIds.questionSet}`);
     } else {
@@ -1086,7 +1085,10 @@ function UploadPage() {
       {/* Success Modal */}
       <SuccessModal
         isOpen={successModal.isOpen}
-        onClose={() => setSuccessModal({ isOpen: false, title: '', message: '', details: null })}
+        onClose={() => {
+          unlockBodyScroll();
+          setSuccessModal({ isOpen: false, title: '', message: '', details: null });
+        }}
         title={successModal.title}
         message={successModal.message}
         details={successModal.details}
