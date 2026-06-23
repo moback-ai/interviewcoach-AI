@@ -19,19 +19,15 @@ Include:
 
 We aim to acknowledge reports within **3 business days**.
 
-## Automated checks (every PR / `develop` push)
+## Automated checks
 
-- **CodeQL** — JavaScript + Python SAST
-- **Semgrep** — OWASP-style rules
-- **Trivy** — CRITICAL/HIGH CVEs in repo files
-- **Gitleaks** — secrets in git history
-- **npm audit** (high+) and **pip-audit** (patched core deps)
-- **Bandit** — Python high-severity issues
-- **Playwright** — `/login` and `/forgot-password` smoke tests
-- **Login bundle guard** — prevents broken login deploys
+| When | Checks |
+|------|--------|
+| **Every PR** | Gitleaks, ESLint (frontend), pytest (backend) |
+| **Weekly / manual** | CodeQL, Semgrep, Trivy, Bandit, npm/pip audit, Playwright |
 
-## Optional commercial scanning
+## Veracode (one manual scan)
 
-**Veracode:** add `VERACODE_API_ID` and `VERACODE_API_KEY` secrets, then run **Veracode Scan (Manual)**.
+Add `VERACODE_API_ID` and `VERACODE_API_KEY` secrets, then run **Actions → Veracode Scan → Run workflow**.
 
-See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) for local commands and ML dependency risk notes.
+See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).

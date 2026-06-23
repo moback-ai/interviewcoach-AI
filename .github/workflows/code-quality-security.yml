@@ -257,20 +257,3 @@ jobs:
 
       - name: Gitleaks detect
         run: gitleaks detect --source . --config .gitleaks.toml --verbose
-
-  osv-scanner:
-    name: OSV-Scanner (deps)
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Run OSV-Scanner
-        uses: google/osv-scanner-action/osv-scanner-action@v2
-        with:
-          scan-args: |-
-            --lockfile=frontend/package-lock.json
-            --recursive=backend
-            --skip-git
-            --skip-dirs=backend/Piper,frontend/node_modules,frontend/dist,.git

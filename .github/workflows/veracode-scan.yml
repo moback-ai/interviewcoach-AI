@@ -1,14 +1,14 @@
-# Manual Veracode upload — requires org license and repository secrets:
-#   VERACODE_API_ID, VERACODE_API_KEY
+# One Veracode policy scan — manual only (requires org license).
+# Add repository secrets: VERACODE_API_ID, VERACODE_API_KEY
 # See docs/SECURITY_SCANNING.md
 
-name: Security · Veracode (manual)
+name: Veracode Scan
 
 on:
   workflow_dispatch:
     inputs:
       sandbox_name:
-        description: Veracode sandbox (optional)
+        description: Veracode sandbox name (leave default for develop)
         required: false
         default: develop
 
@@ -16,9 +16,10 @@ permissions:
   contents: read
 
 jobs:
-  veracode-upload:
-    name: Package and upload to Veracode
+  veracode:
+    name: Veracode policy scan
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -26,18 +27,18 @@ jobs:
       - name: Verify Veracode secrets
         run: |
           if [ -z "${{ secrets.VERACODE_API_ID }}" ] || [ -z "${{ secrets.VERACODE_API_KEY }}" ]; then
-            echo "::error::Missing VERACODE_API_ID or VERACODE_API_KEY repository secrets."
-            echo "Add secrets under Settings → Secrets and variables → Actions, then re-run."
+            echo "::error::Missing VERACODE_API_ID or VERACODE_API_KEY."
+            echo "GitHub → Settings → Secrets and variables → Actions → New repository secret"
             exit 1
           fi
 
-      - name: Build application archive
+      - name: Package application for Veracode
         run: |
           zip -r veracode-app.zip frontend backend scripts \
             -x "**/node_modules/**" "**/dist/**" "**/.git/**" "backend/Piper/**" "**/__pycache__/**"
           ls -lh veracode-app.zip
 
-      - name: Veracode Upload and Scan
+      - name: Upload and scan (Veracode)
         uses: veracode/veracode-uploadandscan-action@0.2.7
         with:
           vid: ${{ secrets.VERACODE_API_ID }}
@@ -47,3 +48,14 @@ jobs:
           createprofile: true
           version: ${{ github.sha }}
           sandboxname: ${{ github.event.inputs.sandbox_name }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## Veracode scan submitted"
+            echo "- App: \`interviewcoach-AI\`"
+            echo "- Version: \`${{ github.sha }}\`"
+            echo "- Sandbox: \`${{ github.event.inputs.sandbox_name }}\`"
+            echo ""
+            echo "Results appear in the [Veracode portal](https://analysiscenter.veracode.com/) when the scan completes (often 15–60 min)."
+          } >> "$GITHUB_STEP_SUMMARY"
