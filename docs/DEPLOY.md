@@ -1,43 +1,36 @@
-# Deploy (simple)
+# Deploy (application repo)
 
 Production: **https://ugaanlabs.ai**
 
-Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
-
-**Production checklist ($650, Plan B, Mon–Fri 10am–7:30pm IST):** [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)
+**Developers do not deploy.** Production deploy is **DevSecOps only** — see [DEVSECOPS.md](DEVSECOPS.md).
 
 ---
 
-## Release flow
+## Developers — release via PR
 
-1. Open PR → **`develop`**
-2. Wait for **Security scan** (one check — all free scanners inside)
-3. **Merge**
-4. **Deploy · Production** → approve **production** → **Security scan** again → deploy
-5. Verify https://ugaanlabs.ai/api/health and /login
+1. Open a **PR** into `develop` from `develop/<feature>`
+2. Wait for **Security** CI (lint, tests, gitleaks)
+3. Get **PR approval** and **merge**
+4. In the PR (or Slack), **request deploy** from **Govardhan or Kishore**
+5. DevSecOps deploys from `moback-ai/devsecops-platform` after merge
 
----
-
-## Manual deploy (fallback)
-
-**Actions → Deploy · Production → Run workflow**
-
-- `git_ref`: `develop` or commit SHA
-- `deploy_target`: `auto` or `all`
-- Approve **`production`** → Veracode scan → deploy
-
-`main` is **never** deployed.
+There is **no** deploy workflow on this repo. Do **not** use Actions → Run workflow for production.
 
 ---
 
-## What `auto` deploys
+## What to put in your PR
 
-| Changed paths | Box |
-|---------------|-----|
-| `frontend/**` | Website |
-| `backend/**` (not INTERVIEW/Piper only) | API |
-| `backend/INTERVIEW/**`, `backend/Piper/**`, AI scripts | AI host |
-| `database/**` | RDS migrations |
+- What changed and how to test
+- Whether you need a **production deploy** after merge (yes/no)
+- Any DB migration notes (`database/**` changes)
+
+---
+
+## DevSecOps — deploy
+
+1. Confirm merge commit on `develop`
+2. `devsecops-platform` → **Actions** → **InterviewCoach · Deploy Production**
+3. Input `app_git_ref` = merge SHA or `develop`
 
 ---
 
@@ -46,7 +39,5 @@ Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
 | Branch | Use |
 |--------|-----|
 | `develop/<feature>` | Your work → PR into `develop` |
-| `develop` | Deploy to production |
-| `main` | Snapshot only |
-
-Details: [SECURITY_SCANNING.md](SECURITY_SCANNING.md)
+| `develop` | Integration; DevSecOps deploys from here |
+| `main` | Snapshot only — **not** deployed |

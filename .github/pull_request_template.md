@@ -4,11 +4,15 @@
 
 ## Checklist
 
-- [ ] Target branch is `develop` (feature PR) or `main` (release PR from `develop` only)
+- [ ] Target branch is `develop`
 - [ ] Tested locally
+- [ ] Security workflow green
 
-## Deploy
+## Production deploy
 
-**Feature PRs:** merge to `develop` → **Deploy · Production** (Veracode scan, then deploy; admin approves production).
+- [ ] **Deploy needed after merge?** (yes / no)
+- If **yes**: DevSecOps (**Govardhan or Kishore**) will deploy from `devsecops-platform` after merge — developers cannot run deploy workflows.
 
-**Release PR (`develop` → `main`):** one PR only; see [docs/DEPLOY.md](../docs/DEPLOY.md).
+**Do not** use GitHub Actions → Run workflow for production on this repo.
+
+See [docs/DEVSECOPS.md](../docs/DEVSECOPS.md).

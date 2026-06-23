@@ -1,10 +1,10 @@
-# Workflows
+# Workflows (application repo)
 
-| Workflow | When | What you see |
-|----------|------|----------------|
-| **Security** | Every PR | One job: **Security scan** |
-| **Deploy · Production** | Merge → `develop` | Approve production → **Security scan** → deploy |
+| Workflow | When | Who runs it |
+|----------|------|-------------|
+| **Security** | Every PR to `develop` / `main`; push to `develop` | Automatic |
+| **Security · Veracode** | Manual (optional) | DevSecOps / security |
 
-All free scanners run inside one step (`scripts/security-scan-all.sh`).
+**Production deploy is not on this repo.** After your PR merges to `develop`, ask **Govardhan or Kishore** to deploy from `moback-ai/devsecops-platform`.
 
-Details: [docs/DEPLOY.md](../../docs/DEPLOY.md) · [docs/SECURITY_SCANNING.md](../../docs/SECURITY_SCANNING.md)
+Details: [docs/DEVSECOPS.md](../../docs/DEVSECOPS.md) · [docs/DEPLOY.md](../../docs/DEPLOY.md)
