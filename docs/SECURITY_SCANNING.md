@@ -21,6 +21,7 @@ Automated security checks run on **PRs** (quick) and **weekly / manual** (full).
 | **Bandit** | Common Python security issues in source | `full-scan` |
 | **CodeQL** | SQL injection, XSS, auth bugs (JS + Python) | `codeql` |
 | **Trivy** | CVEs in dependencies and misconfigurations | `full-scan` |
+| **OSV-Scanner** | Cross-ecosystem dependency CVEs (npm + pip) | `osv-scanner` |
 | **Semgrep** | OWASP-style patterns (SAST) | `full-scan` |
 | **Login bundle guard** | Broken login after bad Vite chunk splits | `full-scan` |
 | **Playwright** | `/login` and `/forgot-password` smoke tests | `full-scan` |
