@@ -1,31 +1,27 @@
 # Workflows
 
-| Workflow | When it runs | What you do |
-|----------|----------------|-------------|
-| **Security** | PR → quick check only; full scan weekly (Mon) or manual | Nothing on PR merge |
-| **Deploy · Auto (develop)** | **Merged PR** to `develop` | Approve `production` in deploy.yml |
-| **Deploy · Production** | Auto-dispatch or manual | Approve `production` → deploy |
-| **Maintenance · Scheduled** | Weekly / monthly cron | Nothing |
-| **Security · Veracode** | Manual only | Optional |
+| Workflow | When | Runs |
+|----------|------|------|
+| **Security** | PR only (quick check) | Lint / pytest / Gitleaks on changed files |
+| **Security** | Weekly Mon or manual | Full CodeQL, Trivy, Semgrep, e2e |
+| **Deploy · Production** | **Merge PR → develop** | **One run**: approve production → deploy |
+| **Deploy · Production** | Manual dispatch | Same single workflow |
+| **Maintenance · Scheduled** | Cron | Log cleanup, etc. |
 
-## Auto-deploy flow (fast)
+## On merge to develop (one workflow run)
 
 ```
-Merge PR → develop
+Merge PR #92 → develop
     ↓
-Deploy · Auto (develop)     ~30 sec — dispatches deploy.yml
-    ↓
-Deploy · Production
-    ↓
-Admin approves production   @govardhanreddy66 / @KFKishore23
-    ↓
-Deploy to servers           ~10–15 min
+Deploy · Production  (single run #63)
+    ├─ Resolve context
+    ├─ Authorize
+    ├─ Approve production  ← admin
+    └─ Deploy to servers
 ```
 
-No pre-deploy quality gate. PR **Security · quick check** runs lint/pytest/gitleaks on changed files only.
+**No** separate Deploy · Auto run. **No** Security run on push to develop.
 
-Full CodeQL / Trivy / Semgrep / e2e: **weekly** or **Actions → Security → Run workflow**.
-
-`main` is **not** deployed.
+PR **Security · quick check** runs once while the PR is open (before merge).
 
 Details: [docs/DEPLOY.md](../../docs/DEPLOY.md)

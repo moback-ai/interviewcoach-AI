@@ -25,8 +25,8 @@ Avoid direct pushes to `develop` and avoid many small merges — each merge trig
 1. Open PR: `develop/<your-feature>` → **`develop`**
 2. **Security · PR quick check** runs on the PR (lint / pytest / gitleaks on changed files only).
 3. **Merge** the PR into `develop`
-4. **Deploy · Auto (develop)** dispatches **Deploy · Production** immediately (~30 sec).
-5. Admin approves **`production`** environment in **Deploy · Production**.
+4. **Deploy · Production** starts automatically (**one workflow run**).
+5. Admin approves **`production`** environment in that same run.
 6. Wait for green (~10–15 min). Failed deploys **roll back** automatically.
 7. Check:
    - https://ugaanlabs.ai/api/health → `"status":"healthy"`
@@ -39,7 +39,7 @@ Do **not** merge PRs labeled `deploy-failed`.
 Common cause: PR merged **without** admin `Approve` review (e.g. PR #73).
 
 1. **Option B**: **Actions → Deploy · Production → Run workflow** → `git_ref` = `develop` → approve `production`.
-2. Or: ask an admin to **Approve** on the merged PR (if still possible), then re-run **Deploy · Auto (develop)** manually.
+2. Or: re-run the failed **Deploy · Production** workflow from the merge commit.
 
 ---
 
@@ -55,7 +55,7 @@ Use it only if:
 
 Inputs: `git_ref` = `develop` or a commit SHA, `deploy_target` = `auto` or `all`.
 
-Alternative: **Deploy · Auto (develop)** → **Run workflow** with branch `develop` or `develop/feat-…` (still needs admin-approved PR rules).
+Alternative: **Deploy · Production** → **Run workflow** with `git_ref` = `develop` or a commit SHA.
 
 `main` is **never** deployed.
 
