@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Daily schedule: START 10:00 AM IST (04:30 UTC), STOP 8:00 PM IST (14:30 UTC)
+# Weekday schedule (Mon–Fri): START 10:00 AM IST, STOP 7:30 PM IST
+# Weekend (Sat–Sun): force STOP at 00:05 IST (safety — keeps all instances off)
 #
 # Usage:
 #   ./setup-daily-schedule.sh           # dry-run
@@ -17,10 +18,29 @@ APPLY=0
 FUNCTION_NAME="${SCHEDULE_LAMBDA_NAME:-interviewcoach-daily-schedule}"
 ROLE_NAME="${SCHEDULE_ROLE_NAME:-interviewcoach-schedule-lambda-role}"
 SCHEDULER_ROLE_NAME="${ROLE_NAME}-invoke"
-START_SCHEDULE="${SCHEDULE_START_NAME:-interviewcoach-start-10am-ist}"
-STOP_SCHEDULE="${SCHEDULE_STOP_NAME:-interviewcoach-stop-8pm-ist}"
-CRON_START="cron(30 4 * * ? *)"
-CRON_STOP="cron(30 14 * * ? *)"
+SCHEDULE_TIMEZONE="${SCHEDULE_TIMEZONE:-Asia/Kolkata}"
+SCHEDULE_START_IST="${SCHEDULE_START_IST:-10:00}"
+SCHEDULE_STOP_IST="${SCHEDULE_STOP_IST:-19:30}"
+
+START_H="${SCHEDULE_START_IST%%:*}"
+START_M="${SCHEDULE_START_IST##*:}"
+STOP_H="${SCHEDULE_STOP_IST%%:*}"
+STOP_M="${SCHEDULE_STOP_IST##*:}"
+
+START_SCHEDULE="${SCHEDULE_START_NAME:-interviewcoach-start-weekdays-10am-ist}"
+STOP_WEEKDAY_SCHEDULE="${SCHEDULE_STOP_WEEKDAY_NAME:-interviewcoach-stop-weekdays-730pm-ist}"
+STOP_SAT_SCHEDULE="${SCHEDULE_STOP_SAT_NAME:-interviewcoach-stop-weekend-sat}"
+STOP_SUN_SCHEDULE="${SCHEDULE_STOP_SUN_NAME:-interviewcoach-stop-weekend-sun}"
+
+CRON_START="cron(${START_M} ${START_H} ? * MON-FRI *)"
+CRON_STOP_WEEKDAY="cron(${STOP_M} ${STOP_H} ? * MON-FRI *)"
+CRON_STOP_SAT="cron(5 0 ? * SAT *)"
+CRON_STOP_SUN="cron(5 0 ? * SUN *)"
+
+LEGACY_SCHEDULES=(
+  interviewcoach-start-10am-ist
+  interviewcoach-stop-8pm-ist
+)
 
 API_ID="${API_INSTANCE_ID:-}"
 if [[ -n "$API_ID" ]]; then
@@ -30,11 +50,28 @@ else
 fi
 
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
-run() { if [[ "$APPLY" -eq 1 ]]; then log "RUN: $*"; eval "$@"; else log "DRY-RUN: $*"; fi; }
+
+upsert_schedule() {
+  local name="$1"
+  local cron="$2"
+  local target_json="$3"
+  if [[ "$APPLY" -eq 1 ]]; then
+    aws scheduler delete-schedule --region "$AWS_REGION" --name "$name" 2>/dev/null || true
+    aws scheduler create-schedule --region "$AWS_REGION" --name "$name" \
+      --schedule-expression "$cron" \
+      --schedule-expression-timezone "$SCHEDULE_TIMEZONE" \
+      --flexible-time-window Mode=OFF \
+      --target "$target_json"
+    log "Schedule created: $name ($cron $SCHEDULE_TIMEZONE)"
+  else
+    log "DRY-RUN: schedule $name → $cron ($SCHEDULE_TIMEZONE)"
+  fi
+}
 
 log "EC2: $EC2_LIST | RDS: $RDS_INSTANCE_ID"
-log "Start 10:00 AM IST = $CRON_START UTC"
-log "Stop  8:00 PM IST = $CRON_STOP UTC"
+log "Weekdays Mon–Fri: START ${SCHEDULE_START_IST} IST | STOP ${SCHEDULE_STOP_IST} IST"
+log "Weekends Sat–Sun: STOP 00:05 IST (force off)"
+log "Timezone: $SCHEDULE_TIMEZONE"
 
 ZIP="${SCRIPT_DIR}/lambda/schedule_handler.zip"
 rm -f "$ZIP"
@@ -84,20 +121,24 @@ if [[ "$APPLY" -eq 1 ]]; then
     --statement-id scheduler-invoke --action lambda:InvokeFunction \
     --principal scheduler.amazonaws.com 2>/dev/null || true
 
+  for legacy in "${LEGACY_SCHEDULES[@]}"; do
+    aws scheduler delete-schedule --region "$AWS_REGION" --name "$legacy" 2>/dev/null || true
+    log "Removed legacy schedule (if existed): $legacy"
+  done
+
   TARGET_START='{"Arn":"'"$LAMBDA_ARN"'","RoleArn":"'"$SCHED_ROLE_ARN"'","Input":"{\"action\":\"start\"}"}'
   TARGET_STOP='{"Arn":"'"$LAMBDA_ARN"'","RoleArn":"'"$SCHED_ROLE_ARN"'","Input":"{\"action\":\"stop\"}"}'
 
-  aws scheduler delete-schedule --region "$AWS_REGION" --name "$START_SCHEDULE" 2>/dev/null || true
-  aws scheduler create-schedule --region "$AWS_REGION" --name "$START_SCHEDULE" \
-    --schedule-expression "$CRON_START" --schedule-expression-timezone UTC \
-    --flexible-time-window Mode=OFF --target "$TARGET_START"
+  upsert_schedule "$START_SCHEDULE" "$CRON_START" "$TARGET_START"
+  upsert_schedule "$STOP_WEEKDAY_SCHEDULE" "$CRON_STOP_WEEKDAY" "$TARGET_STOP"
+  upsert_schedule "$STOP_SAT_SCHEDULE" "$CRON_STOP_SAT" "$TARGET_STOP"
+  upsert_schedule "$STOP_SUN_SCHEDULE" "$CRON_STOP_SUN" "$TARGET_STOP"
 
-  aws scheduler delete-schedule --region "$AWS_REGION" --name "$STOP_SCHEDULE" 2>/dev/null || true
-  aws scheduler create-schedule --region "$AWS_REGION" --name "$STOP_SCHEDULE" \
-    --schedule-expression "$CRON_STOP" --schedule-expression-timezone UTC \
-    --flexible-time-window Mode=OFF --target "$TARGET_STOP"
-
-  log "Schedules created."
+  log "All schedules applied."
 else
-  log "DRY-RUN: would deploy Lambda + EventBridge Scheduler (10am/8pm IST)"
+  log "DRY-RUN: would deploy Lambda + 4 EventBridge schedules (Mon–Fri 10am–7:30pm IST, weekend force-stop)"
+  upsert_schedule "$START_SCHEDULE" "$CRON_START" "(start target)"
+  upsert_schedule "$STOP_WEEKDAY_SCHEDULE" "$CRON_STOP_WEEKDAY" "(stop target)"
+  upsert_schedule "$STOP_SAT_SCHEDULE" "$CRON_STOP_SAT" "(stop target)"
+  upsert_schedule "$STOP_SUN_SCHEDULE" "$CRON_STOP_SUN" "(stop target)"
 fi
