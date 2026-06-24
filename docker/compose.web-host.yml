@@ -1,0 +1,8 @@
+# Frontend host — static SPA only (nginx on host continues to proxy /api to API private IP).
+services:
+  web:
+    image: ${ECR_REGISTRY}/interviewcoach-web:${IMAGE_TAG}
+    container_name: interviewcoach-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"

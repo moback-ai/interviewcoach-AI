@@ -1,0 +1,12 @@
+# API host only — run on interviewcoach-api EC2.
+services:
+  api:
+    image: ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG}
+    container_name: interviewcoach-api
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
+    volumes:
+      - /apps/storage:/apps/storage
