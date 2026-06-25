@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove third-party co-author trailers before the commit message is finalized.
+# Last-chance strip before commit is recorded (catches agent-injected trailers).
 msgfile="$1"
 [ -f "$msgfile" ] || exit 0
 
