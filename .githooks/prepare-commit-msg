@@ -1,0 +1,16 @@
+#!/bin/sh
+# Strip AI tool attribution from commit messages (local hook).
+strip() {
+  case "$(uname -s)" in
+    Darwin) sed -i '' "$@" ;;
+    *) sed -i "$@" ;;
+  esac
+}
+strip \
+  -e '/cursoragent@cursor\.com/d' \
+  -e '/^Made-with: Cursor$/d' \
+  -e '/^Co-authored-by:.*[Cc]opilot/d' \
+  -e '/^Co-authored-by: Codex/d' \
+  -e '/codex@openai\.com/d' \
+  "$1"
+exit 0
