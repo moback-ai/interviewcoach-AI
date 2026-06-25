@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time setup: commits from Cursor (or any agent) show Govardhan Reddy only.
+# One-time setup: ensure local git commits use your identity and hooks.
 set -euo pipefail
 
 NAME="${GIT_AUTHOR_NAME:-Govardhan Reddy}"

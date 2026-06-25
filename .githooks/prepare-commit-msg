@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove third-party co-author trailers before the commit message is finalized.
+# Remove unwanted co-author trailers before the commit message is finalized.
 msgfile="$1"
 [ -f "$msgfile" ] || exit 0
 

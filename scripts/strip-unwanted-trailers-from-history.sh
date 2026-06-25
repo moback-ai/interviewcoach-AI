@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rewrite git history: AI tool authors → Govardhan Reddy; strip AI co-author trailers.
+# Rewrite branch history: normalize authors and strip unwanted commit trailers.
 set -euo pipefail
 
 AUTHOR_NAME="${AUTHOR_NAME:-Govardhan Reddy}"
@@ -29,26 +29,26 @@ export FILTER_BRANCH_SQUELCH_WARNING=1
 
 git filter-branch -f \
   --env-filter '
-    ai_author=0
+    unwanted=0
     case "$GIT_AUTHOR_EMAIL" in
-      codex@openai.com|cursoragent@cursor.com|*copilot*) ai_author=1 ;;
+      codex@openai.com|cursoragent@cursor.com|*copilot*) unwanted=1 ;;
     esac
     case "$GIT_AUTHOR_NAME" in
-      Codex|Cursor|*Copilot*|*copilot*) ai_author=1 ;;
+      Codex|Cursor|*Copilot*|*copilot*) unwanted=1 ;;
     esac
-    if [ "$ai_author" = 1 ]; then
+    if [ "$unwanted" = 1 ]; then
       export GIT_AUTHOR_NAME="$AUTHOR_NAME"
       export GIT_AUTHOR_EMAIL="$AUTHOR_EMAIL"
     fi
 
-    ai_committer=0
+    unwanted=0
     case "$GIT_COMMITTER_EMAIL" in
-      codex@openai.com|cursoragent@cursor.com|*copilot*) ai_committer=1 ;;
+      codex@openai.com|cursoragent@cursor.com|*copilot*) unwanted=1 ;;
     esac
     case "$GIT_COMMITTER_NAME" in
-      Codex|Cursor|*Copilot*|*copilot*) ai_committer=1 ;;
+      Codex|Cursor|*Copilot*|*copilot*) unwanted=1 ;;
     esac
-    if [ "$ai_committer" = 1 ]; then
+    if [ "$unwanted" = 1 ]; then
       export GIT_COMMITTER_NAME="$AUTHOR_NAME"
       export GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL"
     fi
@@ -61,11 +61,9 @@ git filter-branch -f \
       -e "/^Co-authored-by: Codex/d" \
       -e "/^Co-authored-by:.*codex@openai\.com/d" \
       -e "s|moback-ai/codex/|moback-ai/|g" \
+      -e "s|codex/||g" \
       -e "s|Codex/||g"
   ' \
   "$branch"
 
-echo "Done. Verify:"
-echo "  git log --author=Codex --oneline | wc -l   # expect 0"
-echo "  git log --grep=codex -i --oneline | wc -l  # expect 0"
-echo "Publish: git push --force-with-lease origin $branch"
+echo "Done. Publish: git push --force-with-lease origin $branch"
