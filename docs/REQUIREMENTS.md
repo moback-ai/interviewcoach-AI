@@ -30,8 +30,8 @@ This document captures what was requested across prior setup sessions, and what 
 | **Admin PR approval** before merge to `develop` | GitHub PR review |
 | **Production environment approval** (second admin) | `Deploy · Production` |
 | Failed deploy **rolls back** to last stable — failed code never stays live | `deploy.yml` rollback jobs |
-| **Auto deploy** after approved merge to `develop` | `Deploy · Production` on push to `develop` (single run) |
-| **Manual deploy** when auto did not run or re-deploy same SHA | `Deploy · Production` → **Run workflow** |
+| **Deploy after merge** to `develop` | DevSecOps runs **InterviewCoach · Deploy PROD** in `devsecops-platform` |
+| **Re-deploy** same SHA or hotfix | DevSecOps manual workflow in `devsecops-platform` |
 | **PR quick check** — lint / pytest / gitleaks on changed files before merge | `Security` workflow `pr-quick` job |
 | Simple deploy documentation (not long checklists) | [DEPLOY.md](DEPLOY.md) |
 | Workflows named consistently | [.github/workflows/README.md](../.github/workflows/README.md) |
@@ -71,7 +71,9 @@ This document captures what was requested across prior setup sessions, and what 
 
 | Requirement | Status |
 |-------------|--------|
-| Root README for onboarding | `README.md` (local) |
+| Root README for onboarding | `README.md` |
+| Prod architecture doc | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| PROD migration runbooks | [MIGRATION_PROD.md](MIGRATION_PROD.md), [MONDAY_RUNBOOK.md](MONDAY_RUNBOOK.md) |
 | Backend unit tests (auth, document validation) | `backend/tests/` (local, CI step added) |
 | Replace `alert()` with in-app modals | Done (Dashboard, Upload, Questions, History, Feedback) |
 | Split large `app.py` into blueprints | Not started (large refactor) |
@@ -83,12 +85,12 @@ This document captures what was requested across prior setup sessions, and what 
 ```mermaid
 flowchart LR
   A[PR quick check on PR] --> B[Admin approves and merges to develop]
-  B --> C[Deploy · Production single run]
+  B --> C[DevSecOps: InterviewCoach Deploy PROD]
   C --> D{Approve production env}
-  D --> E[Deploy boxes + rollback on fail]
-  M[Manual: Deploy · Production Run workflow] --> C
+  D --> E[ECR build + API + frontend + health check]
+  M[Manual re-deploy in devsecops-platform] --> C
 ```
 
-**Manual button is required only as a fallback** — not for every release.
+Developers request deploy from Govardhan or Kishore after merge.
 
 See [DEPLOY.md](DEPLOY.md) for the short checklist.

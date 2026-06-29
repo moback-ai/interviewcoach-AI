@@ -29,9 +29,10 @@
 | **11:00** | **2 DevSecOps** | Build + push ECR (`Dockerfile.prod`) | `05-devsecops-build-ecr.sh` |
 | **11:30** | **3 Code** | Deploy API to prod EC2/ASG | `06-code-deploy-api.sh` |
 | **12:00** | **3 Code** | **Lunch / verify** `curl API:5000/api/health` |
-| **13:00** | **3 Code** | Migrate storage → S3 | `07-code-migrate-storage.sh` |
+| **13:00** | **3 Code** | Migrate storage → S3 (+ legacy buckets) | `07b-migrate-legacy-storage.sh` |
 | **13:30** | **3 Code** | Frontend build → S3 | `08-code-frontend.sh` |
-| **14:00** | **3 Code** | CloudFront + DNS cutover | `09-code-cutover.sh` |
+| **14:00** | **3 Code** | CloudFront + ACM (us-east-1) | `09-code-cloudfront-deploy.sh` |
+| **14:15** | **3 Code** | DNS cutover (Namecheap) | `09b-namecheap-dns-cutover.sh` or `09-code-cutover.sh` |
 | **14:30** | **3 Code** | **Prod smoke test** (below) |
 | **15:00+** | Monitor | CloudWatch / Bedrock / OpenRouter bills |
 
@@ -50,7 +51,11 @@ bash infra/prod/scripts/01-aws-bedrock.sh
 
 ### 2. S3 buckets
 ```bash
+# Fresh deploy:
 bash infra/prod/scripts/02-aws-cloudformation.sh
+
+# If hybrid stack exists (rename + import with Retain):
+bash infra/prod/scripts/02b-rename-s3-stack.sh
 ```
 
 ### 3. Secrets Manager (single source of truth)
@@ -105,9 +110,8 @@ curl -fsS http://API_IP:5000/api/health | jq .
 
 ### 8. Storage migration
 ```bash
-export API_HOST=ec2-user@YOUR_API_IP
-export S3_BUCKET=ic-user-files-prod
-bash infra/prod/scripts/07-code-migrate-storage.sh
+# Legacy Plan B buckets + EC2 /apps/storage → ic-user-files-prod
+bash infra/prod/scripts/07b-migrate-legacy-storage.sh
 ```
 
 ### 9. Frontend
@@ -117,11 +121,33 @@ export CF_DIST_ID=YOUR_DIST_ID
 bash infra/prod/scripts/08-code-frontend.sh
 ```
 
-### 10. Cutover
+### 10. CloudFront + DNS cutover
+
+Deploy CloudFront (requests ACM in us-east-1 if needed):
+```bash
+bash infra/prod/scripts/09-code-cloudfront-deploy.sh
+```
+
+If cert is pending, add validation CNAMEs at Namecheap:
+```bash
+bash infra/prod/scripts/09a-acm-validation-dns.sh
+```
+
+DNS cutover — automated (preserves email MX):
+```bash
+NAMECHEAP_API_USER=youruser \
+NAMECHEAP_API_KEY=... \
+NAMECHEAP_USERNAME=youruser \
+bash infra/prod/scripts/09b-namecheap-dns-cutover.sh
+```
+
+Or manual confirmation:
 ```bash
 bash infra/prod/scripts/09-code-cutover.sh
 curl -fsS https://ugaanlabs.ai/api/health
 ```
+
+Update `infra/prod/prod.env` with `CF_DIST_ID` and `CF_DOMAIN` from script output.
 
 ---
 
@@ -158,11 +184,11 @@ Terminate: **AI EC2**, Whisper sidecar, old frontend EC2.
 
 ## Ready for Monday?
 
-| Requirement | Ready locally? | Run on Monday? |
-|-------------|----------------|----------------|
+| Requirement | In repo? | Execute when? |
+|-------------|----------|---------------|
 | Application code (secrets-only) | **Yes** | Phase 3 |
-| DevSecOps scripts/templates | **Yes** | Phases 1–3 |
-| AWS resources live | **No** — you create on Monday | Phase 1 |
+| DevSecOps scripts + CloudFormation | **Yes** | Phases 1–3 |
+| AWS resources live | Run scripts | Phase 1 |
 | Remove old AWS | **Doc ready** | Week 2 |
 
-**Answer:** Code + runbooks are ready **locally**. Monday you execute **AWS first**, then **DevSecOps build**, then **code deploy** — one script at a time.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full prod topology.

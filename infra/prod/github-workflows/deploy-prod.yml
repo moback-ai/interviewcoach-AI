@@ -45,13 +45,13 @@ jobs:
           API_HOST: ${{ secrets.PROD_API_SSH_HOST }}
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           IMAGE_TAG: ${{ inputs.image_tag }}
-        run: bash infra/prod/scripts/04-deploy-api-ec2.sh
+        run: bash infra/prod/scripts/06-code-deploy-api.sh
 
       - name: Frontend to S3 + CloudFront
         env:
           STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
           CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
-        run: bash infra/prod/scripts/05-frontend-s3-cloudfront.sh
+        run: bash infra/prod/scripts/08-code-frontend.sh
 
       - name: Health check
         run: curl -fsS https://ugaanlabs.ai/api/health

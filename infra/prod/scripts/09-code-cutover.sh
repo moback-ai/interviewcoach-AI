@@ -1,16 +1,34 @@
 #!/usr/bin/env bash
-# Step 7 — CloudFront / DNS cutover (manual confirmation required).
+# CloudFront DNS cutover at Namecheap (after 09-code-cloudfront-deploy.sh succeeds).
 set -euo pipefail
 
-echo "=== Step 7: Cutover ==="
-echo "1. CloudFront origin /api/* → new ALB or API host"
-echo "2. CloudFront origin default → S3 static bucket"
-echo "3. Route53 A/AAAA alias → CloudFront distribution"
-echo "4. Verify: curl -fsS https://ugaanlabs.ai/api/health"
-echo ""
-read -r -p "Type YES to confirm cutover completed: " CONFIRM
-if [[ "$CONFIRM" != "YES" ]]; then
-  echo "Aborted."
+# shellcheck disable=SC1091
+source "$(dirname "$0")/load-prod-env.sh"
+
+REGION="${AWS_REGION:-ap-south-1}"
+STACK="${CF_STACK_NAME:-interviewcoach-prod-cloudfront}"
+DOMAIN="${FRONTEND_DOMAIN:-ugaanlabs.ai}"
+
+CF_DOMAIN=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue" --output text 2>/dev/null || true)
+
+if [[ -z "$CF_DOMAIN" || "$CF_DOMAIN" == "None" ]]; then
+  echo "CloudFront stack not deployed. Run 09-code-cloudfront-deploy.sh first."
   exit 1
 fi
-echo "Step 7 marked complete."
+
+echo "=== CloudFront cutover (Namecheap) ==="
+echo ""
+echo "1. Remove A record @ → EC2 IP (if present)"
+echo "2. Add ALIAS/CNAME records:"
+echo "   @   → $CF_DOMAIN  (Namecheap ALIAS or CNAME flattening)"
+echo "   www → $CF_DOMAIN"
+echo ""
+echo "3. Verify:"
+echo "   curl -fsS https://${DOMAIN}/api/health"
+echo ""
+read -r -p "Type YES when DNS updated: " CONFIRM
+[[ "$CONFIRM" == "YES" ]] || exit 1
+curl -fsS "https://${DOMAIN}/api/health" | head -c 300
+echo ""
+echo "Cutover complete."

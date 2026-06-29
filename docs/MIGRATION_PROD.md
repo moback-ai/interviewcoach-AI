@@ -1,72 +1,90 @@
-# PROD migration — COMPLETE (local, ready for Monday)
+# PROD migration — status
 
-**Status:** Application code + DevSecOps templates + decommission docs — **all prepared locally**.  
-**Not done:** Nothing executed on AWS. Nothing committed/pushed unless you choose to.
+**Branch:** `develop` (in repo)  
+**Domain:** https://ugaanlabs.ai  
+**Region:** ap-south-1
 
----
-
-## Your four questions — answered
-
-| Question | Answer |
-|----------|--------|
-| **Code migration entirely local?** | **Yes (~95%)** — Bedrock, OpenRouter STT, S3 storage, Redis, Piper, head tracking, prod Docker image, tests |
-| **DevSecOps entirely local?** | **Yes (templates)** — `infra/prod/` scripts, IAM, CloudFormation, GitHub workflow — **you run on Monday** |
-| **Ready to remove old AWS?** | **Docs + scripts ready** — execute **`10-cleanup-decommission.sh`** after **7 stable days** |
-| **Deploy prod Monday?** | **Yes, step-by-step** — follow **`docs/MONDAY_RUNBOOK.md`** (not one-click; ~6 hours Monday) |
+Application code, DevSecOps scripts, CloudFormation templates, and runbooks are **committed to this repository**. Execute on AWS using the phased scripts under `infra/prod/scripts/`.
 
 ---
 
-## What was completed today (local)
+## Summary
+
+| Area | Status |
+|------|--------|
+| Application (Bedrock, S3, Redis, secrets-only) | **In repo** |
+| DevSecOps scripts + CloudFormation | **In repo** |
+| CloudFront + ACM + Namecheap DNS cutover | **Scripts ready** — see runbook |
+| Legacy Plan B decommission | **After 7 stable days** — [AWS_DECOMMISSION.md](AWS_DECOMMISSION.md) |
+
+---
+
+## What changed (Plan B → PROD)
 
 ### Application
-- `common/llm/` — Bedrock + Ollama fallback
-- `common/speech/` — OpenRouter → Amazon STT
-- `common/storage.py` + `storage_s3.py` — **S3 wired**
-- `common/redis_store.py` — **Redis wired** (rate limit, cache, interview slots)
-- `requirements.prod.txt` + `docker/api/Dockerfile.prod` — **no Ollama/Whisper**
-- `backend/tests/test_prod.py`
+- `common/llm/` — Bedrock (+ Ollama fallback for local dev)
+- `common/speech/` — OpenRouter → Amazon Transcribe chain
+- `common/storage.py` + `storage_s3.py` — S3-backed storage
+- `common/redis_store.py` — Redis for rate limit, cache, interview slots
+- `requirements.prod.txt` + `docker/api/Dockerfile.prod` — no Ollama/Whisper in prod image
 - Per-session head tracking
+- `backend/tests/test_prod.py`
 
-### DevSecOps (local templates)
-- `infra/prod/scripts/` — **Phase 1 AWS** (`01`–`04`) → **Phase 2 DevSecOps** (`05`) → **Phase 3 Code** (`06`–`09`)
-- Secrets-only: all prod config in `interviewcoach/prod/app` — see `docs/SECRETS_ONLY.md`
-- `infra/prod/iam/` — API task policies
-- `infra/prod/cloudformation/` — S3 buckets
-- `infra/prod/github-workflows/deploy-prod.yml`
+### Infrastructure
+- S3 buckets: `ic-static-prod`, `ic-user-files-prod` (`prod-stack.yaml`, Retain policy)
+- CloudFront: S3 static + EC2 API origin (`prod-cloudfront.yaml`)
+- Secrets-only config: `interviewcoach/prod/app` in Secrets Manager
+- `infra/prod/prod.env` — resolved infra names (no secrets)
 
-### Docs
-- `docs/MONDAY_RUNBOOK.md` — **start here Monday**
-- `docs/AWS_DECOMMISSION.md` — remove Plan B
-- `backend/secrets.prod.example.json`
+### DevSecOps scripts (phases)
+
+| Phase | Scripts |
+|-------|---------|
+| **1 — AWS** | `01` Bedrock · `02` S3 CFN · `02b` stack rename/import · `03` secrets · `04` IAM |
+| **2 — Build** | `05-devsecops-build-ecr.sh` · `05-build-on-ec2.sh` |
+| **3 — Deploy** | `06` API · `07` storage · `07b` legacy S3 · `08` frontend · `09` CloudFront · `09a` ACM DNS · `09b` Namecheap cutover |
+| **4 — Cleanup** | `10` decommission · `10a`/`10b` legacy cleanup |
+
+Full timeline: [MONDAY_RUNBOOK.md](MONDAY_RUNBOOK.md)  
+Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ---
 
-## Monday — open this file
+## Quick start (DevSecOps)
 
-**`docs/MONDAY_RUNBOOK.md`**
-
-Quick start:
 ```bash
+# Source infra names
+source infra/prod/scripts/load-prod-env.sh
+
+# Phase 1
 bash infra/prod/scripts/01-aws-bedrock.sh
-# ... follow phases 1 → 2 → 3 in MONDAY_RUNBOOK.md
+bash infra/prod/scripts/02-aws-cloudformation.sh   # or 02b if renaming hybrid stack
+SECRETS_FILE=backend/secrets.prod.example.json bash infra/prod/scripts/03-aws-secrets-manager.sh
+bash infra/prod/scripts/04-aws-iam-attach.sh
+
+# Phase 2
+bash infra/prod/scripts/05-devsecops-build-ecr.sh
+
+# Phase 3
+bash infra/prod/scripts/06-code-deploy-api.sh
+bash infra/prod/scripts/07b-migrate-legacy-storage.sh
+bash infra/prod/scripts/08-code-frontend.sh
+bash infra/prod/scripts/09-code-cloudfront-deploy.sh
+bash infra/prod/scripts/09b-namecheap-dns-cutover.sh   # or 09-code-cutover.sh (manual DNS)
 ```
 
 ---
 
-## Still manual on Monday (cannot automate from laptop)
+## Manual steps (cannot fully automate)
 
-- Fill real secrets in JSON (OpenRouter key, DB password, JWT, Dodo)
-- Set `ECR_REGISTRY`, `API_HOST`, `CF_DIST_ID` in scripts
-- Create/attach ALB + CloudFront if not already present
-- Bedrock quota approval (may take hours if not pre-approved)
+- Fill real secrets in JSON before `03-aws-secrets-manager.sh` (never commit real keys)
+- Bedrock model access / quota approval in AWS console
+- Namecheap API whitelist IP for automated DNS (`09b`)
 
 ---
 
-## Optional before Monday
+## Security
 
-```bash
-git add -A && git commit -m "..."   # only when you want
-# PR → develop → ask DevSecOps to deploy
-```
+**Do not commit:** `backend/.env`, filled secrets JSON with real API keys or passwords.
 
-**Do not push secrets.** Never commit `backend/.env` or filled secrets JSON with real keys.
+Template only: `backend/secrets.prod.example.json`

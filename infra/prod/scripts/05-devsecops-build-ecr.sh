@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Phase 2 (DevSecOps) — Build PROD API image and push to ECR.
+# Phase 2 (DevSecOps ONLY) — Build PROD API image and push to ECR.
+# Run via GitHub Actions: infra/prod/github-workflows/deploy-prod.yml
+# Do NOT use 05-build-on-ec2.sh for prod.
 # Usage: ECR_REGISTRY=123456789.dkr.ecr.ap-south-1.amazonaws.com IMAGE_TAG=prod-YYYYMMDD ./05-devsecops-build-ecr.sh
 set -euo pipefail
 

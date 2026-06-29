@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Build PROD API image on the EC2 host (when local Docker is unavailable) and push to ECR.
+# DEPRECATED — Use DevSecOps GitHub Actions only (infra/prod/github-workflows/deploy-prod.yml).
+# Local/EC2 builds are not supported for PROD ECR pushes.
 set -euo pipefail
+echo "ERROR: Prod ECR builds are DevSecOps-only. Use infra/prod/github-workflows/deploy-prod.yml"
+exit 1
 
 # shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
