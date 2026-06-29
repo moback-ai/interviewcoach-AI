@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: InterviewCoach PROD — single API EC2 (Docker + Redis sidecar). Replaces Plan B 3-host layout.
+Description: InterviewCoach PROD - single API EC2 (legacy). Use prod-compute-stack.yaml for current PROD.
 
 Parameters:
   InstanceType:

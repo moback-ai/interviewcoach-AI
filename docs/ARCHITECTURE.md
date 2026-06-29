@@ -5,7 +5,7 @@ Region: **ap-south-1** (Mumbai) · CloudFront ACM cert: **us-east-1**
 
 ---
 
-## High-level request flow (Hybrid PROD)
+## High-level request flow (PROD)
 
 ```mermaid
 flowchart TB
@@ -69,10 +69,11 @@ Local dev still uses Ollama + `.env` (`RUNTIME_CONFIG_ALLOW_ENV=true`).
 | Stack | Template | Purpose |
 |-------|----------|---------|
 | `interviewcoach-prod-s3` | `prod-stack.yaml` | Static + user-files buckets (Retain policy) |
-| `interviewcoach-prod-hybrid` | `prod-hybrid-stack.yaml` | ALB + ASG + ElastiCache |
-| `interviewcoach-prod-rds-proxy` | `prod-rds-proxy.yaml` | RDS Proxy |
+| `interviewcoach-prod-compute` | `prod-compute-stack.yaml` | ALB + ASG + ElastiCache |
+| `interviewcoach-prod-proxy` | `prod-rds-proxy.yaml` | RDS Proxy |
+| `interviewcoach-prod-cloudfront` | `prod-cloudfront.yaml` | CDN, OAC, `/api/*` → ALB |
 
-S3 stack rename/import (legacy hybrid stack): `infra/prod/scripts/02b-rename-s3-stack.sh`
+S3 stack rename/import (legacy): `infra/prod/scripts/02b-rename-s3-stack.sh`
 
 ### S3 buckets
 
@@ -82,7 +83,7 @@ S3 stack rename/import (legacy hybrid stack): `infra/prod/scripts/02b-rename-s3-
 | `ic-user-files-prod` | User files, STT temp prefix |
 | Legacy `interviewcoach-storage-*` | Migrated via `07b-migrate-legacy-storage.sh` |
 
-### Compute (Hybrid)
+### Compute (PROD)
 
 | Resource | Role |
 |----------|------|
@@ -92,7 +93,7 @@ S3 stack rename/import (legacy hybrid stack): `infra/prod/scripts/02b-rename-s3-
 | RDS Proxy `interviewcoach-prod-proxy` | Connection pooling to RDS |
 | ECR `interviewcoach-api` | Prod API container image |
 
-Legacy single EC2 (`i-0642ed38dc5b8b740`) kept for rollback — terminate after 24h stable.
+Legacy single EC2 (`i-0642ed38dc5b8b740`) kept for rollback — terminate after stable.
 
 Infra names and IDs: `infra/prod/prod.env` (no secrets — safe to commit).
 

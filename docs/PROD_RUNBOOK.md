@@ -52,7 +52,7 @@ bash infra/prod/scripts/01-aws-bedrock.sh
 ### 2. S3 buckets
 ```bash
 bash infra/prod/scripts/02-aws-cloudformation.sh
-# Or if renaming an existing hybrid stack:
+# Or if renaming an existing legacy S3 stack:
 bash infra/prod/scripts/02b-rename-s3-stack.sh
 ```
 
@@ -75,7 +75,7 @@ bash infra/prod/scripts/04-aws-iam-attach.sh
 bash infra/prod/scripts/05-devsecops-build-ecr.sh
 ```
 
-Deploy Hybrid: `CONFIRM=YES bash infra/prod/scripts/14-aws-deploy-hybrid.sh`
+Deploy PROD compute: `CONFIRM=YES bash infra/prod/scripts/14-aws-deploy-prod-compute.sh`
 
 ---
 

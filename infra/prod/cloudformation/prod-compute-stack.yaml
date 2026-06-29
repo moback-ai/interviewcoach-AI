@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: InterviewCoach PROD Hybrid — ALB + ASG (c6i.xlarge) + ElastiCache Redis.
+Description: InterviewCoach PROD - ALB + ASG (c6i.xlarge) + ElastiCache Redis.
 
 Parameters:
   VpcId:
@@ -125,7 +125,7 @@ Resources:
     Type: AWS::ElastiCache::ReplicationGroup
     Properties:
       ReplicationGroupId: interviewcoach-prod-redis
-      ReplicationGroupDescription: InterviewCoach PROD Redis (Hybrid)
+      ReplicationGroupDescription: InterviewCoach PROD Redis
       Engine: redis
       EngineVersion: "7.1"
       CacheNodeType: !Ref CacheNodeType
@@ -211,7 +211,7 @@ Resources:
           - ResourceType: instance
             Tags:
               - Key: Name
-                Value: interviewcoach-api-hybrid
+                Value: interviewcoach-api
               - Key: Environment
                 Value: prod
         UserData:
@@ -280,7 +280,7 @@ Resources:
       HealthCheckGracePeriod: 300
       Tags:
         - Key: Name
-          Value: interviewcoach-api-hybrid
+          Value: interviewcoach-api
           PropagateAtLaunch: true
         - Key: Environment
           Value: prod

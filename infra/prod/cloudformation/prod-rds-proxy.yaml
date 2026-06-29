@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: InterviewCoach PROD — RDS Proxy for PostgreSQL (Hybrid).
+Description: InterviewCoach PROD - RDS Proxy for PostgreSQL.
 
 Parameters:
   VpcId:
