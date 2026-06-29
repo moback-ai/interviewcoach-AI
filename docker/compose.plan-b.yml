@@ -1,5 +1,5 @@
-# Plan B production layout (reference).
-# On AWS: run web on frontend EC2; api on API EC2; transcribe (+ host Ollama) on AI EC2.
+# DEPRECATED — Plan B (3-host: FE + API + AI). Use docker/compose.prod.yml
+# See docs/AWS_DECOMMISSION.md for removal on AWS.
 # EC2 instance role must allow secretsmanager:GetSecretValue on interviewcoach/prod/app.
 
 name: interviewcoach

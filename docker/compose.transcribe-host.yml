@@ -1,4 +1,5 @@
-# AI host only — Whisper sidecar. Ollama stays on host (systemd).
+# DEPRECATED — Plan B AI host Whisper sidecar. Remove after PROD cutover.
+# See docs/AWS_DECOMMISSION.md
 services:
   transcribe:
     image: ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG}

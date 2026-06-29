@@ -131,7 +131,35 @@ body::after {
 
 .page-waves-shell__backdrop-vanta {
   inset: 0;
-  opacity: 0.82;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.page-waves-shell__backdrop-vanta--interactive,
+.animated-waves-layer--interactive {
+  pointer-events: auto;
+}
+
+.mouse-wave-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mouse-wave-layer__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.page-waves-shell__mouse-waves,
+.landing-shell__mouse-waves {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
   pointer-events: none;
 }
 
@@ -143,7 +171,7 @@ body::after {
 }
 
 .dark .page-waves-shell__backdrop-vanta {
-  opacity: 0.66;
+  opacity: 0.74;
 }
 
 .page-waves-shell__backdrop-grid {

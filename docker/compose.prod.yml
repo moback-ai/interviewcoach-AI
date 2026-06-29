@@ -1,0 +1,39 @@
+# PROD API (reference). Build with docker/api/Dockerfile.prod
+# Copy this folder to devsecops-platform: apps/interviewcoach/aws/prod/
+
+name: interviewcoach-prod
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile.prod
+    image: ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG:-prod}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  redis-data:

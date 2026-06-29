@@ -1,0 +1,57 @@
+# Copy to devsecops-platform: .github/workflows/interviewcoach-deploy-prod.yml
+name: InterviewCoach · Deploy PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_git_ref:
+        description: Git ref (commit SHA or develop)
+        required: true
+      image_tag:
+        description: ECR image tag
+        required: true
+        default: prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout app repo
+        uses: actions/checkout@v4
+        with:
+          repository: moback-ai/interviewcoach-AI
+          ref: ${{ inputs.app_git_ref }}
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+      - name: Login ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API (Dockerfile.prod)
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          docker build -f docker/api/Dockerfile.prod -t "$ECR_REGISTRY/interviewcoach-api:$IMAGE_TAG" .
+          docker push "$ECR_REGISTRY/interviewcoach-api:$IMAGE_TAG"
+
+      - name: Deploy API to prod host
+        env:
+          API_HOST: ${{ secrets.PROD_API_SSH_HOST }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: bash infra/prod/scripts/04-deploy-api-ec2.sh
+
+      - name: Frontend to S3 + CloudFront
+        env:
+          STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
+          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
+        run: bash infra/prod/scripts/05-frontend-s3-cloudfront.sh
+
+      - name: Health check
+        run: curl -fsS https://ugaanlabs.ai/api/health

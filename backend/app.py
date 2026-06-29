@@ -28,12 +28,16 @@ from werkzeug.exceptions import HTTPException
 import requests as http_requests
 
 # ── Environment ───────────────────────────────────────────────────────────────
-from common.runtime_config import load_runtime_config, optional_env, require_env
+from common.runtime_config import load_runtime_config, optional_env, require_env, config_source
 from common.host_metrics import collect_linux_metrics, collect_via_ssh
 from common.lazy_deps import get_cv2, get_numpy, get_soundfile, get_pydub, get_mediapipe, get_inference_device
 from common.ttl_cache import cached
 
 load_runtime_config()
+
+from common.secrets_schema import validate_secrets_config
+
+validate_secrets_config()
 
 _ollama_host = (optional_env("OLLAMA_HOST", "") or "").strip()
 if _ollama_host:
@@ -65,6 +69,7 @@ from common.storage import (
     build_protected_storage_path,
     user_owns_storage_path,
     safe_storage_file_path,
+    send_storage_file,
 )
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
@@ -76,6 +81,8 @@ from common.interview_timer import (
 )
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
 from common.transcribe_remote import transcribe_via_remote_service
+from common.speech.factory import transcribe_audio_file as stt_transcribe_file, get_stt_diagnostics
+from common.llm.factory import get_llm_diagnostics, provider_name as llm_provider_name
 from common.payment_handlers import (
     checkout_status_handler,
     create_checkout_handler,
@@ -1663,10 +1670,27 @@ class EyeContactDetector_Callib:
 
 detector = None
 detector_lock = threading.Lock()
+_detectors_by_sid: dict[str, EyeContactDetector_Callib] = {}
 
 
-def get_head_tracking_detector():
+def get_head_tracking_detector(sid: str | None = None):
     global detector
+    from flask import request
+
+    session_id = sid or getattr(request, "sid", None)
+    if session_id:
+        with detector_lock:
+            existing = _detectors_by_sid.get(session_id)
+            if existing is not None:
+                return existing
+            try:
+                _detectors_by_sid[session_id] = EyeContactDetector_Callib()
+                print(f"[INFO] Head tracking initialized for session {session_id}")
+                return _detectors_by_sid[session_id]
+            except Exception as e:
+                print(f"[ERROR] Head tracking failed for session {session_id}: {e}")
+                return None
+
     if detector is not None:
         return detector
     with detector_lock:
@@ -1674,7 +1698,7 @@ def get_head_tracking_detector():
             return detector
         try:
             detector = EyeContactDetector_Callib()
-            print("[INFO] Head tracking initialized")
+            print("[INFO] Head tracking initialized (legacy singleton)")
         except Exception as e:
             print(f"[ERROR] Head tracking failed: {e}")
             detector = None
@@ -1760,51 +1784,13 @@ def _transcribe(wav_path):
     return " ".join(s.text for s in list(segs))
 
 def process_audio_file(file, auth_header=None, *, _local_only=False):
-    remote_url = (optional_env("TRANSCRIBE_SERVICE_URL", "") or "").strip()
-    if remote_url and not _local_only:
-        return transcribe_via_remote_service(file, remote_url, auth_header=auth_header)
-
-    global whisper_model
-    if whisper_model is None:
-        initialize_whisper()
-    if whisper_model is None:
-        return {"success": False, "error": "Speech model unavailable"}
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tf:
-        original = tf.name
-        file.save(original)
-
-    wav_path = None
-    try:
-        wav_path = convert_to_wav(original)
-        if not wav_path:
-            return {"success": False, "error": "Audio conversion failed"}
-        if is_blank_audio(wav_path):
-            return {"success": True, "transcription": ""}
-
-        for attempt in range(3):
-            try:
-                text = _transcribe(wav_path)
-                text = text.strip()
-                # Basic corruption check
-                clean = text.replace("!", "").replace(" ", "")
-                if not clean:
-                    if attempt < 2 and reinitialize_whisper():
-                        continue
-                    return {"success": True, "transcription": ""}
-                return {"success": True, "transcription": text}
-            except Exception as e:
-                print(f"[WARN] Transcription attempt {attempt+1} failed: {e}")
-                if attempt < 2:
-                    reinitialize_whisper()
-        return {"success": False, "error": "Transcription failed after retries"}
-    finally:
-        for p in [original, wav_path]:
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+    return stt_transcribe_file(
+        file,
+        auth_header=auth_header,
+        local_only=_local_only,
+        convert_to_wav=convert_to_wav,
+        is_blank_audio=is_blank_audio,
+    )
 
 
 def schedule_background_ai_warmup():
@@ -1829,22 +1815,36 @@ def schedule_background_ai_warmup():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=2)
+    llm_diagnostics = get_ollama_diagnostics(timeout_seconds=2)
+    stt_diagnostics = get_stt_diagnostics()
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
-        "api_revision": "fast-upload-v3",
+        "api_revision": "prod-v1",
+        "config": {
+            "source": config_source(),
+            "secret_id": optional_env("AWS_SECRETS_MANAGER_SECRET_ID") or os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", ""),
+        },
         "services": {
+            "llm": {
+                "provider": llm_provider_name(),
+                "ready": llm_diagnostics.get("ready", False),
+                "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
+                "model": llm_diagnostics.get("model"),
+                "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
+                "error": llm_diagnostics.get("error", ""),
+            },
             "ollama": {
-                "ready": ollama_diagnostics.get("ready", False),
-                "reachable": ollama_diagnostics.get("reachable", False),
-                "model": ollama_diagnostics.get("model"),
-                "model_available": ollama_diagnostics.get("model_available", False),
-                "error": ollama_diagnostics.get("error", ""),
-            }
-        }
-    })
+                "ready": llm_diagnostics.get("ready", False),
+                "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
+                "model": llm_diagnostics.get("model"),
+                "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
+                "error": llm_diagnostics.get("error", ""),
+            },
+            "stt": stt_diagnostics,
+        },
+    }), 200
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (
@@ -2002,10 +2002,16 @@ def _fetch_ollama_diagnostics(timeout_seconds=2):
 
 def get_ollama_diagnostics(timeout_seconds=2):
     ttl = max(5.0, float(optional_env("OLLAMA_DIAGNOSTICS_CACHE_SECONDS", "30")))
+
+    def _fetch():
+        if llm_provider_name() == "ollama":
+            return _fetch_ollama_diagnostics(timeout_seconds=timeout_seconds)
+        return get_llm_diagnostics()
+
     return cached(
         f"ollama_diag:{timeout_seconds}",
         ttl,
-        lambda: _fetch_ollama_diagnostics(timeout_seconds=timeout_seconds),
+        _fetch,
     )
 
 
@@ -2311,9 +2317,7 @@ def get_my_avatar():
     if not clean_path or not safe_storage_file_path(clean_path):
         abort(404)
 
-    storage_root = os.path.realpath(require_env("STORAGE_PATH"))
-    mimetype = mimetypes.guess_type(clean_path)[0] or 'application/octet-stream'
-    return send_from_directory(storage_root, clean_path, mimetype=mimetype, as_attachment=False)
+    return send_storage_file(clean_path)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  RESUME UPLOAD  (replaces the legacy storage layer)
@@ -3566,6 +3570,12 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    from flask import request
+
+    sid = getattr(request, "sid", None)
+    if sid:
+        with detector_lock:
+            _detectors_by_sid.pop(sid, None)
     print('Client disconnected')
 
 @socketio.on('frame')
@@ -3680,9 +3690,7 @@ def download_protected_file(relative_path):
     if not safe_storage_file_path(clean_path):
         abort(404)
 
-    storage_root = os.path.realpath(require_env("STORAGE_PATH"))
-    mimetype = mimetypes.guess_type(clean_path)[0]
-    return send_from_directory(storage_root, clean_path, mimetype=mimetype, as_attachment=False)
+    return send_storage_file(clean_path)
 
 
 @app.route('/api/delete-audio', methods=['DELETE', 'POST', 'OPTIONS'])

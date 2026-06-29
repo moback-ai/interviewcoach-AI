@@ -2,10 +2,19 @@ import os
 import shutil
 from urllib.parse import urlparse
 
+from flask import Response, send_from_directory
 from werkzeug.security import safe_join
 from werkzeug.utils import secure_filename
 
 from common.runtime_config import load_runtime_config, optional_env, require_env
+from common.storage_s3 import (
+    delete_s3_objects,
+    list_s3_folder,
+    read_bytes_s3,
+    save_bytes_s3,
+    s3_object_exists,
+    use_s3_storage,
+)
 
 load_runtime_config()
 
@@ -177,8 +186,34 @@ def user_owns_storage_path(user_id: str, relative_path: str) -> bool:
     return str(owner_id) == str(user_id)
 
 
+def storage_file_exists(relative_path: str) -> bool:
+    clean = validated_protected_relative_path(relative_path)
+    if not clean:
+        return False
+    if use_s3_storage():
+        return s3_object_exists(clean)
+    return safe_storage_file_path(clean) is not None
+
+
+def send_storage_file(clean_path: str):
+    """Serve a validated protected file from local disk or S3."""
+    import mimetypes
+
+    mimetype = mimetypes.guess_type(clean_path)[0] or "application/octet-stream"
+    if use_s3_storage():
+        data = read_bytes(clean_path)
+        return Response(data, mimetype=mimetype)
+    storage_root = os.path.realpath(require_env("STORAGE_PATH"))
+    return send_from_directory(storage_root, clean_path, mimetype=mimetype, as_attachment=False)
+
+
 def safe_storage_file_path(relative_path: str) -> str | None:
-    """Resolve relative path under STORAGE_PATH; return None if outside root."""
+    """Resolve relative path under STORAGE_PATH; return None if outside root or missing."""
+    clean = validated_protected_relative_path(relative_path)
+    if not clean:
+        return None
+    if use_s3_storage():
+        return clean if s3_object_exists(clean) else None
     file_path = _resolve_under_storage_root(relative_path)
     if not file_path or not os.path.isfile(file_path):
         return None
@@ -206,6 +241,8 @@ def _file_result(relative: str, stored_path: str, file_size: int) -> dict:
 
 def save_bytes(data: bytes, folder: str, filename: str) -> dict:
     """Save raw bytes to storage. Returns path info."""
+    if use_s3_storage():
+        return save_bytes_s3(data, folder, filename)
     dir_path = _ensure(folder)
     file_path = os.path.join(dir_path, filename)
     with open(file_path, 'wb') as f:
@@ -216,6 +253,9 @@ def save_bytes(data: bytes, folder: str, filename: str) -> dict:
 
 def save_from_path(src: str, folder: str, filename: str) -> dict:
     """Copy an existing file into storage."""
+    if use_s3_storage():
+        with open(src, "rb") as handle:
+            return save_bytes_s3(handle.read(), folder, filename)
     dir_path = _ensure(folder)
     dest = os.path.join(dir_path, filename)
     shutil.copy2(src, dest)
@@ -228,6 +268,8 @@ def read_bytes(relative_path: str) -> bytes:
     clean = validated_protected_relative_path(relative_path)
     if not clean:
         raise FileNotFoundError(f"Storage file not found: {relative_path}")
+    if use_s3_storage():
+        return read_bytes_s3(clean)
     file_path = safe_storage_file_path(clean)
     if not file_path:
         raise FileNotFoundError(f"Storage file not found: {relative_path}")
@@ -237,6 +279,8 @@ def read_bytes(relative_path: str) -> bytes:
 
 def list_folder(folder: str) -> list:
     """List files in a storage folder."""
+    if use_s3_storage():
+        return list_s3_folder(folder)
     dir_path = safe_storage_dir_path(folder)
     if not dir_path:
         return []
@@ -266,6 +310,14 @@ def list_folder(folder: str) -> list:
 
 def delete_files(relative_paths: list):
     """Delete a list of files by relative path."""
+    if use_s3_storage():
+        clean_paths = []
+        for rel in relative_paths:
+            clean = validated_protected_relative_path(rel)
+            if clean:
+                clean_paths.append(clean)
+        delete_s3_objects(clean_paths)
+        return
     for rel in relative_paths:
         clean = validated_protected_relative_path(rel)
         if not clean:

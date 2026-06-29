@@ -11,11 +11,7 @@ try:
     import faiss
 except Exception as faiss_import_error:
     faiss = None
-try:
-    import ollama
-except Exception as ollama_import_error:
-    ollama = None
-
+from common.llm.factory import chat as llm_chat, get_llm_diagnostics
 from common.runtime_config import load_runtime_config, optional_env
 
 load_runtime_config()
@@ -34,7 +30,8 @@ faq_cache_key = None
 
 
 def ollama_available():
-    return ollama is not None
+    diag = get_llm_diagnostics()
+    return bool(diag.get("ready"))
 
 
 def retrieval_available():
@@ -201,7 +198,7 @@ def needs_db_context(user_input, model="llama3"):
         return any(keyword in user_input.lower() for keyword in keywords)
     
     try:
-        response = ollama.chat(model=model, messages=messages)
+        response = llm_chat(model=model, messages=messages)
         result = response["message"]["content"].strip().lower()
         return result == "yes"
     except Exception as e:
@@ -435,7 +432,7 @@ def generate_support_reply(faq_sections, conversation_history, user_input, model
         return "Hello! How can I help you today?", []
 
     try:
-        response = ollama.chat(model=model, messages=messages)
+        response = llm_chat(model=model, messages=messages)
         return response["message"]["content"].strip(), [title for title, _ in relevant_sections]
     except Exception as e:
         print(f"[ERROR] generate_support_reply failed: {e}")

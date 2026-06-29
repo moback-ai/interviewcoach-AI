@@ -1,4 +1,4 @@
-# Frontend host — static SPA only (nginx on host continues to proxy /api to API private IP).
+# DEPRECATED — Plan B frontend EC2. Prod uses CloudFront + S3. See docs/AWS_DECOMMISSION.md
 services:
   web:
     image: ${ECR_REGISTRY}/interviewcoach-web:${IMAGE_TAG}

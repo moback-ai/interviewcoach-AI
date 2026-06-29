@@ -1,4 +1,4 @@
-# API host only — run on interviewcoach-api EC2.
+# DEPRECATED — Plan B API host layout. Use docker/compose.prod.yml
 services:
   api:
     image: ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG}

@@ -35,12 +35,12 @@ if ENABLE_LOGGING and not os.path.exists("logs"):
 
 
 def resolve_ollama_model_name(model=None):
-    configured_model = ""
-    try:
-        from common.runtime_config import optional_env as runtime_optional_env
-        configured_model = runtime_optional_env("OLLAMA_MODEL", "llama3.2:3b")
-    except Exception:
-        configured_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+    from common.runtime_config import optional_env as runtime_optional_env
+
+    configured_model = (
+        runtime_optional_env("OLLAMA_MODEL")
+        or runtime_optional_env("BEDROCK_CHAT_MODEL", "llama3.2:3b")
+    )
 
     configured_model = (configured_model or "llama3.2:3b").strip()
     requested_model = (model or "").strip()
@@ -1697,15 +1697,16 @@ Classification rules:
         return _keyword_classify_technical_role(job_title, job_description)
 
 def try_ollama_chat(prompt, model="llama3", max_retries=100000):
-    if ollama is None:
-        raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
+    from common.llm.factory import chat as llm_chat
+
     resolved_model = resolve_ollama_model_name(model)
+    messages = [{"role": "user", "content": prompt}]
     for attempt in range(max_retries):
         try:
-            return ollama.chat(model=resolved_model, messages=[{"role": "user", "content": prompt}])
+            return llm_chat(model=resolved_model, messages=messages)
         except Exception as e:
-            print(f"[WARNING] Ollama attempt {attempt+1} failed for model '{resolved_model}': {e}")
-    raise RuntimeError("Ollama API failed after multiple attempts.")
+            print(f"[WARNING] LLM attempt {attempt+1} failed for model '{resolved_model}': {e}")
+    raise RuntimeError("LLM API failed after multiple attempts.")
 
 
 def deduplicate_string_list(lst):

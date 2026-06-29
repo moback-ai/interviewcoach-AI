@@ -1,15 +1,14 @@
-"""
-rate_limit.py
-Simple in-process rate limiter using a sliding window counter.
-For multi-worker deployments, swap the _store dict for a Redis backend.
-"""
+"""Rate limiting with Redis when REDIS_URL is set, else in-process fallback."""
 import time
 import threading
 from flask import request, jsonify
 from functools import wraps
 
+from common.redis_client import redis_enabled
+from common.redis_store import rate_limit_check as redis_rate_limit_check
+
 _lock = threading.Lock()
-_store: dict[str, list[float]] = {}  # key -> list of hit timestamps
+_store: dict[str, list[float]] = {}
 
 
 def _client_key(prefix: str) -> str:
@@ -24,7 +23,9 @@ def _user_key(prefix: str) -> str:
 
 
 def _check(key: str, max_calls: int, window_seconds: int) -> bool:
-    """Return True if the request is allowed, False if rate-limited."""
+    if redis_enabled():
+        return redis_rate_limit_check(f"ic:rl:{key}", max_calls, window_seconds)
+
     now = time.time()
     cutoff = now - window_seconds
     with _lock:
@@ -39,12 +40,6 @@ def _check(key: str, max_calls: int, window_seconds: int) -> bool:
 
 
 def rate_limit(max_calls: int, window_seconds: int, key_fn=None):
-    """
-    Decorator. Default key is IP-based.
-    Usage:
-        @rate_limit(max_calls=5, window_seconds=60)
-        def login(): ...
-    """
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
@@ -59,7 +54,6 @@ def rate_limit(max_calls: int, window_seconds: int, key_fn=None):
 
 
 def user_rate_limit(max_calls: int, window_seconds: int):
-    """Rate limit by authenticated user ID (falls back to IP for anon)."""
     def decorator(f):
         @wraps(f)
         def wrapper(*args, **kwargs):

@@ -1,5 +1,6 @@
 # Local smoke test: docker compose -f docker/compose.local.yml up --build
-# Requires AWS credentials + interviewcoach/prod/app secret OR local .env overrides.
+# Local prod validation. Requires RUNTIME_CONFIG_ALLOW_ENV=true in backend/.env
+# OR AWS_SECRETS_MANAGER_SECRET_ID + AWS credentials for real secrets.
 
 name: interviewcoach-local
 

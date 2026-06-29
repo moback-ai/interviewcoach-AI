@@ -89,8 +89,8 @@ export const DEFAULT_BACKGROUND_STYLE_ID = 'ocean-waves';
 /** Auth/login/signup — ocean-waves (Vanta auth preset + pointer interaction). */
 export const AUTH_BACKGROUND_STYLE_ID = 'ocean-waves';
 
-/** Protected app pages — CSS only (no Three.js / Vanta). */
-export const APP_BACKGROUND_STYLE_ID = 'aurora-dream';
+/** Protected app pages — soft interactive waves + mouse ripples. */
+export const APP_BACKGROUND_STYLE_ID = 'soft-cloud';
 
 export function getBackgroundStyleById(styleId) {
   return BACKGROUND_STYLES.find((style) => style.id === styleId)

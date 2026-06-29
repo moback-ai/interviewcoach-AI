@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: InterviewCoach PROD - S3 buckets (static + user files). VPC/ALB/ASG configured separately or extend this stack.
+
+Parameters:
+  StaticBucketName:
+    Type: String
+    Default: ic-static-prod
+  UserFilesBucketName:
+    Type: String
+    Default: ic-user-files-prod
+
+Resources:
+  StaticBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref StaticBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  UserFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref UserFilesBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireSttTemp
+            Prefix: stt-temp/
+            Status: Enabled
+            ExpirationInDays: 1
+
+Outputs:
+  StaticBucketName:
+    Value: !Ref StaticBucket
+  UserFilesBucketName:
+    Value: !Ref UserFilesBucket

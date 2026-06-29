@@ -1,0 +1,27 @@
+# PROD API image — Bedrock + OpenRouter STT (no Ollama/Whisper sidecar).
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY backend/requirements.prod.txt ./requirements.txt
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt
+
+COPY backend/ .
+
+EXPOSE 5000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:5000/api/health" || exit 1
+
+# 2 workers when REDIS_URL is set (shared rate limits + interview slots)
+CMD ["gunicorn", "-w", "2", "--threads", "4", "-b", "0.0.0.0:5000", \
+     "--timeout", "300", "--max-requests", "2000", "--max-requests-jitter", "200", "app:app"]
