@@ -15,10 +15,10 @@ SNS_TOPIC_ARN="${ALARM_SNS_TOPIC_ARN:-}"
 put_alarm() {
   local name="$1"
   shift
+  local action="Created"
   if aws cloudwatch describe-alarms --region "$REGION" --alarm-names "$name" \
     --query 'length(MetricAlarms)' --output text 2>/dev/null | grep -q '^1$'; then
-    echo "Alarm exists: $name (skip)"
-    return 0
+    action="Updated"
   fi
   if [[ -n "$SNS_TOPIC_ARN" ]]; then
     aws cloudwatch put-metric-alarm --region "$REGION" --alarm-name "$name" "$@" \
@@ -26,7 +26,7 @@ put_alarm() {
   else
     aws cloudwatch put-metric-alarm --region "$REGION" --alarm-name "$name" "$@"
   fi
-  echo "Created alarm: $name"
+  echo "${action} alarm: $name"
 }
 
 put_alarm "interviewcoach-prod-ec2-cpu-high" \
@@ -79,5 +79,5 @@ put_alarm "interviewcoach-prod-rds-storage-low" \
 
 echo ""
 echo "CloudWatch alarms configured."
-echo "Optional: set ALARM_SNS_TOPIC_ARN in prod.env for email/SMS notifications."
+echo "Optional: set ALARM_EMAILS in prod.env for email/SMS notifications."
 echo "External uptime: monitor https://www.ugaanlabs.ai/api/health"

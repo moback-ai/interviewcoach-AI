@@ -2,7 +2,7 @@
 # Run recommended prod hardening + infra cleanup (interactive-safe defaults).
 #
 # Before running:
-#   - Set ALARM_EMAIL in infra/prod/prod.env
+#   - Set ALARM_EMAILS in infra/prod/prod.env (comma-separated)
 #   - OpenRouter key: add later via 03b-rotate-openrouter-key.sh
 #
 # Usage: bash infra/prod/scripts/13-prod-hardening-all.sh
@@ -17,10 +17,10 @@ bash "$SCRIPT_DIR/10c-harden-api-security-group.sh"
 
 echo ""
 echo "=== 2/6 SNS + CloudWatch alarms ==="
-if [[ -n "${ALARM_EMAIL:-}" ]]; then
+if [[ -n "${ALARM_EMAILS:-${ALARM_EMAIL:-}}" ]]; then
   bash "$SCRIPT_DIR/11-aws-alarm-sns-topic.sh"
 else
-  echo "ALARM_EMAIL unset — running alarms without SNS actions."
+  echo "ALARM_EMAILS unset — running alarms without SNS actions."
   bash "$SCRIPT_DIR/12-aws-cloudwatch-alarms.sh"
 fi
 
