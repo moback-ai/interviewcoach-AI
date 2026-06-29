@@ -75,7 +75,7 @@ bash infra/prod/scripts/04-aws-iam-attach.sh
 bash infra/prod/scripts/05-devsecops-build-ecr.sh
 ```
 
-Wire `infra/prod/github-workflows/deploy-prod.yml` in devsecops-platform for CI deploys.
+Deploy Hybrid: `CONFIRM=YES bash infra/prod/scripts/14-aws-deploy-hybrid.sh`
 
 ---
 

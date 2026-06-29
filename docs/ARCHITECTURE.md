@@ -5,34 +5,36 @@ Region: **ap-south-1** (Mumbai) · CloudFront ACM cert: **us-east-1**
 
 ---
 
-## High-level request flow
+## High-level request flow (Hybrid PROD)
 
 ```mermaid
 flowchart TB
   User[Browser / mobile]
   CF[CloudFront\nwww.ugaanlabs.ai]
   S3[S3 ic-static-prod\nReact SPA]
-  API[EC2 API\nc6i.large · Docker]
-  RDS[(RDS PostgreSQL\ninterviewcoach-db)]
-  S3Files[S3 ic-user-files-prod\nresumes · STT temp]
-  Bedrock[Amazon Bedrock\nNova Lite / Pro]
-  STT[OpenRouter Whisper\n→ Amazon Transcribe]
-  Redis[(Redis\ncache · rate limit)]
+  ALB[ALB\ninterviewcoach-prod-alb]
+  ASG[ASG c6i.xlarge x2+\nDocker API]
+  RDS[(RDS PostgreSQL\nMulti-AZ + Proxy)]
+  S3Files[S3 ic-user-files-prod]
+  Bedrock[Amazon Bedrock]
+  STT[OpenRouter → Amazon]
+  Redis[(ElastiCache Redis)]
 
   User --> CF
-  CF -->|GET /* static| S3
-  CF -->|/api/* /socket.io/*| API
-  API --> RDS
-  API --> S3Files
-  API --> Bedrock
-  API --> STT
-  API --> Redis
+  CF -->|static| S3
+  CF -->|/api/*| ALB
+  ALB --> ASG
+  ASG --> RDS
+  ASG --> S3Files
+  ASG --> Bedrock
+  ASG --> STT
+  ASG --> Redis
 ```
 
 | Path | Origin | Notes |
 |------|--------|-------|
 | `/`, `/login`, SPA routes | S3 via OAC | SPA fallback: 403/404 → `index.html` |
-| `/api/*` | EC2 API (HTTP origin) | No cache (managed cache policy) |
+| `/api/*` | ALB → ASG (nginx → API :5000) | No cache |
 | `/functions/*`, `/socket.io/*` | EC2 API | WebSocket / server functions |
 | User uploads | API → S3 | Served via `/storage` or signed URLs |
 
@@ -67,7 +69,8 @@ Local dev still uses Ollama + `.env` (`RUNTIME_CONFIG_ALLOW_ENV=true`).
 | Stack | Template | Purpose |
 |-------|----------|---------|
 | `interviewcoach-prod-s3` | `prod-stack.yaml` | Static + user-files buckets (Retain policy) |
-| `interviewcoach-prod-cloudfront` | `prod-cloudfront.yaml` | CDN, OAC, `/api/*` routing |
+| `interviewcoach-prod-hybrid` | `prod-hybrid-stack.yaml` | ALB + ASG + ElastiCache |
+| `interviewcoach-prod-rds-proxy` | `prod-rds-proxy.yaml` | RDS Proxy |
 
 S3 stack rename/import (legacy hybrid stack): `infra/prod/scripts/02b-rename-s3-stack.sh`
 

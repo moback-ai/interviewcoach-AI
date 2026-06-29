@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: InterviewCoach PROD — RDS Proxy for PostgreSQL (Hybrid).
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: CommaDelimitedList
+  DbInstanceIdentifier:
+    Type: String
+    Default: interviewcoach-db
+  DbSecretArn:
+    Type: String
+    Description: Secrets Manager ARN with username/password for RDS (JSON keys)
+  ApiSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Hybrid API ASG security group
+  RdsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing RDS security group
+
+Resources:
+  RdsProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: interviewcoach-prod-rds-proxy-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RdsProxySecretsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref DbSecretArn
+
+  RdsProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: interviewcoach-prod-rds-proxy-sg
+      GroupDescription: RDS Proxy for InterviewCoach PROD
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ApiSecurityGroupId
+          Description: PostgreSQL from API ASG
+      Tags:
+        - Key: Name
+          Value: interviewcoach-prod-rds-proxy-sg
+
+  RdsIngressFromProxy:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref RdsSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref RdsProxySecurityGroup
+      Description: PostgreSQL from RDS Proxy
+
+  DbProxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: interviewcoach-prod-proxy
+      EngineFamily: POSTGRESQL
+      RequireTLS: false
+      RoleArn: !GetAtt RdsProxyRole.Arn
+      VpcSubnetIds: !Ref SubnetIds
+      VpcSecurityGroupIds:
+        - !Ref RdsProxySecurityGroup
+      Auth:
+        - AuthScheme: SECRETS
+          SecretArn: !Ref DbSecretArn
+          IAMAuth: DISABLED
+      Tags:
+        - Key: Name
+          Value: interviewcoach-prod-proxy
+
+  DbProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    DependsOn: DbProxy
+    Properties:
+      DBProxyName: !Ref DbProxy
+      TargetGroupName: default
+      DBInstanceIdentifiers:
+        - !Ref DbInstanceIdentifier
+
+Outputs:
+  RdsProxyEndpoint:
+    Value: !GetAtt DbProxy.Endpoint
+  RdsProxyArn:
+    Value: !Ref DbProxy

@@ -25,6 +25,7 @@ patch_keys = (
     "DODO_ENV", "DOMAIN", "BACKEND_API_BASE", "PUBLIC_STORAGE_URL", "FRONTEND_DOMAIN",
     "S3_BUCKET", "STT_S3_BUCKET", "STT_PRIMARY", "STT_FALLBACK", "REDIS_URL",
     "BEDROCK_REGION", "BEDROCK_CHAT_MODEL", "BEDROCK_REPORT_MODEL",
+    "DB_HOST", "INFRA_LAYOUT",
 )
 for key in patch_keys:
     val = os.environ.get(key, "").strip()
