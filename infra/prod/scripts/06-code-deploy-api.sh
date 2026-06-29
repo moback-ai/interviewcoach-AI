@@ -34,4 +34,4 @@ sudo -E docker compose -f ${COMPOSE_FILE} up -d --no-build
 curl -fsS http://127.0.0.1:5000/api/health | head -c 500 || true
 EOF
 
-echo "Phase 3 step 6 complete. Check http://${API_IP}:5000/api/health"
+echo "Phase 3 step 6 complete. Check https://www.ugaanlabs.ai/api/health"

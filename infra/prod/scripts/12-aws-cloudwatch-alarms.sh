@@ -20,14 +20,14 @@ put_alarm() {
     echo "Alarm exists: $name (skip)"
     return 0
   fi
-  aws cloudwatch put-metric-alarm --region "$REGION" --alarm-name "$name" "$@"
+  if [[ -n "$SNS_TOPIC_ARN" ]]; then
+    aws cloudwatch put-metric-alarm --region "$REGION" --alarm-name "$name" "$@" \
+      --alarm-actions "$SNS_TOPIC_ARN" --ok-actions "$SNS_TOPIC_ARN"
+  else
+    aws cloudwatch put-metric-alarm --region "$REGION" --alarm-name "$name" "$@"
+  fi
   echo "Created alarm: $name"
 }
-
-SNS_ARGS=()
-if [[ -n "$SNS_TOPIC_ARN" ]]; then
-  SNS_ARGS=(--alarm-actions "$SNS_TOPIC_ARN" --ok-actions "$SNS_TOPIC_ARN")
-fi
 
 put_alarm "interviewcoach-prod-ec2-cpu-high" \
   --alarm-description "Prod API EC2 CPU > 80% for 10 min" \
@@ -39,8 +39,7 @@ put_alarm "interviewcoach-prod-ec2-cpu-high" \
   --evaluation-periods 2 \
   --threshold 80 \
   --comparison-operator GreaterThanThreshold \
-  --treat-missing-data notBreaching \
-  "${SNS_ARGS[@]}"
+  --treat-missing-data notBreaching
 
 put_alarm "interviewcoach-prod-ec2-status-check" \
   --alarm-description "Prod API EC2 status check failed" \
@@ -52,8 +51,7 @@ put_alarm "interviewcoach-prod-ec2-status-check" \
   --evaluation-periods 2 \
   --threshold 0 \
   --comparison-operator GreaterThanThreshold \
-  --treat-missing-data breaching \
-  "${SNS_ARGS[@]}"
+  --treat-missing-data breaching
 
 put_alarm "interviewcoach-prod-rds-cpu-high" \
   --alarm-description "Prod RDS CPU > 80% for 15 min" \
@@ -65,8 +63,7 @@ put_alarm "interviewcoach-prod-rds-cpu-high" \
   --evaluation-periods 3 \
   --threshold 80 \
   --comparison-operator GreaterThanThreshold \
-  --treat-missing-data notBreaching \
-  "${SNS_ARGS[@]}"
+  --treat-missing-data notBreaching
 
 put_alarm "interviewcoach-prod-rds-storage-low" \
   --alarm-description "Prod RDS free storage < 5 GB" \
@@ -78,8 +75,7 @@ put_alarm "interviewcoach-prod-rds-storage-low" \
   --evaluation-periods 1 \
   --threshold 5368709120 \
   --comparison-operator LessThanThreshold \
-  --treat-missing-data notBreaching \
-  "${SNS_ARGS[@]}"
+  --treat-missing-data notBreaching
 
 echo ""
 echo "CloudWatch alarms configured."
