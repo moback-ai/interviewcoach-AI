@@ -151,7 +151,7 @@ Previous architecture: dedicated AI EC2 (Ollama + Whisper sidecar), nginx fronte
 | Local disk storage | S3 `ic-user-files-prod` |
 | `.env` on server | Secrets Manager JSON |
 
-Runbook: [MONDAY_RUNBOOK.md](MONDAY_RUNBOOK.md) · Decommission: [AWS_DECOMMISSION.md](AWS_DECOMMISSION.md)
+Runbook: [PROD_RUNBOOK.md](PROD_RUNBOOK.md) · Decommission: [AWS_DECOMMISSION.md](AWS_DECOMMISSION.md)
 
 ---
 

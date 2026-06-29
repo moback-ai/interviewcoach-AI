@@ -73,7 +73,7 @@ This document captures what was requested across prior setup sessions, and what 
 |-------------|--------|
 | Root README for onboarding | `README.md` |
 | Prod architecture doc | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| PROD migration runbooks | [MIGRATION_PROD.md](MIGRATION_PROD.md), [MONDAY_RUNBOOK.md](MONDAY_RUNBOOK.md) |
+| PROD deploy runbook | [PROD_RUNBOOK.md](PROD_RUNBOOK.md) |
 | Backend unit tests (auth, document validation) | `backend/tests/` (local, CI step added) |
 | Replace `alert()` with in-app modals | Done (Dashboard, Upload, Questions, History, Feedback) |
 | Split large `app.py` into blueprints | Not started (large refactor) |

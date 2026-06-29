@@ -18,14 +18,17 @@ Keep until cutover complete: at least one API path serving traffic.
 
 ---
 
-## 2. Docker / compose (stop using)
+## 2. Docker / compose (removed from repo)
 
-| File | Action |
-|------|--------|
-| `docker/compose.plan-b.yml` | **Archive** — replaced by `docker/compose.prod.yml` |
-| `docker/compose.transcribe-host.yml` | **Remove** from deploy |
-| `docker/compose.web-host.yml` / `api-host` splits | **Replace** with ALB + ASG or single prod compose |
-| Whisper **transcribe sidecar** on port 5001 | **Stop container permanently** |
+Legacy Plan B compose files have been deleted. Production uses:
+
+| File | Role |
+|------|------|
+| `docker/compose.prod.yml` | Prod API + Redis on EC2 |
+| `docker/api/Dockerfile.prod` | Prod API image (Bedrock, no Ollama/Whisper) |
+| `docker/compose.local.yml` | Optional local Docker smoke test |
+
+Stop on AWS if still running: Whisper transcribe sidecar (port 5001), Ollama on AI EC2.
 
 ---
 
@@ -104,13 +107,13 @@ Inference profile ARNs for `apac.amazon.nova-*` in ap-south-1.
 
 ---
 
-## 8. DNS / edge — switch
+## 8. DNS / edge
 
 | Before (Plan B) | After (PROD) |
-|-----------------|----------------|
-| Frontend EC2 public IP / nginx | **CloudFront** → S3 static |
-| API via nginx proxy on FE host | **CloudFront** `/api/*` → **ALB** → API |
-| `/socket.io/` via nginx | **ALB** WebSocket stickiness |
+|-----------------|--------------|
+| Frontend EC2 + nginx | **CloudFront** → S3 static |
+| API via nginx on FE host | **CloudFront** `/api/*` → EC2 API |
+| `/socket.io/` via nginx | **CloudFront** → EC2 API |
 
 ---
 
@@ -138,18 +141,18 @@ Add:
 
 - Bedrock throttling / 5xx
 - OpenRouter STT failure rate
-- API p95 latency, ALB 5xx
+- API p95 latency, CloudFront 5xx
 
 ---
 
 ## 12. Cutover order (prod only)
 
 ```
-Day 0  Deploy prod API + update Secrets Manager (parallel to old stack if needed)
-Day 0  CloudFront → new ALB; verify ugaanlabs.ai
+Day 0  Deploy prod API + update Secrets Manager
+Day 0  CloudFront + DNS cutover; verify ugaanlabs.ai
 Day 1  Monitor interviews, Piper, head tracking, payments
 Day 7  Stop AI EC2 + transcribe sidecar
-Day 7  Stop old API/FE EC2 if replaced by ASG
+Day 7  Stop old API/FE EC2
 Day 14 Delete AI EC2, old EBS snapshots, unused SG rules
 Day 14 Remove OLLAMA_* / TRANSCRIBE_* from secrets (see §3)
 ```

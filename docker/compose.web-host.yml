@@ -1,8 +1,0 @@
-# DEPRECATED — Plan B frontend EC2. Prod uses CloudFront + S3. See docs/AWS_DECOMMISSION.md
-services:
-  web:
-    image: ${ECR_REGISTRY}/interviewcoach-web:${IMAGE_TAG}
-    container_name: interviewcoach-web
-    restart: unless-stopped
-    ports:
-      - "8080:80"

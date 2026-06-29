@@ -12,4 +12,3 @@ frontend/dist
 docs/
 *.md
 database/
-scripts/aws-plan-b/

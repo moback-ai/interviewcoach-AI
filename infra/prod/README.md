@@ -4,7 +4,7 @@ Copy this folder to **`moback-ai/devsecops-platform`** → `apps/interviewcoach/
 Or run scripts directly from this application repo.
 
 **Prod only.** No staging.  
-Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) · Runbook: [docs/MONDAY_RUNBOOK.md](../../docs/MONDAY_RUNBOOK.md)
+Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) · Runbook: [docs/PROD_RUNBOOK.md](../../docs/PROD_RUNBOOK.md)
 
 ---
 

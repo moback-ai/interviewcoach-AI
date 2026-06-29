@@ -32,7 +32,7 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 - [docs/DEPLOY.md](docs/DEPLOY.md) — developer release flow  
 - [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — who deploys and how  
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — prod topology (CloudFront, Bedrock, S3)  
-- [docs/MIGRATION_PROD.md](docs/MIGRATION_PROD.md) — Plan B → PROD migration status  
+- [docs/PROD_RUNBOOK.md](docs/PROD_RUNBOOK.md) — production deploy steps  
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — team requirements map  
 
 ## Project layout
