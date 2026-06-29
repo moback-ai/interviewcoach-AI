@@ -113,10 +113,17 @@ bash infra/prod/scripts/08-code-frontend.sh
 bash infra/prod/scripts/09-code-cloudfront-deploy.sh
 bash infra/prod/scripts/09a-acm-validation-dns.sh   # if cert pending
 bash infra/prod/scripts/09b-namecheap-dns-cutover.sh
-curl -fsS https://ugaanlabs.ai/api/health
+curl -fsS https://www.ugaanlabs.ai/api/health
 ```
 
 Update `infra/prod/prod.env` with `CF_DIST_ID` and `CF_DOMAIN` from script output.
+
+### Hardening + monitoring
+```bash
+bash infra/prod/scripts/10c-harden-api-security-group.sh   # closes public :5000
+# Optional: SSH_ALLOW_CIDR=your.ip/32 in prod.env then re-run
+bash infra/prod/scripts/12-aws-cloudwatch-alarms.sh
+```
 
 ---
 

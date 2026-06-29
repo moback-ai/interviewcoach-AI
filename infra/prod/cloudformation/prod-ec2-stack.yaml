@@ -28,25 +28,24 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: interviewcoach-prod-api-sg
-      GroupDescription: InterviewCoach PROD API (HTTP/HTTPS/API/SSH)
+      GroupDescription: InterviewCoach PROD API (HTTP/HTTPS for CloudFront; no public :5000)
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
+          Description: SSH — restrict via 10c-harden-api-security-group.sh
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+          Description: HTTP for CloudFront API origin (nginx)
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 5000
-          ToPort: 5000
-          CidrIp: 0.0.0.0/0
+          Description: HTTPS direct access / certbot
       Tags:
         - Key: Name
           Value: interviewcoach-prod-api-sg

@@ -28,8 +28,9 @@ cd /apps/interviewcoach
 export ECR_REGISTRY=${ECR_REGISTRY}
 export IMAGE_TAG=${IMAGE_TAG}
 export AWS_REGION=${REGION}
-sudo -E docker compose -f ${COMPOSE_FILE} pull
-sudo -E docker compose -f ${COMPOSE_FILE} up -d
+REPO="${ECR_REGISTRY}/interviewcoach-api"
+sudo docker pull "\${REPO}:\${IMAGE_TAG}"
+sudo -E docker compose -f ${COMPOSE_FILE} up -d --no-build
 curl -fsS http://127.0.0.1:5000/api/health | head -c 500 || true
 EOF
 

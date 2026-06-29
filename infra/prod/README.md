@@ -66,6 +66,9 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `09b-namecheap-dns-cutover.sh` | Namecheap API: point `@`/`www` at CloudFront (preserves MX) |
 | `09-code-cutover.sh` | Manual DNS cutover confirmation |
 | `10-cleanup-decommission.sh` | Stop AI EC2 + old hosts |
+| `10c-harden-api-security-group.sh` | Remove public :5000; optional SSH CIDR lockdown |
+| `12-aws-cloudwatch-alarms.sh` | EC2 + RDS CloudWatch alarms |
+| `cloudfront/apex-to-www.js` | CloudFront function source (apex → www redirect) |
 | `load-prod-env.sh` | Source `prod.env` |
 | `ssh-prod.sh` | SSH helper using `prod.env` keys |
 
@@ -77,4 +80,4 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 - RDS (`interviewcoach-db`)
 - ECR repos: `interviewcoach-api`, `interviewcoach-web`
 - OpenRouter API key (in Secrets Manager, not `prod.env`)
-- Domain: `ugaanlabs.ai` (Namecheap)
+- Domain: `www.ugaanlabs.ai` (canonical; apex redirects via CloudFront)

@@ -7,7 +7,9 @@ source "$(dirname "$0")/load-prod-env.sh"
 
 REGION="${AWS_REGION:-ap-south-1}"
 CF_REGION="us-east-1"
-DOMAIN="${FRONTEND_DOMAIN:-ugaanlabs.ai}"
+# CloudFormation DomainName must be the apex (aliases: apex + www.${apex})
+APEX_DOMAIN="${APEX_DOMAIN:-ugaanlabs.ai}"
+CANONICAL_HOST="${FRONTEND_DOMAIN:-www.${APEX_DOMAIN}}"
 STACK="${CF_STACK_NAME:-interviewcoach-prod-cloudfront}"
 TEMPLATE="$(dirname "$0")/../cloudformation/prod-cloudfront.yaml"
 STATIC_BUCKET="${STATIC_BUCKET:-ic-static-prod}"
@@ -16,21 +18,23 @@ API_ORIGIN="${API_ORIGIN_DOMAIN:-ec2-43-205-215-217.ap-south-1.compute.amazonaws
 CERT_ARN="${ACM_CERT_ARN:-}"
 if [[ -z "$CERT_ARN" ]]; then
   EXISTING=$(aws acm list-certificates --region "$CF_REGION" \
-    --query "CertificateSummaryList[?DomainName=='${DOMAIN}'].CertificateArn | [0]" --output text 2>/dev/null || true)
+    --query "CertificateSummaryList[?DomainName=='${APEX_DOMAIN}'].CertificateArn | [0]" --output text 2>/dev/null || true)
   if [[ -n "$EXISTING" && "$EXISTING" != "None" ]]; then
     CERT_ARN="$EXISTING"
   else
-    echo "Requesting ACM certificate for ${DOMAIN} + www.${DOMAIN} (us-east-1) ..."
+    echo "Requesting ACM certificate for ${APEX_DOMAIN} + www.${APEX_DOMAIN} (us-east-1) ..."
     CERT_ARN=$(aws acm request-certificate \
       --region "$CF_REGION" \
-      --domain-name "$DOMAIN" \
-      --subject-alternative-names "www.${DOMAIN}" \
+      --domain-name "$APEX_DOMAIN" \
+      --subject-alternative-names "www.${APEX_DOMAIN}" \
       --validation-method DNS \
       --query CertificateArn --output text)
   fi
 fi
 
-echo "Certificate: $CERT_ARN"
+echo "Apex (CF aliases):  ${APEX_DOMAIN}"
+echo "Canonical (app URL): https://${CANONICAL_HOST}"
+echo "Certificate:         $CERT_ARN"
 echo ""
 echo "Add these DNS validation CNAMEs at Namecheap (if not already present):"
 aws acm describe-certificate --region "$CF_REGION" --certificate-arn "$CERT_ARN" \
@@ -60,7 +64,7 @@ aws cloudformation deploy \
   --stack-name "$STACK" \
   --template-file "$TEMPLATE" \
   --parameter-overrides \
-    DomainName="$DOMAIN" \
+    DomainName="$APEX_DOMAIN" \
     AcmCertificateArn="$CERT_ARN" \
     StaticBucketName="$STATIC_BUCKET" \
     ApiOriginDomain="$API_ORIGIN" \

@@ -2,7 +2,7 @@
 
 AI-powered mock interview platform (React + Flask + PostgreSQL).
 
-Production: **https://ugaanlabs.ai**
+Production: **https://www.ugaanlabs.ai**
 
 ## Quick start (local)
 

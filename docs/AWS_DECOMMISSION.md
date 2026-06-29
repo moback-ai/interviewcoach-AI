@@ -149,7 +149,7 @@ Add:
 
 ```
 Day 0  Deploy prod API + update Secrets Manager
-Day 0  CloudFront + DNS cutover; verify ugaanlabs.ai
+Day 0  CloudFront + DNS cutover; verify https://www.ugaanlabs.ai
 Day 1  Monitor interviews, Piper, head tracking, payments
 Day 7  Stop AI EC2 + transcribe sidecar
 Day 7  Stop old API/FE EC2

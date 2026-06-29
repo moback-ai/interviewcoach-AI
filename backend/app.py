@@ -1840,8 +1840,23 @@ def schedule_background_ai_warmup():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    llm_diagnostics = get_ollama_diagnostics(timeout_seconds=2)
+    llm_diagnostics = get_llm_diagnostics()
     stt_diagnostics = get_stt_diagnostics()
+    provider = llm_provider_name()
+    llm_status = {
+        "provider": provider,
+        "ready": llm_diagnostics.get("ready", False),
+        "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
+        "model": llm_diagnostics.get("model"),
+        "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
+        "error": llm_diagnostics.get("error", ""),
+    }
+    services = {
+        "llm": llm_status,
+        "stt": stt_diagnostics,
+    }
+    if provider == "ollama":
+        services["ollama"] = dict(llm_status)
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
@@ -1851,24 +1866,7 @@ def health_check():
             "source": config_source(),
             "secret_id": optional_env("AWS_SECRETS_MANAGER_SECRET_ID") or os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", ""),
         },
-        "services": {
-            "llm": {
-                "provider": llm_provider_name(),
-                "ready": llm_diagnostics.get("ready", False),
-                "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
-                "model": llm_diagnostics.get("model"),
-                "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
-                "error": llm_diagnostics.get("error", ""),
-            },
-            "ollama": {
-                "ready": llm_diagnostics.get("ready", False),
-                "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
-                "model": llm_diagnostics.get("model"),
-                "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
-                "error": llm_diagnostics.get("error", ""),
-            },
-            "stt": stt_diagnostics,
-        },
+        "services": services,
     }), 200
 
 

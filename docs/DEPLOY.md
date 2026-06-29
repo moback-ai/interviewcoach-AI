@@ -1,6 +1,6 @@
 # Deploy (application repo)
 
-Production: **https://ugaanlabs.ai**
+Production: **https://www.ugaanlabs.ai**
 
 **Developers do not deploy.** Production deploy is **DevSecOps only** — see [DEVSECOPS.md](DEVSECOPS.md).
 

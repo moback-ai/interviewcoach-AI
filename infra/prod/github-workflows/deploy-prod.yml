@@ -53,5 +53,18 @@ jobs:
           CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
         run: bash infra/prod/scripts/08-code-frontend.sh
 
-      - name: Health check
-        run: curl -fsS https://ugaanlabs.ai/api/health
+      - name: Post-deploy smoke tests
+        run: |
+          set -euo pipefail
+          curl -fsS https://www.ugaanlabs.ai/api/health | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          assert d.get('status')=='healthy', d
+          assert d['services']['llm']['provider']=='bedrock', d['services']['llm']
+          assert 'ollama' not in d['services'], 'prod should not expose ollama in health'
+          assert d['services']['stt']['chain']==['openrouter','amazon'], d['services']['stt']
+          print('health OK:', d['services']['llm']['provider'], d['services']['stt']['chain'])
+          "
+          code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
+          test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
+          echo "apex redirect OK"

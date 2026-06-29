@@ -1,6 +1,6 @@
 # Architecture — InterviewCoach AI (PROD)
 
-Production URL: **https://ugaanlabs.ai**  
+Production URL: **https://www.ugaanlabs.ai** (apex `ugaanlabs.ai` redirects to www)  
 Region: **ap-south-1** (Mumbai) · CloudFront ACM cert: **us-east-1**
 
 ---
@@ -10,7 +10,7 @@ Region: **ap-south-1** (Mumbai) · CloudFront ACM cert: **us-east-1**
 ```mermaid
 flowchart TB
   User[Browser / mobile]
-  CF[CloudFront\nugaanlabs.ai]
+  CF[CloudFront\nwww.ugaanlabs.ai]
   S3[S3 ic-static-prod\nReact SPA]
   API[EC2 API\nc6i.large · Docker]
   RDS[(RDS PostgreSQL\ninterviewcoach-db)]
@@ -45,7 +45,7 @@ Deploy script: `infra/prod/scripts/09-code-cloudfront-deploy.sh`
 
 | Layer | Technology | Prod notes |
 |-------|------------|------------|
-| Frontend | Vite + React 19 | Built with `VITE_API_BASE_URL=https://ugaanlabs.ai/api` |
+| Frontend | Vite + React 19 | Built with `VITE_API_BASE_URL=https://www.ugaanlabs.ai/api` |
 | API | Flask + Gunicorn + Socket.IO | `docker/api/Dockerfile.prod` — no Ollama/Whisper in image |
 | Database | PostgreSQL (RDS) | Connection pool via `psycopg2` |
 | LLM | Amazon Bedrock | Nova Lite (chat), Nova Pro (reports) — `common/llm/bedrock.py` |
@@ -91,7 +91,7 @@ Infra names and IDs: `infra/prod/prod.env` (no secrets — safe to commit).
 
 ### DNS & TLS
 
-1. ACM certificate in **us-east-1** for `ugaanlabs.ai` + `www`
+1. ACM certificate in **us-east-1** for `ugaanlabs.ai` + `www.ugaanlabs.ai` (canonical: **www**)
 2. CloudFront distribution with custom aliases
 3. Namecheap DNS: `@` ALIAS + `www` CNAME → CloudFront domain
 
@@ -127,7 +127,7 @@ flowchart LR
   ECR[Build ECR image]
   API[Deploy API EC2]
   FE[S3 sync + CF invalidation]
-  HC[Health check\nugaanlabs.ai/api/health]
+  HC[Health check\nwww.ugaanlabs.ai/api/health]
 
   Dev --> Sec --> Merge --> DS
   DS --> ECR --> API --> FE --> HC
@@ -174,7 +174,7 @@ scripts/              Local dev and maintenance helpers
 After deploy or cutover:
 
 ```bash
-curl -fsS https://ugaanlabs.ai/api/health | jq .
+curl -fsS https://www.ugaanlabs.ai/api/health | jq .
 ```
 
 Expected on prod: `llm.provider=bedrock`, STT chain includes configured providers, `config.source=secrets_manager`.
