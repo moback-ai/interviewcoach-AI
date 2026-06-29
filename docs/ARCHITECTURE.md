@@ -82,13 +82,17 @@ S3 stack rename/import (legacy hybrid stack): `infra/prod/scripts/02b-rename-s3-
 | `ic-user-files-prod` | User files, STT temp prefix |
 | Legacy `interviewcoach-storage-*` | Migrated via `07b-migrate-legacy-storage.sh` |
 
-### Compute
+### Compute (Hybrid)
 
 | Resource | Role |
 |----------|------|
-| EC2 `c6i.large` | Prod API host — Docker compose from ECR image |
-| ECR `interviewcoach-api` | Prod API container |
-| ECR `interviewcoach-web` | Optional web image (static deploy uses S3 sync) |
+| ALB `interviewcoach-prod-alb` | API load balancer (CloudFront origin) |
+| ASG `interviewcoach-prod-api-asg` | 2–4 × `c6i.xlarge`, Docker API + nginx |
+| ElastiCache `interviewcoach-prod-redis` | Redis 7 (Multi-AZ, 2 nodes) |
+| RDS Proxy `interviewcoach-prod-proxy` | Connection pooling to RDS |
+| ECR `interviewcoach-api` | Prod API container image |
+
+Legacy single EC2 (`i-0642ed38dc5b8b740`) kept for rollback — terminate after 24h stable.
 
 Infra names and IDs: `infra/prod/prod.env` (no secrets — safe to commit).
 
