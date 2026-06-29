@@ -67,6 +67,13 @@ if user_files:
 for key, value in overrides.items():
     merged[key] = value
 
+# Never drop live OpenRouter key when STT uses OpenRouter
+stt_primary = (merged.get("STT_PRIMARY") or "amazon").lower()
+if "openrouter" in stt_primary and empty(merged.get("OPENROUTER_API_KEY")):
+    live_key = current.get("OPENROUTER_API_KEY")
+    if not empty(live_key):
+        merged["OPENROUTER_API_KEY"] = live_key
+
 # PROD overrides (prod DB endpoint from live RDS if still placeholder)
 if empty(merged.get("DB_HOST")) and not empty(current.get("DB_HOST")):
     merged["DB_HOST"] = current["DB_HOST"]

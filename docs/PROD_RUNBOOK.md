@@ -120,10 +120,21 @@ Update `infra/prod/prod.env` with `CF_DIST_ID` and `CF_DOMAIN` from script outpu
 
 ### Hardening + monitoring
 ```bash
-bash infra/prod/scripts/10c-harden-api-security-group.sh   # closes public :5000
-# Optional: SSH_ALLOW_CIDR=your.ip/32 in prod.env then re-run
+# All-in-one (set ALARM_EMAIL in prod.env first):
+bash infra/prod/scripts/13-prod-hardening-all.sh
+
+# Or step by step:
+bash infra/prod/scripts/10c-harden-api-security-group.sh   # closes :5000; SSH auto-detect if SSH_AUTO_DETECT_IP=1
+bash infra/prod/scripts/11-aws-alarm-sns-topic.sh        # needs ALARM_EMAIL
 bash infra/prod/scripts/12-aws-cloudwatch-alarms.sh
+bash infra/prod/scripts/09d-acm-cleanup-pending.sh
+bash infra/prod/scripts/09c-cloudfront-cfn-reconcile.sh
+
+# Rotate OpenRouter key (revoke old key at openrouter.ai after):
+OPENROUTER_API_KEY=sk-or-v1-... bash infra/prod/scripts/03b-rotate-openrouter-key.sh
 ```
+
+CI deploy workflow: `.github/workflows/deploy-prod.yml` (requires GitHub `production` environment secrets).
 
 ---
 

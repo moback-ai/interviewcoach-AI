@@ -11,6 +11,10 @@ Parameters:
   StaticBucketName:
     Type: String
     Default: ic-static-prod
+  StaticBucketRegion:
+    Type: String
+    Default: ap-south-1
+    Description: Region where the static S3 bucket lives (must match bucket location)
   ApiOriginDomain:
     Type: String
     Description: EC2 public DNS (e.g. ec2-43-205-215-217.ap-south-1.compute.amazonaws.com)
@@ -96,7 +100,7 @@ Resources:
         HttpVersion: http2and3
         Origins:
           - Id: S3Static
-            DomainName: !Sub "${StaticBucketName}.s3.${AWS::Region}.amazonaws.com"
+            DomainName: !Sub "${StaticBucketName}.s3.${StaticBucketRegion}.amazonaws.com"
             OriginAccessControlId: !GetAtt CloudFrontOAC.Id
             S3OriginConfig:
               OriginAccessIdentity: ""

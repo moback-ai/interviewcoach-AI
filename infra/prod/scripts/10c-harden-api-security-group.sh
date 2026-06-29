@@ -11,6 +11,17 @@ source "$(dirname "$0")/load-prod-env.sh"
 REGION="${AWS_REGION:-ap-south-1}"
 INSTANCE_ID="${API_INSTANCE_ID:?Set API_INSTANCE_ID in prod.env}"
 SSH_ALLOW_CIDR="${SSH_ALLOW_CIDR:-}"
+SSH_AUTO_DETECT_IP="${SSH_AUTO_DETECT_IP:-0}"
+
+if [[ -z "$SSH_ALLOW_CIDR" && "$SSH_AUTO_DETECT_IP" == "1" ]]; then
+  DETECTED=$(curl -fsS --max-time 5 https://checkip.amazonaws.com | tr -d '[:space:]')
+  if [[ -n "$DETECTED" ]]; then
+    SSH_ALLOW_CIDR="${DETECTED}/32"
+    echo "SSH_AUTO_DETECT_IP: using $SSH_ALLOW_CIDR"
+  else
+    echo "SSH_AUTO_DETECT_IP failed — set SSH_ALLOW_CIDR manually in prod.env"
+  fi
+fi
 
 SG_ID=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE_ID" \
   --query 'Reservations[0].Instances[0].SecurityGroups[0].GroupId' --output text)

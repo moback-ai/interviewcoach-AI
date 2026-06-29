@@ -1,5 +1,6 @@
-# Copy to devsecops-platform: .github/workflows/interviewcoach-deploy-prod.yml
-name: InterviewCoach · Deploy PROD
+# Manual prod deploy. Requires GitHub secrets: AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY,
+# PROD_API_SSH_HOST, STATIC_S3_BUCKET, CLOUDFRONT_DIST_ID
+name: Deploy PROD
 
 on:
   workflow_dispatch:
@@ -7,20 +8,28 @@ on:
       app_git_ref:
         description: Git ref (commit SHA or develop)
         required: true
+        default: develop
       image_tag:
         description: ECR image tag
         required: true
         default: prod
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Checkout app repo
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          repository: moback-ai/interviewcoach-AI
           ref: ${{ inputs.app_git_ref }}
 
       - name: Configure AWS
@@ -32,7 +41,7 @@ jobs:
       - name: Login ECR
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push API (Dockerfile.prod)
+      - name: Build and push API
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
           IMAGE_TAG: ${{ inputs.image_tag }}
@@ -61,10 +70,11 @@ jobs:
           d=json.load(sys.stdin)
           assert d.get('status')=='healthy', d
           assert d['services']['llm']['provider']=='bedrock', d['services']['llm']
-          assert 'ollama' not in d['services'], 'prod should not expose ollama in health'
-          assert d['services']['stt']['chain']==['openrouter','amazon'], d['services']['stt']
-          assert 'local_whisper' not in d['services']['stt'], d['services']['stt']
-          print('health OK:', d['services']['llm']['provider'], d['services']['stt']['chain'])
+          assert 'ollama' not in d['services'], d['services']
+          stt=d['services']['stt']
+          assert stt['chain']==['openrouter','amazon'], stt
+          assert 'local_whisper' not in stt, stt
+          print('health OK:', d['services']['llm']['provider'], stt['chain'])
           "
           code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
           test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)

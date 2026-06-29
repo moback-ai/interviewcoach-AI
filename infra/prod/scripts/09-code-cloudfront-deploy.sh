@@ -67,6 +67,7 @@ aws cloudformation deploy \
     DomainName="$APEX_DOMAIN" \
     AcmCertificateArn="$CERT_ARN" \
     StaticBucketName="$STATIC_BUCKET" \
+    StaticBucketRegion="${S3_REGION:-ap-south-1}" \
     ApiOriginDomain="$API_ORIGIN" \
   --no-fail-on-empty-changeset
 

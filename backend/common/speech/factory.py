@@ -87,9 +87,13 @@ def transcribe_audio_file(
 
 
 def get_stt_diagnostics() -> dict[str, Any]:
-    return {
-        "chain": _provider_order(),
-        "openrouter": openrouter_diagnostics(),
-        "amazon": amazon_diagnostics(),
-        "local_whisper": local_whisper_diagnostics(),
-    }
+    chain = _provider_order()
+    diag: dict[str, Any] = {"chain": chain}
+    for provider in chain:
+        if provider == "openrouter":
+            diag["openrouter"] = openrouter_diagnostics()
+        elif provider == "amazon":
+            diag["amazon"] = amazon_diagnostics()
+        elif provider == "local_whisper":
+            diag["local_whisper"] = local_whisper_diagnostics()
+    return diag
