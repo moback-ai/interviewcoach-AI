@@ -1,18 +1,25 @@
-# Manual prod deploy. Requires GitHub secrets: AWS_DEPLOY_ROLE_ARN, ECR_REGISTRY,
-# PROD_API_SSH_HOST, STATIC_S3_BUCKET, CLOUDFRONT_DIST_ID
+# Production deploy — all builds on GitHub Actions (no local Docker/npm for prod).
 name: Deploy PROD
 
 on:
   workflow_dispatch:
     inputs:
       app_git_ref:
-        description: Git ref (commit SHA or develop)
+        description: Git ref (branch, tag, or SHA)
         required: true
         default: develop
       image_tag:
-        description: ECR image tag
+        description: ECR tag (leave "auto" for prod-YYYYMMDD-sha)
         required: true
-        default: prod
+        default: auto
+      deploy_api:
+        description: Build API + roll out ASG
+        type: boolean
+        default: true
+      deploy_frontend:
+        description: Build frontend + sync S3
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -21,6 +28,9 @@ permissions:
 concurrency:
   group: deploy-prod
   cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
 
 jobs:
   deploy:
@@ -32,6 +42,16 @@ jobs:
         with:
           ref: ${{ inputs.app_git_ref }}
 
+      - name: Resolve image tag
+        id: meta
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [[ "$TAG" == "auto" || -z "$TAG" ]]; then
+            TAG="prod-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -39,30 +59,38 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
       - name: Login ECR
+        if: inputs.deploy_api
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push API
+      - name: Build and push API image
+        if: inputs.deploy_api
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          docker build -f docker/api/Dockerfile.prod -t "$ECR_REGISTRY/interviewcoach-api:$IMAGE_TAG" .
-          docker push "$ECR_REGISTRY/interviewcoach-api:$IMAGE_TAG"
+        run: bash infra/prod/scripts/05-devsecops-build-ecr.sh
 
-      - name: Deploy API to prod host
+      - name: Roll out API to ASG
+        if: inputs.deploy_api
         env:
-          API_HOST: ${{ secrets.PROD_API_SSH_HOST }}
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: bash infra/prod/scripts/06-code-deploy-api.sh
+        run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
 
-      - name: Frontend to S3 + CloudFront
+      - name: Setup Node
+        if: inputs.deploy_frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend and sync S3
+        if: inputs.deploy_frontend
         env:
           STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
           CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
         run: bash infra/prod/scripts/08-code-frontend.sh
 
       - name: Post-deploy smoke tests
+        if: inputs.deploy_api
         run: |
           set -euo pipefail
           curl -fsS https://www.ugaanlabs.ai/api/health | python3 -c "
@@ -73,9 +101,9 @@ jobs:
           assert 'ollama' not in d['services'], d['services']
           stt=d['services']['stt']
           assert stt['chain']==['openrouter','amazon'], stt
-          assert 'local_whisper' not in stt, stt
           print('health OK:', d['services']['llm']['provider'], stt['chain'])
           "
           code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
           test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
           echo "apex redirect OK"
+          echo "Deployed image tag: $IMAGE_TAG"

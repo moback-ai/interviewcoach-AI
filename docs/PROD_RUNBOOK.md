@@ -26,8 +26,8 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 | **1 AWS** | S3 buckets (CloudFormation) | `02-aws-cloudformation.sh` or `02b-rename-s3-stack.sh` |
 | **1 AWS** | Push secrets JSON → Secrets Manager | `03-aws-secrets-manager.sh` |
 | **1 AWS** | Attach IAM policy to API role | `04-aws-iam-attach.sh` |
-| **2 Build** | Build + push ECR (`Dockerfile.prod`) | `05-devsecops-build-ecr.sh` |
-| **3 Code** | Deploy API to prod EC2 | `06-code-deploy-api.sh` |
+| **2 Build** | API + frontend on **GitHub Actions** | `.github/workflows/deploy-prod.yml` |
+| **3 Code** | ASG rollout + S3 sync (same workflow) | `06-code-deploy-api-asg.sh` |
 | **3 Code** | Verify health | `curl API:5000/api/health` |
 | **3 Code** | Migrate storage → S3 | `07b-migrate-legacy-storage.sh` |
 | **3 Code** | Frontend build → S3 | `08-code-frontend.sh` |
@@ -69,13 +69,15 @@ bash infra/prod/scripts/04-aws-iam-attach.sh
 
 ---
 
-## Phase 2 — Build
+## Phase 2 — Build & deploy (GitHub Actions only)
 
-```bash
-bash infra/prod/scripts/05-devsecops-build-ecr.sh
+```text
+Actions → Deploy PROD → Run workflow
 ```
 
-Deploy PROD compute: `CONFIRM=YES bash infra/prod/scripts/14-aws-deploy-prod-compute.sh`
+Do not run `docker build` or `npm run build` locally for prod. Scripts `05-devsecops-build-ecr.sh` and `08-code-frontend.sh` exit unless `GITHUB_ACTIONS=true`.
+
+Deploy Hybrid compute (one-time infra): `CONFIRM=YES bash infra/prod/scripts/14-aws-deploy-prod-compute.sh`
 
 ---
 
@@ -83,7 +85,7 @@ Deploy PROD compute: `CONFIRM=YES bash infra/prod/scripts/14-aws-deploy-prod-com
 
 ### Deploy API
 ```bash
-bash infra/prod/scripts/06-code-deploy-api.sh
+# GitHub Actions only — see .github/workflows/deploy-prod.yml
 ```
 
 Container env (only):

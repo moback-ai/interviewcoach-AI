@@ -11,8 +11,8 @@ Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) · Runbook: [do
 ## Migration order
 
 1. **Phase 1 — AWS** (`01`–`04`, optional `02b`): Bedrock, S3, Secrets Manager, IAM
-2. **Phase 2 — DevSecOps** (`05`): ECR build/push (+ GitHub workflow in devsecops-platform)
-3. **Phase 3 — Code** (`06`–`09`): API, storage, frontend, CloudFront, DNS cutover
+2. **Phase 2 — Build & deploy** (GitHub Actions `.github/workflows/deploy-prod.yml` only)
+3. **Phase 3 — Code** (`07`–`09`, `14`): storage, CloudFront, DNS; one-time compute stack
 4. **Phase 4 — Cleanup** (`10`): Decommission Plan B
 
 All scripts source `prod.env` via `load-prod-env.sh`.
@@ -44,7 +44,8 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `cloudformation/prod-stack.yaml` | S3 buckets (static + user files, Retain) |
 | `cloudformation/prod-stack-import.yaml` | Import existing buckets into renamed stack |
 | `cloudformation/prod-cloudfront.yaml` | CloudFront: S3 static + EC2 API origin |
-| `github-workflows/deploy-prod.yml` | GitHub Actions template for devsecops-platform |
+| `github-workflows/deploy-prod.yml` | Copy of `.github/workflows/deploy-prod.yml` |
+| `cloudformation/prod-compute-stack.yaml` | ALB + ASG + ElastiCache |
 
 ### Scripts
 
@@ -55,12 +56,13 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `02b-rename-s3-stack.sh` | Rename `interviewcoach-prod-hybrid-s3` → `interviewcoach-prod-s3` (import retain) |
 | `03-aws-secrets-manager.sh` | Create/update secrets JSON |
 | `04-aws-iam-attach.sh` | Attach API IAM policy |
-| `05-devsecops-build-ecr.sh` | Build `Dockerfile.prod` → ECR |
-| `05-build-on-ec2.sh` | Build on EC2 when local Docker unavailable |
-| `06-code-deploy-api.sh` | Deploy API container on EC2 |
+| `05-devsecops-build-ecr.sh` | Build `Dockerfile.prod` → ECR (**GitHub Actions only**) |
+| `05-build-on-ec2.sh` | **Disabled** — use GitHub Actions |
+| `06-code-deploy-api-asg.sh` | Roll out ECR image to ASG (**GitHub Actions only**) |
+| `06-code-deploy-api.sh` | Wrapper → `06-code-deploy-api-asg.sh` |
 | `07-code-migrate-storage.sh` | Sync EC2 `/apps/storage` → S3 |
 | `07b-migrate-legacy-storage.sh` | Legacy Plan B S3 buckets + EC2 → `ic-user-files-prod` |
-| `08-code-frontend.sh` | Build React → S3 (+ CloudFront invalidation) |
+| `08-code-frontend.sh` | Build React → S3 (**GitHub Actions only**) |
 | `09-code-cloudfront-deploy.sh` | ACM cert (us-east-1) + CloudFront stack |
 | `09a-acm-validation-dns.sh` | Print ACM DNS validation CNAMEs |
 | `09b-namecheap-dns-cutover.sh` | Namecheap API: point `@`/`www` at CloudFront (preserves MX) |
