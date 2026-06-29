@@ -120,6 +120,31 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = int(optional_env("MAX_CONTENT_MB", "200")) * 1024 * 1024
 
 DOMAIN = require_env("DOMAIN")
+
+
+def _build_cors_origins():
+    origins = {
+        DOMAIN.rstrip("/"),
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
+    frontend = optional_env("FRONTEND_DOMAIN", "").strip()
+    if frontend:
+        origins.add(f"https://{frontend}")
+        origins.add(f"http://{frontend}")
+    domain = DOMAIN.rstrip("/")
+    if domain.startswith("https://www."):
+        origins.add(domain.replace("https://www.", "https://", 1))
+    elif domain.startswith("http://www."):
+        origins.add(domain.replace("http://www.", "http://", 1))
+    elif domain.startswith("https://"):
+        origins.add(domain.replace("https://", "https://www.", 1))
+    elif domain.startswith("http://"):
+        origins.add(domain.replace("http://", "http://www.", 1))
+    return sorted(origins)
+
+
+_CORS_ORIGINS = _build_cors_origins()
 EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", "24"))
 ADMIN_LOG_ROOT = os.path.abspath(optional_env("ADMIN_LOG_ROOT", "/apps/logs"))
 ADMIN_LIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_LIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "live")))
@@ -136,11 +161,11 @@ DEPLOYMENT_LIVE_LOG_FILE = os.path.abspath(
 
 CORS(app,
      supports_credentials=True,
-     origins=[DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"],
+     origins=_CORS_ORIGINS,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
-_ALLOWED_ORIGINS = [DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"]
+_ALLOWED_ORIGINS = _CORS_ORIGINS
 socketio = SocketIO(app, cors_allowed_origins=_ALLOWED_ORIGINS, async_mode="threading")
 
 

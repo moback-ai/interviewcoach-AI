@@ -24,10 +24,20 @@ export async function checkUsernameAvailability(username) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username })
     });
-    if (!res.ok) return { exists: false, available: true, error: '' };
-    const data = await res.json();
-    return { exists: data.exists, available: !data.exists, error: data.error };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        exists: false,
+        available: false,
+        error: data.error || 'Could not check username availability.',
+      };
+    }
+    return { exists: data.exists, available: !data.exists, error: data.error || '' };
   } catch {
-    return { exists: false, available: true, error: '' };
+    return {
+      exists: false,
+      available: false,
+      error: 'Could not check username availability.',
+    };
   }
 }
