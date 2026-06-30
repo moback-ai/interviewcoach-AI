@@ -13,8 +13,9 @@ Repository: **`moback-ai/devsecops-platform`** (private)
 
 ## Developers (ganesh, neeraj)
 
-1. Open a **PR** to `develop` → pass Security CI → merge
-2. Ask **Govardhan or Kishore** to deploy from devsecops-platform
+1. Open a **PR** to `develop` → pass Security CI
+2. **DevSecOps approves and merges** (developers do not merge)
+3. Ask DevSecOps for **build + deploy** if needed
 
 ### AWS access (read-only logs)
 
@@ -23,17 +24,33 @@ Repository: **`moback-ai/devsecops-platform`** (private)
 | CloudWatch Logs read on `/interviewcoach/prod/*` | Secrets Manager (all `interviewcoach/*` incl. SSH keys) |
 | Change own IAM password | EC2, RDS, S3, IAM, CFN, Bedrock, etc. |
 
-**Console:** `ap-south-1` → CloudWatch → Log groups → `/interviewcoach/prod/api`
-
 See [DEV_ACCESS.md](DEV_ACCESS.md).
 
 ---
 
-## DevSecOps
+## DevSecOps — release flow
 
-1. Sync `infra/prod/` → `devsecops-platform/apps/interviewcoach/aws/prod/`
-2. Deploy: **Actions → InterviewCoach · Deploy Production**
-3. IAM: `devsecops-platform/scripts/apply-iam-policies.sh --apply`
+1. Sync `infra/prod/` → `devsecops-platform` (`scripts/sync-interviewcoach-prod.sh`)
+2. **Build once:** Actions → **InterviewCoach · Build Docker Images** → note `image_tag`
+3. **Deploy rollout:** Actions → **InterviewCoach · Deploy Production** → same `image_tag` (no API Docker build)
+4. IAM: `devsecops-platform/scripts/apply-iam-policies.sh --apply`
+
+### Safety controls
+
+| Control | What it does |
+|---------|----------------|
+| `check-devsecops-actor.sh` | Blocks non-DevSecOps from build/deploy workflows (primary gate) |
+| GitHub `production` environment | Second approval on Team/Enterprise; optional on Free (use actor gate) |
+| `05a-verify-ecr-image.sh` | Deploy fails if image tag missing in ECR |
+| `require-devsecops.sh` | Prod scripts cannot run from application repo |
+| Branch protection + CODEOWNERS | Only DevSecOps merges `develop` / `main` |
+
+### One-time GitHub setup
+
+```bash
+ALLOW_LOCAL_PROD_DEPLOY=1 bash infra/prod/scripts/16-set-github-prod-secrets.sh
+ALLOW_LOCAL_PROD_DEPLOY=1 bash infra/prod/scripts/16b-set-github-prod-environment.sh
+```
 
 ---
 

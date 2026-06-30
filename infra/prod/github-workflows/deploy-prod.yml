@@ -36,8 +36,18 @@ env:
   AWS_REGION: ap-south-1
 
 jobs:
-  deploy:
+  gate:
+    name: DevSecOps gate
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Only DevSecOps may deploy
+        run: bash scripts/check-devsecops-actor.sh
+
+  deploy:
+    name: Roll out production
+    runs-on: ubuntu-latest
+    needs: [gate]
     environment: production
     steps:
       - name: Checkout application repo
