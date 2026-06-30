@@ -15,18 +15,19 @@ import {
   AlertCircle,
   Headphones
 } from 'lucide-react';
-import { useTheme } from '@/hooks/useTheme';
 import Navbar from '@/components/Navbar';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '@/lib/authClient';
 import { getBackendOrigin } from '@/utils/apiConfig';
+import { downloadAuthenticatedFile } from '@/utils/protectedFiles';
+import { parseFeedbackPoints } from '@/utils/feedbackPoints';
 import NoticeModal from '@/components/common/NoticeModal';
 
 // PDF generation functions
 const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, getRatingLabel, getInterviewDuration, getQuestionsAnswered, formatKeyStrengths, formatImprovementAreas) => {
   // Import jsPDF dynamically to avoid SSR issues
   import('jspdf').then(({ default: jsPDF }) => {
-    import('jspdf-autotable').then(({ default: autoTable }) => {
+    import('jspdf-autotable').then(() => {
       const doc = new jsPDF();
       
       // Set document properties
@@ -101,7 +102,7 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
       
       const summary = feedbackData.summary || 'No summary available';
       const summaryLines = doc.splitTextToSize(summary, pageWidth - 2 * margin);
-      summaryLines.forEach((line, index) => {
+      summaryLines.forEach((line) => {
         if (yPosition > doc.internal.pageSize.height - 30) {
           doc.addPage();
           yPosition = 30;
@@ -203,7 +204,7 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
           doc.setTextColor(44, 62, 80);
           
           const messageLines = doc.splitTextToSize(message.content, pageWidth - messageX - margin);
-          messageLines.forEach((line, lineIndex) => {
+          messageLines.forEach((line) => {
             if (yPosition > doc.internal.pageSize.height - 30) {
               doc.addPage();
               yPosition = 30;
@@ -234,7 +235,6 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
 };
 
 function InterviewFeedbackPage() {
-  const { isDark } = useTheme();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const interviewId = searchParams.get('interview_id');
@@ -319,6 +319,7 @@ function InterviewFeedbackPage() {
     
     // Start fetching data immediately
     fetchFeedbackData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch when interview id changes
   }, [interviewId]);
 
   const getOverallRating = () => {
@@ -393,31 +394,9 @@ function InterviewFeedbackPage() {
     return 'text-red-500';
   };
 
-  const formatKeyStrengths = (strengthsText) => {
-    if (!strengthsText) return [];
-    if (Array.isArray(strengthsText)) {
-      return strengthsText.map((point) => String(point).trim()).filter(Boolean);
-    }
+  const formatKeyStrengths = (strengthsText) => parseFeedbackPoints(strengthsText);
 
-    // Split by numbered points (1., 2., 3., etc.)
-    const points = String(strengthsText).split(/\d+\.\s*/).filter(point => point.trim());
-    
-    // Clean up each point and return as array
-    return points.map(point => point.trim());
-  };
-
-  const formatImprovementAreas = (improvementsText) => {
-    if (!improvementsText) return [];
-    if (Array.isArray(improvementsText)) {
-      return improvementsText.map((point) => String(point).trim()).filter(Boolean);
-    }
-
-    // Split by numbered points (1., 2., 3., etc.)
-    const points = String(improvementsText).split(/\d+\.\s*/).filter(point => point.trim());
-    
-    // Clean up each point and return as array
-    return points.map(point => point.trim());
-  };
+  const formatImprovementAreas = (improvementsText) => parseFeedbackPoints(improvementsText);
 
   const formatSummary = (summaryText) => {
     if (!summaryText) return '';
@@ -448,7 +427,7 @@ function InterviewFeedbackPage() {
         return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
       }
     }
-    return '25 min'; // Fallback
+    return '—';
   };
 
   const getQuestionsAnswered = () => {
@@ -512,35 +491,9 @@ function InterviewFeedbackPage() {
   const handleDownloadAudioTranscript = async (audioUrl) => {
     try {
       console.log('🎵 Downloading audio transcript from:', audioUrl);
-      
-      // Fetch the audio file
-      const response = await fetch(audioUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch audio: ${response.status}`);
-      }
-      
-      // Get the audio blob
-      const audioBlob = await response.blob();
-      
-      // Create download link
-      const url = window.URL.createObjectURL(audioBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      
-      // Set filename with timestamp
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-      link.download = `interview_audio_transcript_${timestamp}.wav`;
-      
-      // Trigger download
-      document.body.appendChild(link);
-      link.click();
-      
-      // Cleanup
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      
+      await downloadAuthenticatedFile(audioUrl, `interview_audio_transcript_${timestamp}.wav`);
       console.log('✅ Audio transcript downloaded successfully');
-      
     } catch (error) {
       console.error('❌ Failed to download audio transcript:', error);
       setNoticeModal({
@@ -800,29 +753,31 @@ function InterviewFeedbackPage() {
                     </h3>
                   </div>
                   
-                  <div className="space-y-3">
+                  <ul className="space-y-3 list-none m-0 p-0">
                     {feedbackData.key_strengths ? (
                       formatKeyStrengths(feedbackData.key_strengths).map((strength, index) => (
-                        <div key={index} className="flex items-start gap-3">
+                        <li key={index} className="flex items-start gap-3">
                           <div className="w-6 h-6 rounded-full bg-green-100 dark:bg-green-900/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                             <span className="text-xs font-semibold text-green-600 dark:text-green-400">
                               {index + 1}
                             </span>
                           </div>
-                          <p 
-                            className="text-sm leading-relaxed"
+                          <p
+                            className="text-sm leading-relaxed flex-1 m-0"
                             style={{ color: 'var(--color-text-primary)' }}
                           >
                             {strength}
                           </p>
-                        </div>
+                        </li>
                       ))
                     ) : (
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        No key strengths data available.
-                      </p>
+                      <li>
+                        <p style={{ color: 'var(--color-text-primary)' }}>
+                          No key strengths data available.
+                        </p>
+                      </li>
                     )}
-                  </div>
+                  </ul>
                 </div>
               </motion.div>
 
@@ -851,29 +806,31 @@ function InterviewFeedbackPage() {
                     </h3>
                   </div>
                   
-                  <div className="space-y-3">
+                  <ul className="space-y-3 list-none m-0 p-0">
                     {feedbackData.improvement_areas ? (
                       formatImprovementAreas(feedbackData.improvement_areas).map((improvement, index) => (
-                        <div key={index} className="flex items-start gap-3">
+                        <li key={index} className="flex items-start gap-3">
                           <div className="w-6 h-6 rounded-full bg-orange-100 dark:bg-orange-900/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                             <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
                               {index + 1}
                             </span>
                           </div>
-                          <p 
-                            className="text-sm leading-relaxed"
+                          <p
+                            className="text-sm leading-relaxed flex-1 m-0"
                             style={{ color: 'var(--color-text-primary)' }}
                           >
                             {improvement}
                           </p>
-                        </div>
+                        </li>
                       ))
                     ) : (
-                      <p style={{ color: 'var(--color-text-primary)' }}>
-                        No improvement areas data available.
-                      </p>
+                      <li>
+                        <p style={{ color: 'var(--color-text-primary)' }}>
+                          No improvement areas data available.
+                        </p>
+                      </li>
                     )}
-                  </div>
+                  </ul>
                 </div>
               </motion.div>
             </div>

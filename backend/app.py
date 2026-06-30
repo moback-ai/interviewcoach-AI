@@ -15,6 +15,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
 import ipaddress
+import mimetypes
 from urllib.parse import urlencode
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context
@@ -27,12 +28,16 @@ from werkzeug.exceptions import HTTPException
 import requests as http_requests
 
 # ── Environment ───────────────────────────────────────────────────────────────
-from common.runtime_config import load_runtime_config, optional_env, require_env
+from common.runtime_config import load_runtime_config, optional_env, require_env, config_source
 from common.host_metrics import collect_linux_metrics, collect_via_ssh
 from common.lazy_deps import get_cv2, get_numpy, get_soundfile, get_pydub, get_mediapipe, get_inference_device
 from common.ttl_cache import cached
 
 load_runtime_config()
+
+from common.secrets_schema import validate_secrets_config
+
+validate_secrets_config()
 
 _ollama_host = (optional_env("OLLAMA_HOST", "") or "").strip()
 if _ollama_host:
@@ -50,12 +55,40 @@ if SUPPORT_BOT_PATH not in sys.path:
 from common.auth import verify_auth_token, create_token, hash_password, check_password
 from common.db import query_one, query_all, execute, execute_many
 from common.email_utils import send_email, smtp_is_configured
-from common.storage import save_bytes, save_from_path, read_bytes, list_folder, delete_files, public_url
+from common.storage import (
+    save_bytes,
+    save_from_path,
+    read_bytes,
+    list_folder,
+    delete_files,
+    public_url,
+    protected_file_url,
+    normalize_file_url,
+    resolve_relative_path,
+    validated_protected_relative_path,
+    build_protected_storage_path,
+    user_owns_storage_path,
+    safe_storage_file_path,
+    send_storage_file,
+)
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
+from common.interview_timer import (
+    TIMER_LAST_TICK_KEY,
+    tick_interview_time,
+    pause_interview_time,
+    finalize_interview_time,
+)
 from common.interview_capacity import interview_turn_slot, InterviewCapacityError
-from common.service_hours import service_hours_status
 from common.transcribe_remote import transcribe_via_remote_service
+from common.speech.factory import transcribe_audio_file as stt_transcribe_file, get_stt_diagnostics
+from common.llm.factory import get_llm_diagnostics, provider_name as llm_provider_name
+from common.payment_handlers import (
+    checkout_status_handler,
+    create_checkout_handler,
+    dodo_webhook_handler,
+)
+from common.interview_handlers import interview_quota_handler, start_interview_handler
 
 try:
     from INTERVIEW.Interview_manager import InterviewManager
@@ -87,6 +120,31 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = int(optional_env("MAX_CONTENT_MB", "200")) * 1024 * 1024
 
 DOMAIN = require_env("DOMAIN")
+
+
+def _build_cors_origins():
+    origins = {
+        DOMAIN.rstrip("/"),
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    }
+    frontend = optional_env("FRONTEND_DOMAIN", "").strip()
+    if frontend:
+        origins.add(f"https://{frontend}")
+        origins.add(f"http://{frontend}")
+    domain = DOMAIN.rstrip("/")
+    if domain.startswith("https://www."):
+        origins.add(domain.replace("https://www.", "https://", 1))
+    elif domain.startswith("http://www."):
+        origins.add(domain.replace("http://www.", "http://", 1))
+    elif domain.startswith("https://"):
+        origins.add(domain.replace("https://", "https://www.", 1))
+    elif domain.startswith("http://"):
+        origins.add(domain.replace("http://", "http://www.", 1))
+    return sorted(origins)
+
+
+_CORS_ORIGINS = _build_cors_origins()
 EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", "24"))
 ADMIN_LOG_ROOT = os.path.abspath(optional_env("ADMIN_LOG_ROOT", "/apps/logs"))
 ADMIN_LIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_LIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "live")))
@@ -103,11 +161,11 @@ DEPLOYMENT_LIVE_LOG_FILE = os.path.abspath(
 
 CORS(app,
      supports_credentials=True,
-     origins=[DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"],
+     origins=_CORS_ORIGINS,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"])
 
-_ALLOWED_ORIGINS = [DOMAIN, "http://localhost:5173", "http://127.0.0.1:5173"]
+_ALLOWED_ORIGINS = _CORS_ORIGINS
 socketio = SocketIO(app, cors_allowed_origins=_ALLOWED_ORIGINS, async_mode="threading")
 
 
@@ -317,7 +375,28 @@ def normalize_feedback_row(row):
     normalized['metrics'] = _normalize_metrics(normalized.get('metrics'))
     normalized['key_strengths'] = _normalize_list(normalized.get('key_strengths'))
     normalized['improvement_areas'] = _normalize_list(normalized.get('improvement_areas'))
+    if normalized.get('audio_url'):
+        normalized['audio_url'] = normalize_file_url(normalized['audio_url'])
+    active = normalized.get('active_seconds') or 0
+    normalized['interview_duration_minutes'] = (
+        max(1, round(active / 60)) if active > 0 else None
+    )
     return normalized
+
+
+def _serialize_file_url(url_or_path):
+    return normalize_file_url(url_or_path)
+
+
+def _serialize_resume_row(row):
+    if not row:
+        return row
+    data = dict(row)
+    if data.get('file_url'):
+        data['file_url'] = normalize_file_url(data['file_url'])
+    elif data.get('stored_path'):
+        data['file_url'] = protected_file_url(data['stored_path'])
+    return data
 
 
 def ensure_questions_schema():
@@ -336,7 +415,7 @@ def serialize_user(user):
     payload["id"] = str(payload["id"])
     payload["email_verified"] = bool(payload.get("email_verified_at"))
     payload["nickname"] = payload.get("nickname") or ""
-    payload["avatar_url"] = payload.get("avatar_url") or ""
+    payload["avatar_url"] = _serialize_file_url(payload.get("avatar_url") or "") or ""
     payload["date_of_birth"] = serialize_date_value(payload.get("date_of_birth"))
     payload["gender"] = payload.get("gender") or ""
     payload.setdefault("user_metadata", {})
@@ -1616,10 +1695,27 @@ class EyeContactDetector_Callib:
 
 detector = None
 detector_lock = threading.Lock()
+_detectors_by_sid: dict[str, EyeContactDetector_Callib] = {}
 
 
-def get_head_tracking_detector():
+def get_head_tracking_detector(sid: str | None = None):
     global detector
+    from flask import request
+
+    session_id = sid or getattr(request, "sid", None)
+    if session_id:
+        with detector_lock:
+            existing = _detectors_by_sid.get(session_id)
+            if existing is not None:
+                return existing
+            try:
+                _detectors_by_sid[session_id] = EyeContactDetector_Callib()
+                print(f"[INFO] Head tracking initialized for session {session_id}")
+                return _detectors_by_sid[session_id]
+            except Exception as e:
+                print(f"[ERROR] Head tracking failed for session {session_id}: {e}")
+                return None
+
     if detector is not None:
         return detector
     with detector_lock:
@@ -1627,7 +1723,7 @@ def get_head_tracking_detector():
             return detector
         try:
             detector = EyeContactDetector_Callib()
-            print("[INFO] Head tracking initialized")
+            print("[INFO] Head tracking initialized (legacy singleton)")
         except Exception as e:
             print(f"[ERROR] Head tracking failed: {e}")
             detector = None
@@ -1713,51 +1809,13 @@ def _transcribe(wav_path):
     return " ".join(s.text for s in list(segs))
 
 def process_audio_file(file, auth_header=None, *, _local_only=False):
-    remote_url = (optional_env("TRANSCRIBE_SERVICE_URL", "") or "").strip()
-    if remote_url and not _local_only:
-        return transcribe_via_remote_service(file, remote_url, auth_header=auth_header)
-
-    global whisper_model
-    if whisper_model is None:
-        initialize_whisper()
-    if whisper_model is None:
-        return {"success": False, "error": "Speech model unavailable"}
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tf:
-        original = tf.name
-        file.save(original)
-
-    wav_path = None
-    try:
-        wav_path = convert_to_wav(original)
-        if not wav_path:
-            return {"success": False, "error": "Audio conversion failed"}
-        if is_blank_audio(wav_path):
-            return {"success": True, "transcription": ""}
-
-        for attempt in range(3):
-            try:
-                text = _transcribe(wav_path)
-                text = text.strip()
-                # Basic corruption check
-                clean = text.replace("!", "").replace(" ", "")
-                if not clean:
-                    if attempt < 2 and reinitialize_whisper():
-                        continue
-                    return {"success": True, "transcription": ""}
-                return {"success": True, "transcription": text}
-            except Exception as e:
-                print(f"[WARN] Transcription attempt {attempt+1} failed: {e}")
-                if attempt < 2:
-                    reinitialize_whisper()
-        return {"success": False, "error": "Transcription failed after retries"}
-    finally:
-        for p in [original, wav_path]:
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception:
-                    pass
+    return stt_transcribe_file(
+        file,
+        auth_header=auth_header,
+        local_only=_local_only,
+        convert_to_wav=convert_to_wav,
+        is_blank_audio=is_blank_audio,
+    )
 
 
 def schedule_background_ai_warmup():
@@ -1782,28 +1840,34 @@ def schedule_background_ai_warmup():
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=2)
+    llm_diagnostics = get_llm_diagnostics()
+    stt_diagnostics = get_stt_diagnostics()
+    provider = llm_provider_name()
+    llm_status = {
+        "provider": provider,
+        "ready": llm_diagnostics.get("ready", False),
+        "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
+        "model": llm_diagnostics.get("model"),
+        "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
+        "error": llm_diagnostics.get("error", ""),
+    }
+    services = {
+        "llm": llm_status,
+        "stt": stt_diagnostics,
+    }
+    if provider == "ollama":
+        services["ollama"] = dict(llm_status)
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",
-        "api_revision": "fast-upload-v3",
-        "fast_paths": {
-            "jd_parse_local_default": not _jd_parse_use_ollama(),
-            "question_gen_local_default": _question_gen_force_local(),
-            "interview_server_tts": _env_truthy("INTERVIEW_SERVER_TTS", "false"),
-            "interview_fast_wrapup": _env_truthy("INTERVIEW_FAST_WRAPUP", "true"),
+        "api_revision": "prod-v1",
+        "config": {
+            "source": config_source(),
+            "secret_id": optional_env("AWS_SECRETS_MANAGER_SECRET_ID") or os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", ""),
         },
-        "services": {
-            "ollama": {
-                "ready": ollama_diagnostics.get("ready", False),
-                "reachable": ollama_diagnostics.get("reachable", False),
-                "model": ollama_diagnostics.get("model"),
-                "model_available": ollama_diagnostics.get("model_available", False),
-                "error": ollama_diagnostics.get("error", ""),
-            }
-        }
-    })
+        "services": services,
+    }), 200
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (
@@ -1899,152 +1963,6 @@ def classify_job_description_is_technical(job_title, job_description):
     return _classify(job_title, job_description)
 
 
-def infer_candidate_name_from_text(raw_text):
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    for line in lines[:5]:
-        words = line.split()
-        if 1 <= len(words) <= 4 and sum(1 for word in words if word[:1].isupper()) >= max(1, len(words) - 1):
-            return line[:80]
-    return "Candidate"
-
-
-def extract_keywords_for_questions(resume_text, job_description):
-    combined = f"{resume_text}\n{job_description}".lower()
-    keyword_order = [
-        "python", "flask", "django", "fastapi", "javascript", "typescript", "react",
-        "node", "sql", "postgresql", "mysql", "mongodb", "aws", "docker", "kubernetes",
-        "ci/cd", "linux", "rest api", "microservices", "testing", "automation", "devops",
-        "selenium", "git", "redis", "system design", "machine learning"
-    ]
-    found = []
-    for keyword in keyword_order:
-        if keyword in combined and keyword not in found:
-            found.append(keyword)
-    return found[:8]
-
-
-def build_local_question_set(job_title, job_description, resume_text, question_counts):
-    candidate_name = infer_candidate_name_from_text(resume_text)
-    keywords = extract_keywords_for_questions(resume_text, job_description)
-    primary_skill = keywords[0] if keywords else "the core skills in your background"
-    secondary_skill = keywords[1] if len(keywords) > 1 else primary_skill
-
-    templates = {
-        "beginner": [
-            (
-                f"Can you introduce yourself and explain how your experience prepares you for the {job_title} role?",
-                f"A strong answer should summarize relevant experience, highlight impact, and connect the candidate's background to the {job_title} responsibilities."
-            ),
-            (
-                f"What hands-on experience do you have with {primary_skill}?",
-                f"The answer should describe real projects, responsibilities, tools used, and measurable outcomes involving {primary_skill}."
-            ),
-            (
-                f"Which parts of this job description feel most aligned with your recent work?",
-                "A good response should map past responsibilities to the posted role and mention concrete examples."
-            ),
-        ],
-        "medium": [
-            (
-                f"Tell me about a project where you used {primary_skill} to solve a meaningful problem.",
-                f"A strong answer should cover the problem, approach, tradeoffs, implementation details, and results using {primary_skill}."
-            ),
-            (
-                f"How would you improve reliability and maintainability in a system that uses {secondary_skill}?",
-                f"The answer should discuss architecture, testing, observability, and operational tradeoffs related to {secondary_skill}."
-            ),
-            (
-                f"Describe a situation where you had to balance speed of delivery with code quality or technical debt.",
-                "A good answer should explain prioritization, stakeholder communication, and the long-term mitigation plan."
-            ),
-        ],
-        "hard": [
-            (
-                f"Design an approach for scaling a {job_title} workload while keeping performance, security, and cost under control.",
-                "A strong answer should cover architecture decisions, scaling strategy, observability, failure handling, and tradeoffs."
-            ),
-            (
-                f"What is the most complex technical decision you have made involving {primary_skill}, and how did you evaluate alternatives?",
-                f"The answer should explain constraints, alternatives considered, tradeoffs, risks, and the final outcome around {primary_skill}."
-            ),
-            (
-                "If production started failing intermittently right after a release, how would you investigate and stabilize it?",
-                "A good response should include triage steps, rollback or mitigation, logs/metrics, communication, and prevention."
-            ),
-        ],
-        "coding": [
-            (
-                f"Write or outline a solution for a practical {primary_skill} problem relevant to this role, and explain the time and space complexity.",
-                f"A strong answer should include a correct approach, clean structure, edge cases, and complexity analysis using {primary_skill} concepts."
-            ),
-            (
-                f"Implement a small utility or API handler using {secondary_skill} and explain how you would test it.",
-                f"The answer should demonstrate coding structure, correctness, testability, and reasoning using {secondary_skill}."
-            ),
-        ],
-    }
-
-    questions = []
-
-    def answer_variant(expected_answer, experience):
-        if experience == "beginner":
-            return (
-                f"A concise answer should cover the main point clearly. {expected_answer} "
-                "Keep the response direct and mention one relevant example if possible."
-            )
-        if experience == "intermediate":
-            return (
-                f"A stronger answer should add context, reasoning, and a concrete example. {expected_answer} "
-                "Include the situation, action taken, and result or tradeoff."
-            )
-        return (
-            f"An expert answer should connect the example to business impact, alternatives, risks, and lessons learned. "
-            f"{expected_answer} Explain why the approach was chosen and how success was measured."
-        )
-
-    def append_question(prompt, expected_answer, difficulty, requires_code=False):
-        normalized_difficulty = normalize_question_difficulty("medium" if requires_code else difficulty)
-        for experience in ("beginner", "intermediate", "expert"):
-            questions.append({
-                "question_text": prompt,
-                "expected_answer": answer_variant(expected_answer, experience),
-                "difficulty_level": normalized_difficulty,
-                "difficulty_category": normalized_difficulty,
-                "difficulty_experience": experience,
-                "answer_source": "template_fallback",
-                "requires_code": requires_code,
-            })
-    normalized_counts = {
-        "beginner": int((question_counts or {}).get("beginner", 0) or 0),
-        "medium": int((question_counts or {}).get("medium", 0) or 0),
-        "hard": int((question_counts or {}).get("hard", 0) or 0),
-        "coding": int((question_counts or {}).get("coding", 0) or 0),
-    }
-
-    for difficulty, count in normalized_counts.items():
-        if count <= 0:
-            continue
-        bank = templates[difficulty]
-        for index in range(count):
-            prompt, expected = bank[index % len(bank)]
-            append_question(prompt, expected, difficulty, difficulty == "coding")
-
-    return {
-        "success": True,
-        "candidate": candidate_name,
-        "questions": questions,
-        "questions_count": len(questions),
-        "generator": "local_fallback",
-        "answer_generation": {
-            "requested": True,
-            "model": None,
-            "generated_count": 0,
-            "fallback_count": len(questions),
-            "fallback_examples": [],
-        },
-    }
-
-
 def get_ollama_model_name():
     return (optional_env("OLLAMA_MODEL", "llama3") or "llama3").strip()
 
@@ -2107,15 +2025,17 @@ def _fetch_ollama_diagnostics(timeout_seconds=2):
 
 def get_ollama_diagnostics(timeout_seconds=2):
     ttl = max(5.0, float(optional_env("OLLAMA_DIAGNOSTICS_CACHE_SECONDS", "30")))
+
+    def _fetch():
+        if llm_provider_name() == "ollama":
+            return _fetch_ollama_diagnostics(timeout_seconds=timeout_seconds)
+        return get_llm_diagnostics()
+
     return cached(
         f"ollama_diag:{timeout_seconds}",
         ttl,
-        lambda: _fetch_ollama_diagnostics(timeout_seconds=timeout_seconds),
+        _fetch,
     )
-
-
-def ollama_ready(timeout_seconds=2):
-    return get_ollama_diagnostics(timeout_seconds=timeout_seconds).get("ready", False)
 
 
 def _env_int(name, default):
@@ -2134,46 +2054,8 @@ def _env_truthy(name, default="false"):
     return (optional_env(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _question_gen_force_local():
-    """Default true on prod so generation finishes in seconds instead of hanging on Ollama."""
-    return _env_truthy("QUESTION_GEN_FORCE_LOCAL", "true")
-
-
-def _use_ollama_question_pipeline(data, ollama_diagnostics):
-    if _question_gen_force_local():
-        return False
-    if data.get("prefer_local") or data.get("fast"):
-        return False
-    if not (data.get("use_ai") or data.get("use_ollama") or _env_truthy("QUESTION_GEN_USE_OLLAMA", "false")):
-        return False
-    return bool(ollama_diagnostics.get("ready"))
-
-
-def _jd_parse_use_ollama():
-    """Ollama JD parsing is opt-in; default is fast local extraction to avoid gateway timeouts."""
-    return _env_truthy("JD_PARSE_USE_OLLAMA", "false")
-
-
-def _parse_job_description_fast(extracted_text, temp_path=None):
-    """Local-only JD parse: completes in milliseconds, no Ollama."""
-    local_result = summarize_job_description_text(extracted_text)
-    job_title = (local_result.get("job_title") or "").strip()
-    job_description = (local_result.get("job_description") or "").strip()
-    is_technical = classify_job_description_is_technical(job_title, job_description)
-    return {
-        "job_title": job_title,
-        "job_description": job_description,
-        "is_technical": is_technical,
-        "parser": "local",
-    }
-
-
-def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
-    """Fast local parse first; optionally refine with Ollama when explicitly enabled."""
-    result = _parse_job_description_fast(extracted_text, temp_path)
-    if not _jd_parse_use_ollama() or _question_gen_force_local() or not ollama_ready():
-        return result
-
+def _parse_job_description_with_ollama(extracted_text, temp_path):
+    """Parse JD via Ollama; fall back to heuristic extraction on failure."""
     try:
         llm_result = _run_callable_with_timeout(
             lambda: _parse_job_description_file(temp_path, model=get_ollama_model_name()),
@@ -2183,9 +2065,9 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
         job_title = (llm_result.get("job_title") or "").strip()
         job_description = (llm_result.get("job_description") or "").strip()
         if not job_title or not job_description:
-            return result
+            raise ValueError("Ollama returned empty job title or description")
 
-        is_technical = result["is_technical"]
+        is_technical = classify_job_description_is_technical(job_title, job_description)
         try:
             is_technical = _run_callable_with_timeout(
                 lambda: _classify_if_technical_role(
@@ -2196,7 +2078,6 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
             )
         except Exception as classify_error:
             print(f"[WARN] LLM technical classification failed, using heuristic fallback: {classify_error}")
-            is_technical = classify_job_description_is_technical(job_title, job_description)
 
         return {
             "job_title": job_title,
@@ -2205,8 +2086,17 @@ def _parse_job_description_with_optional_ollama(extracted_text, temp_path):
             "parser": "ollama",
         }
     except Exception as llm_error:
-        print(f"[WARN] Ollama JD enhancement skipped, using local parse: {llm_error}")
-        return result
+        print(f"[WARN] Ollama JD parse failed, using heuristic fallback: {llm_error}")
+        local_result = summarize_job_description_text(extracted_text)
+        job_title = (local_result.get("job_title") or "").strip()
+        job_description = (local_result.get("job_description") or "").strip()
+        is_technical = classify_job_description_is_technical(job_title, job_description)
+        return {
+            "job_title": job_title,
+            "job_description": job_description,
+            "is_technical": is_technical,
+            "parser": "local_fallback",
+        }
 
 
 def _run_callable_with_timeout(fn, timeout_seconds, label="operation"):
@@ -2229,60 +2119,13 @@ def _classify_if_technical_role(job_title, job_description, model=None):
     return classify_if_technical_role(job_title, job_description, model=model)
 
 
-def _generate_questions_with_fallback(
-    temp_resume,
-    job_title,
-    job_description,
-    resume_text,
-    question_counts,
-    data,
-    ollama_diagnostics,
-):
-    """Fast local generation by default; Ollama only when explicitly enabled."""
-    if not _use_ollama_question_pipeline(data, ollama_diagnostics):
-        result = build_local_question_set(job_title, job_description, resume_text, question_counts)
-        result["ollama_diagnostics"] = ollama_diagnostics
-        result["generator"] = "local_fallback"
-        return result
-
-    pipeline_kwargs = {
-        "resume_path": temp_resume,
-        "job_title": job_title,
-        "job_description": job_description,
-        "question_counts": question_counts,
-        "include_answers": True,
-        "split": data.get("split", False),
-        "resume_pct": data.get("resume_pct", 50),
-        "jd_pct": data.get("jd_pct", 50),
-        "blend": data.get("blend", False),
-        "blend_pct_resume": data.get("blend_pct_resume", 50),
-        "blend_pct_jd": data.get("blend_pct_jd", 50),
-        "max_retries": 2,
-    }
-
-    try:
-        from INTERVIEW.Resumeparser import run_pipeline_from_api
-
-        result = _run_callable_with_timeout(
-            lambda: run_pipeline_from_api(**pipeline_kwargs),
-            QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS,
-            label="Question generation pipeline",
-        )
-        if result.get("success") and result.get("questions"):
-            result.setdefault("generator", "ollama_pipeline")
-            result["ollama_diagnostics"] = ollama_diagnostics
-            return result
-        raise RuntimeError(result.get("error") or "Pipeline returned no questions")
-    except Exception as pipeline_error:
-        print(
-            "[WARN] Falling back to local question generator: "
-            f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
-        )
-        result = build_local_question_set(job_title, job_description, resume_text, question_counts)
-        result["ollama_diagnostics"] = ollama_diagnostics
-        result["pipeline_error"] = str(pipeline_error)
-        result["generator"] = "local_fallback"
-        return result
+def _question_generation_error_status(exc):
+    message = str(exc)
+    if isinstance(exc, TimeoutError) or "timed out after" in message.lower():
+        return 504
+    if "not available" in message.lower() or "not installed" in message.lower():
+        return 503
+    return 500
 
 
 def _ollama_diagnostic_snapshot():
@@ -2473,6 +2316,32 @@ def get_me():
         return jsonify({"error": "User not found"}), 404
     return jsonify({"user": serialize_user(user)})
 
+
+@app.route('/api/me/avatar', methods=['GET', 'OPTIONS'])
+@app.route('/functions/v1/me/avatar', methods=['GET', 'OPTIONS'])
+@verify_auth_token
+def get_my_avatar():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+
+    user = query_one(
+        "SELECT avatar_url FROM users WHERE id = %s",
+        (request.user['id'],),
+    )
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    avatar_url = (user.get('avatar_url') or '').strip()
+    relative = resolve_relative_path(avatar_url)
+    if not relative or not user_owns_storage_path(request.user['id'], relative):
+        abort(404)
+
+    clean_path = validated_protected_relative_path(relative)
+    if not clean_path or not safe_storage_file_path(clean_path):
+        abort(404)
+
+    return send_storage_file(clean_path)
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  RESUME UPLOAD  (replaces the legacy storage layer)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2538,19 +2407,22 @@ def get_job_descriptions():
 #  INTERVIEWS
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.route('/api/interview-quota', methods=['GET', 'OPTIONS'])
+@verify_auth_token
+def get_interview_quota():
+    return interview_quota_handler()
+
+
+@app.route('/api/interviews/start', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def start_interview():
+    return start_interview_handler()
+
+
 @app.route('/api/interviews', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def create_interview():
-    if request.method == 'OPTIONS':
-        return jsonify({"message": "OK"}), 200
-    data = request.get_json() or {}
-    row = execute(
-        "INSERT INTO interviews (user_id, resume_id, jd_id, question_set, retake_from, attempt_number) "
-        "VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
-        (request.user['id'], data.get('resume_id'), data.get('jd_id'),
-         data.get('question_set'), data.get('retake_from'), data.get('attempt_number', 1))
-    )
-    return jsonify({"success": True, "data": dict(row)}), 201
+    return start_interview_handler()
 
 
 @app.route('/api/interviews', methods=['GET'])
@@ -2570,6 +2442,45 @@ def update_interview(interview_id):
     execute("UPDATE interviews SET status=%s WHERE id=%s AND user_id=%s",
             (data.get('status', 'ACTIVE'), interview_id, request.user['id']))
     return jsonify({"success": True})
+
+
+def _interview_timer_response(interview_id: str, user_id: str, action: str):
+    row = query_one(
+        "SELECT id, status, active_seconds FROM interviews WHERE id=%s AND user_id=%s",
+        (interview_id, user_id),
+    )
+    if not row:
+        return jsonify({"success": False, "message": "Interview not found"}), 404
+    if row.get("status") != "STARTED":
+        return jsonify({
+            "success": True,
+            "data": {"active_seconds": int(row.get("active_seconds") or 0)},
+        })
+    if action == "tick":
+        active_seconds = tick_interview_time(interview_id, user_id)
+    else:
+        active_seconds = pause_interview_time(interview_id, user_id)
+    return jsonify({"success": True, "data": {"active_seconds": active_seconds}})
+
+
+@app.route('/api/interviews/<interview_id>/timer-tick', methods=['POST', 'OPTIONS'])
+@app.route('/functions/v1/interviews/<interview_id>/timer-tick', methods=['POST', 'OPTIONS'])
+@app.route('/api/functions/v1/interviews/<interview_id>/timer-tick', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def interview_timer_tick(interview_id):
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    return _interview_timer_response(interview_id, request.user['id'], "tick")
+
+
+@app.route('/api/interviews/<interview_id>/timer-pause', methods=['POST', 'OPTIONS'])
+@app.route('/functions/v1/interviews/<interview_id>/timer-pause', methods=['POST', 'OPTIONS'])
+@app.route('/api/functions/v1/interviews/<interview_id>/timer-pause', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def interview_timer_pause(interview_id):
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    return _interview_timer_response(interview_id, request.user['id'], "pause")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  INTERVIEW DATA  (implements the app API interview-data)
@@ -2684,7 +2595,7 @@ def save_feedback():
 def get_feedback(interview_id):
     row = query_one(
         """
-        SELECT f.*
+        SELECT f.*, i.active_seconds, i.ended_at
         FROM interview_feedback f
         JOIN interviews i ON i.id = f.interview_id
         WHERE f.interview_id=%s AND i.user_id=%s
@@ -2774,7 +2685,7 @@ def parse_job_description():
             if not is_valid_jd:
                 return jsonify({"success": False, "message": jd_validation_error}), 400
 
-            parsed = _parse_job_description_with_optional_ollama(extracted_text, temp_path)
+            parsed = _parse_job_description_with_ollama(extracted_text, temp_path)
             return jsonify({"success": True, "data": {
                 "job_title": parsed["job_title"],
                 "job_description": parsed["job_description"],
@@ -2804,17 +2715,16 @@ def classify_technical_role():
         return jsonify({"success": False, "message": jd_validation_error}), 400
     try:
         is_technical = classify_job_description_is_technical(job_title, job_description)
-        if _jd_parse_use_ollama() and ollama_ready():
-            try:
-                is_technical = _run_callable_with_timeout(
-                    lambda: _classify_if_technical_role(
-                        job_title, job_description, model=get_ollama_model_name()
-                    ),
-                    10,
-                    label="Technical role classification",
-                )
-            except Exception as classify_error:
-                print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
+        try:
+            is_technical = _run_callable_with_timeout(
+                lambda: _classify_if_technical_role(
+                    job_title, job_description, model=get_ollama_model_name()
+                ),
+                10,
+                label="Technical role classification",
+            )
+        except Exception as classify_error:
+            print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
         return jsonify({"success": True, "is_technical": is_technical})
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
@@ -2840,11 +2750,9 @@ def generate_questions():
         if not is_valid_jd:
             return jsonify({"success": False, "message": jd_validation_error}), 400
 
-        # Download resume from local storage or URL
-        public_storage_url = require_env("PUBLIC_STORAGE_URL")
-        if resume_url.startswith(public_storage_url):
-            # Local storage file
-            relative = resume_url.replace(public_storage_url, "").lstrip("/")
+        # Load resume from local protected storage or external URL
+        relative = resolve_relative_path(resume_url)
+        if relative:
             resume_data = read_bytes(relative)
             ext = relative.rsplit('.', 1)[-1]
         else:
@@ -2867,19 +2775,57 @@ def generate_questions():
                 return jsonify({"success": False, "message": resume_validation_error}), 400
             question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
             ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
-            result = _generate_questions_with_fallback(
-                temp_resume,
-                job_title,
-                job_description,
-                resume_text,
-                question_counts,
-                data,
-                ollama_diagnostics,
-            )
-            if not result.get('success') or not result.get('questions'):
-                result = build_local_question_set(job_title, job_description, resume_text, question_counts)
-                result["ollama_diagnostics"] = ollama_diagnostics
-                result["generator"] = "local_fallback"
+            pipeline_kwargs = {
+                "resume_path": temp_resume,
+                "job_title": job_title,
+                "job_description": job_description,
+                "question_counts": question_counts,
+                "include_answers": data.get("include_answers", True),
+                "split": data.get("split", False),
+                "resume_pct": data.get("resume_pct", 50),
+                "jd_pct": data.get("jd_pct", 50),
+                "blend": data.get("blend", False),
+                "blend_pct_resume": data.get("blend_pct_resume", 50),
+                "blend_pct_jd": data.get("blend_pct_jd", 50),
+                "max_retries": 2,
+            }
+            from INTERVIEW.Resumeparser import run_pipeline_from_api
+            try:
+                result = _run_callable_with_timeout(
+                    lambda: run_pipeline_from_api(**pipeline_kwargs),
+                    QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS,
+                    label="Question generation pipeline",
+                )
+            except Exception as pipeline_error:
+                print(
+                    "[ERROR] Ollama question generation failed: "
+                    f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+                )
+                status = _question_generation_error_status(pipeline_error)
+                return jsonify({
+                    "success": False,
+                    "message": str(pipeline_error),
+                    "debug": {
+                        "generator": "ollama_failed",
+                        "ollama": ollama_diagnostics,
+                    },
+                }), status
+            if not result.get("success") or not result.get("questions"):
+                error_message = result.get("error") or "Pipeline returned no questions"
+                print(
+                    "[ERROR] Ollama question generation failed: "
+                    f"{error_message} | ollama={json.dumps(ollama_diagnostics)}"
+                )
+                return jsonify({
+                    "success": False,
+                    "message": error_message,
+                    "debug": {
+                        "generator": "ollama_failed",
+                        "ollama": ollama_diagnostics,
+                    },
+                }), 500
+            result.setdefault("generator", "ollama_pipeline")
+            result["ollama_diagnostics"] = ollama_diagnostics
             return jsonify({"success": True, "data": {
                 "questions": result['questions'],
                 "questions_count": result['questions_count'],
@@ -2912,11 +2858,6 @@ def transcribe_audio_internal():
     if not result.get("success"):
         return jsonify({"success": False, "message": result.get("error")}), 500
     return jsonify({"success": True, "transcription": result.get("transcription", "")})
-
-
-@app.route('/api/service-hours', methods=['GET'])
-def api_service_hours():
-    return jsonify({"success": True, "data": service_hours_status()})
 
 
 @app.route('/api/transcribe-audio', methods=['POST', 'OPTIONS'])
@@ -3008,12 +2949,51 @@ def _fetch_interview_question_rows(interview_row, interview_id, user_id):
     return questions_rows
 
 
+_END_INTERVIEW_LATER_STAGES = frozenset({
+    "custom_questions",
+    "candidate_questions",
+    "wrapup_evaluation",
+    "manual_end",
+    "timeout",
+})
+
+
+def _interview_session_ui_state(interview_id: str, user_id: str) -> dict:
+    """Restore interview UI flags from the persisted manager session."""
+    saved_state = load_session(f"{interview_id}:{user_id}")
+    if not saved_state:
+        return {
+            "interview_stage": "introduction",
+            "has_answered_resume_question": False,
+            "can_end_interview": False,
+        }
+
+    stage = str(saved_state.get("stage") or "introduction")
+    has_answered = bool(str(saved_state.get("last_resume_response") or "").strip())
+    if not has_answered:
+        for entry in saved_state.get("evaluation_log") or []:
+            if isinstance(entry, dict) and entry.get("stage") == "resume":
+                has_answered = True
+                break
+
+    can_end = stage in _END_INTERVIEW_LATER_STAGES or (
+        stage == "resume_discussion" and has_answered
+    )
+    return {
+        "interview_stage": stage,
+        "has_answered_resume_question": has_answered,
+        "can_end_interview": can_end,
+    }
+
+
 def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state):
     if saved_state:
         cached_id = saved_state.get('_config_interview_id')
         cached_config = saved_state.get('_dynamic_config')
         if cached_id == interview_id and isinstance(cached_config, dict):
-            return cached_config
+            config = dict(cached_config)
+            config["time_limit_minutes"] = 0
+            return config
 
     questions_rows = _fetch_interview_question_rows(interview_row, interview_id, user_id)
     return {
@@ -3021,7 +3001,7 @@ def _interview_dynamic_config(interview_row, interview_id, user_id, saved_state)
         "job_description": interview_row.get('description') or '',
         "core_questions": _build_core_questions_list(questions_rows),
         "coding_requirement": [],
-        "time_limit_minutes": 150,
+        "time_limit_minutes": 0,
         "custom_questions": [],
     }
 
@@ -3050,8 +3030,12 @@ def _build_generate_response_payload(user, data, on_token=None):
     if saved_state:
         manager.__dict__.update({
             k: v for k, v in saved_state.items()
-            if not callable(v) and k not in ('model',)
+            if not callable(v) and k not in ('model', 'time_limit_seconds')
         })
+    manager.time_limit_seconds = 0
+
+    tracked_active_seconds = tick_interview_time(interview_id, user_id)
+    manager.tracked_active_seconds = tracked_active_seconds
 
     try:
         def _receive():
@@ -3080,6 +3064,9 @@ def _build_generate_response_payload(user, data, on_token=None):
         }
         serializable['_config_interview_id'] = interview_id
         serializable['_dynamic_config'] = dynamic_config
+        timer_session = load_session(instance_key) or {}
+        if TIMER_LAST_TICK_KEY in timer_session:
+            serializable[TIMER_LAST_TICK_KEY] = timer_session[TIMER_LAST_TICK_KEY]
         save_session(instance_key, serializable)
     except Exception as se:
         print(f"[WARN] Session save failed: {se}")
@@ -3092,16 +3079,13 @@ def _build_generate_response_payload(user, data, on_token=None):
         chat_rows,
     )
 
-    # Generate audio for interviewer response (skip when client uses browser TTS)
+    # Generate Piper audio for interviewer response (Classic server voice only)
     audio_url = None
-    voice_mode = (data.get("voice_mode") or "").strip().lower()
-    prefer_browser_voice = bool(data.get("prefer_browser_voice")) or voice_mode == "browser"
     server_tts_enabled = _env_truthy("INTERVIEW_SERVER_TTS", "false")
     if (
         response.get("message")
         and not response.get("interview_done", False)
         and server_tts_enabled
-        and not prefer_browser_voice
     ):
         try:
             response_text = response["message"]
@@ -3164,6 +3148,7 @@ def _build_generate_response_payload(user, data, on_token=None):
                  merged_url)
             )
 
+            finalize_interview_time(interview_id, user_id)
             execute("UPDATE interviews SET status='ENDED' WHERE id=%s", (interview_id,))
 
             # Remove session from store
@@ -3175,9 +3160,11 @@ def _build_generate_response_payload(user, data, on_token=None):
         # Clean up per-turn audio files only after feedback has been persisted.
         if feedback_saved and merged_path:
             try:
-                per_turn = [f for f in list_folder(f"audio/{user_id}/{interview_id}")
-                            if f['name'].startswith(('interviewer_', 'user_'))]
-                delete_files([f['relative_path'] for f in per_turn])
+                audio_folder = build_protected_storage_path("audio", user_id, interview_id)
+                if audio_folder:
+                    per_turn = [f for f in list_folder(audio_folder)
+                                if f['name'].startswith(('interviewer_', 'user_'))]
+                    delete_files([f['relative_path'] for f in per_turn])
             except Exception as cleanup_exc:
                 print(f"[WARN] Audio cleanup failed after feedback save: {cleanup_exc}")
 
@@ -3188,8 +3175,8 @@ def _build_generate_response_payload(user, data, on_token=None):
             "stage": response.get("stage", "unknown"),
             "interview_done": response.get("interview_done", False),
             "feedback_saved_successfully": feedback_saved,
-            "audio_url": audio_url,
-            "should_delete_audio": bool(audio_url),
+            "audio_url": _serialize_file_url(audio_url),
+            "should_delete_audio": False,
             "requires_code": response.get("requires_code"),
             "code_language": response.get("code_language"),
         },
@@ -3206,16 +3193,6 @@ def generate_response():
             return jsonify({"success": False, "message": "Message required"}), 400
         if not data.get('interview_id'):
             return jsonify({"success": False, "message": "interview_id required"}), 400
-
-        if _env_truthy("ENFORCE_SERVICE_HOURS", "true"):
-            hours = service_hours_status()
-            if not hours.get("is_open"):
-                return jsonify({
-                    "success": False,
-                    "closed": True,
-                    "message": hours.get("message") or "Service is outside operating hours.",
-                    "service_hours": hours,
-                }), 503
 
         with interview_turn_slot():
             payload, status_code = _build_generate_response_payload(request.user, data)
@@ -3249,19 +3226,8 @@ def generate_response_stream():
                 err = {"success": False, "message": "interview_id required"}
                 yield f"event: error\ndata: {json.dumps(err)}\n\n"
                 return
-            if _env_truthy("ENFORCE_SERVICE_HOURS", "true"):
-                hours = service_hours_status()
-                if not hours.get("is_open"):
-                    err = {
-                        "success": False,
-                        "closed": True,
-                        "message": hours.get("message"),
-                        "service_hours": hours,
-                    }
-                    yield f"event: error\ndata: {json.dumps(err)}\n\n"
-                    return
-
             event_q = queue.Queue()
+            user = request.user
 
             def on_token(text):
                 if text:
@@ -3276,7 +3242,7 @@ def generate_response_stream():
                                 {"position": slot["queue_position"], "message": "Waiting for AI capacity…"},
                             ))
                         payload, _status = _build_generate_response_payload(
-                            request.user, data, on_token=on_token
+                            user, data, on_token=on_token
                         )
                     event_q.put(("complete", payload))
                 except InterviewCapacityError as exc:
@@ -3316,16 +3282,22 @@ def generate_response_stream():
 # ─────────────────────────────────────────────────────────────────────────────
 #  AUDIO MERGE HELPER
 # ─────────────────────────────────────────────────────────────────────────────
+def _audio_turn_timestamp(filename):
+    """Extract YYYYMMDDTHHMMSS from user_* or interviewer_*_*.wav for chronological merge."""
+    match = re.search(r'(\d{8}T\d{6})', filename or '')
+    return match.group(1) if match else filename
 
 def _merge_interview_audio(user_id, interview_id):
-    folder = f"audio/{user_id}/{interview_id}"
+    folder = build_protected_storage_path("audio", user_id, interview_id)
+    if not folder:
+        return None
     files = list_folder(folder)
     if not files:
         return None
     audio_files = [f for f in files if f['name'].startswith(('interviewer_', 'user_'))]
     if not audio_files:
         return None
-    audio_files.sort(key=lambda x: x['name'])
+    audio_files.sort(key=lambda x: _audio_turn_timestamp(x['name']))
     segments = []
     temp_files = []
     try:
@@ -3382,7 +3354,7 @@ def generate_speech():
         result = save_bytes(audio_data, f"audio/{user_id}/general", filename)
         os.unlink(temp_path)
         return jsonify({"success": True, "data": {
-            "audio_url": result['public_url'],
+            "audio_url": result['protected_url'],
             "file_size": result['file_size']
         }})
     except Exception as e:
@@ -3452,7 +3424,7 @@ def support_bot():
     try:
         from Support_manager_enhanced import SupportBotManager
         bot = SupportBotManager(
-            model="llama3",
+            model=get_ollama_model_name(),
             faq_path=os.path.join(SUPPORT_BOT_PATH, "support_bot.md")
         )
         auth = request.headers.get('Authorization')
@@ -3488,10 +3460,14 @@ def analyze_performance_trends():
     data = request.get_json() or {}
     try:
         if 'feedbacks' in data and isinstance(data['feedbacks'], list):
-            result = analyze_performance_from_feedbacks(data['feedbacks'], data.get('model', 'llama3'))
+            result = analyze_performance_from_feedbacks(
+                data['feedbacks'], data.get('model', get_ollama_model_name())
+            )
         else:
             auth_token = request.headers.get('Authorization', '').split(' ')[-1]
-            result = analyze_user_performance(auth_token, data.get('model', 'llama3'), data.get('limit', 100))
+            result = analyze_user_performance(
+                auth_token, data.get('model', get_ollama_model_name()), data.get('limit', 100)
+            )
         if not result.get('success'):
             return jsonify({"success": False, "message": result.get('error', 'Analysis failed')}), 400
         return jsonify({"success": True, "data": result})
@@ -3617,6 +3593,12 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
+    from flask import request
+
+    sid = getattr(request, "sid", None)
+    if sid:
+        with detector_lock:
+            _detectors_by_sid.pop(sid, None)
     print('Client disconnected')
 
 @socketio.on('frame')
@@ -3674,8 +3656,9 @@ def _normalize_list(value):
         text = str(text).replace("\\n", "\n").strip()
         if not text:
             return []
-        parts = re.split(r'(?:^|\n)\s*\d+\.\s*', text)
+        parts = re.split(r'\d+\.\s*', text)
         points = [part.strip(" \n\t-•") for part in parts if part.strip(" \n\t-•")]
+        points = [part for part in points if not re.fullmatch(r'\d+', part)]
         if len(points) > 1:
             return points
         bullet_points = [part.strip(" \n\t-•") for part in re.split(r'\n\s*[-•]\s*', text) if part.strip(" \n\t-•")]
@@ -3708,14 +3691,52 @@ def _normalize_list(value):
 
 @app.route('/storage/<path:relative_path>', methods=['GET'])
 def serve_storage_file(relative_path):
-    storage_root = require_env("STORAGE_PATH")
-    safe_root = os.path.abspath(storage_root)
-    file_path = os.path.abspath(os.path.join(safe_root, relative_path))
-    if not file_path.startswith(f"{safe_root}{os.sep}"):
+    """Legacy public storage route — disabled; use /api/files/ with JWT."""
+    return jsonify({"error": "Direct storage access is not allowed. Use authenticated file API."}), 403
+
+
+@app.route('/api/files/<path:relative_path>', methods=['GET', 'OPTIONS'])
+@app.route('/functions/v1/files/<path:relative_path>', methods=['GET', 'OPTIONS'])
+@app.route('/api/functions/v1/files/<path:relative_path>', methods=['GET', 'OPTIONS'])
+@verify_auth_token
+def download_protected_file(relative_path):
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+
+    clean_path = validated_protected_relative_path(relative_path)
+    if not clean_path:
+        return jsonify({"error": "Forbidden"}), 403
+
+    if not user_owns_storage_path(request.user['id'], clean_path):
+        return jsonify({"error": "Forbidden"}), 403
+
+    if not safe_storage_file_path(clean_path):
         abort(404)
-    if not os.path.exists(file_path) or not os.path.isfile(file_path):
-        abort(404)
-    return send_from_directory(safe_root, relative_path, as_attachment=False)
+
+    return send_storage_file(clean_path)
+
+
+@app.route('/api/delete-audio', methods=['DELETE', 'POST', 'OPTIONS'])
+@verify_auth_token
+def delete_audio_file():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+
+    data = request.get_json(silent=True) or {}
+    audio_url = data.get('audio_url', '').strip()
+    if not audio_url:
+        return jsonify({"success": False, "message": "audio_url required"}), 400
+
+    relative = resolve_relative_path(audio_url)
+    if not relative:
+        return jsonify({"success": False, "message": "Invalid audio_url"}), 400
+    if not relative.startswith(f"audio/{request.user['id']}/"):
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    if not safe_storage_file_path(relative):
+        return jsonify({"success": True, "message": "Already deleted"})
+
+    delete_files([relative])
+    return jsonify({"success": True})
 
 
 def _pairing_key(resume_id, jd_id):
@@ -3820,7 +3841,12 @@ def _build_dashboard_pairings(user_id):
                 'resume_id': str(resume_id),
                 'jd_id': str(jd_id),
                 'resumeName': resume.get('file_name', 'Resume'),
-                'resumeUrl': resume.get('file_url') or public_url(resume.get('stored_path', '')) if resume.get('stored_path') else resume.get('file_url'),
+                'resumeUrl': _serialize_file_url(
+                    resume.get('file_url') or (
+                        protected_file_url(resume.get('stored_path', ''))
+                        if resume.get('stored_path') else None
+                    )
+                ),
                 'jobTitle': jd.get('title', 'Untitled role'),
                 'jobDescription': jd.get('description', ''),
                 'technical': jd.get('technical', True),
@@ -3858,7 +3884,7 @@ def _build_dashboard_pairings(user_id):
             'summary': feedback.get('summary') if feedback else None,
             'key_strengths': _normalize_list(feedback.get('key_strengths') if feedback else None),
             'improvement_areas': _normalize_list(feedback.get('improvement_areas') if feedback else None),
-            'audio_url': feedback.get('audio_url') if feedback else None,
+            'audio_url': _serialize_file_url(feedback.get('audio_url')) if feedback else None,
         })
 
     result = []
@@ -3884,12 +3910,9 @@ def _build_dashboard_pairings(user_id):
 
 
 def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, question_set=None, status='success'):
+    """Deprecated: internal stub redirect. Kept for backward compatibility references."""
     base = require_env("DOMAIN").rstrip('/')
-    params = [
-        f"interview_id={interview_id}",
-        f"payment_id={payment_id}",
-        f"status={status}",
-    ]
+    params = [f"checkout_intent_id={payment_id}"]
     if resume_id:
         params.append(f"resume_id={resume_id}")
     if jd_id:
@@ -3968,9 +3991,9 @@ def resumes_api():
     user_id = request.user['id']
     if request.method == 'GET':
         rows = query_all('SELECT * FROM resumes WHERE user_id=%s ORDER BY uploaded_at DESC', (user_id,))
-        return jsonify({'success': True, 'data': [dict(row) for row in rows]})
+        return jsonify({'success': True, 'data': [_serialize_resume_row(row) for row in rows]})
     data = request.get_json() or {}
-    file_url = data.get('file_url')
+    file_url = _serialize_file_url(data.get('file_url'))
     file_name = data.get('file_name') or 'resume'
     stored_path = data.get('stored_path')
     row = execute(
@@ -3983,58 +4006,85 @@ def resumes_api():
 @app.route('/api/payments', methods=['GET'])
 @verify_auth_token
 def get_payments():
-    rows = query_all('SELECT * FROM payments WHERE user_id=%s ORDER BY paid_at DESC', (request.user['id'],))
-    return jsonify({'success': True, 'data': [dict(row) for row in rows]})
-
-
-def _create_payment_impl():
-    if request.method == 'OPTIONS':
-        return jsonify({'message': 'OK'}), 200
-    data = request.get_json() or {}
+    if request.args.get('get_all') == 'true' or request.path.startswith('/functions/'):
+        pass  # same handler for legacy alias
     user_id = request.user['id']
-    interview_id = data.get('interview_id')
-    resume_id = data.get('resume_id')
-    jd_id = data.get('jd_id')
-    question_set = data.get('question_set')
-    retake_from = data.get('retake_from')
-    amount = data.get('amount', 49900)
-    payment_id = f"pay_{uuid.uuid4().hex[:12]}"
-
-    if interview_id:
-        execute(
-            """
-            UPDATE interviews
-            SET resume_id = COALESCE(%s, resume_id),
-                jd_id = COALESCE(%s, jd_id),
-                question_set = COALESCE(%s, question_set),
-                retake_from = COALESCE(%s, retake_from),
-                status = 'STARTED'
-            WHERE id = %s AND user_id = %s
-            """,
-            (resume_id, jd_id, question_set, retake_from, interview_id, user_id),
-        )
-
-    payment = execute(
+    rows = query_all(
         """
-        INSERT INTO payments (user_id, interview_id, amount, provider, payment_status, transaction_id)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING *
+        SELECT * FROM payments
+        WHERE user_id = %s
+        ORDER BY COALESCE(recorded_at, paid_at) DESC NULLS LAST
         """,
-        (user_id, interview_id, amount, 'internal', 'success', payment_id),
+        (user_id,),
     )
-
+    attempts = query_all(
+        """
+        SELECT
+            ci.id AS checkout_intent_id,
+            ci.status,
+            ci.amount_paise AS amount,
+            ci.created_at,
+            ci.failure_reason
+        FROM checkout_intents ci
+        WHERE ci.user_id = %s
+          AND ci.status IN ('failed', 'expired', 'checkout_creation_failed')
+          AND NOT EXISTS (
+              SELECT 1 FROM payments p WHERE p.checkout_intent_id = ci.id
+          )
+        ORDER BY ci.created_at DESC
+        """,
+        (user_id,),
+    )
+    payment_data = [dict(row) for row in rows]
+    attempt_data = [dict(row) for row in attempts]
     return jsonify({
         'success': True,
-        'payment_id': payment_id,
-        'payment_url': _payment_redirect_url(interview_id, payment_id, resume_id, jd_id, question_set, 'success'),
-        'data': dict(payment) if payment else None,
+        'data': payment_data,
+        'attempts': attempt_data,
+        'count': len(payment_data) + len(attempt_data),
     })
+
+
+@app.route('/api/internal/checkout-intents/expire-stale', methods=['POST'])
+def expire_stale_checkout_intents_internal():
+    """Expire abandoned pending checkout intents (internal maintenance token required)."""
+    from common.payment_fulfillment import expire_stale_checkout_intents
+
+    expected = (optional_env("CHECKOUT_MAINTENANCE_TOKEN", "") or "").strip()
+    if not expected or request.headers.get("X-Internal-Token") != expected:
+        return jsonify({"success": False, "message": "Forbidden"}), 403
+    limit = request.args.get("limit", 500, type=int)
+    limit = max(1, min(limit, 5000))
+    expired_count = expire_stale_checkout_intents(limit=limit)
+    return jsonify({"success": True, "expired_count": expired_count})
+
+
+@app.route('/api/checkout', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def create_checkout():
+    return create_checkout_handler()
+
+
+@app.route('/api/checkout/<intent_id>/status', methods=['GET'])
+@verify_auth_token
+def checkout_status(intent_id):
+    return checkout_status_handler(intent_id)
+
+
+@app.route('/api/webhooks/dodo', methods=['POST', 'OPTIONS'])
+def dodo_webhook():
+    return dodo_webhook_handler()
+
+
+def _legacy_checkout_redirect():
+    """Backward-compatible alias for old create-payment calls."""
+    return create_checkout_handler()
 
 
 @app.route('/api/create-payment', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def create_payment():
-    return _create_payment_impl()
+    return _legacy_checkout_redirect()
 
 
 @app.route('/api/check-payment-status', methods=['GET'])
@@ -4259,7 +4309,7 @@ def legacy_payments():
 @app.route('/api/functions/v1/create-payment', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def legacy_create_payment():
-    return _create_payment_impl()
+    return _legacy_checkout_redirect()
 
 
 @app.route('/functions/v1/interview-feedback', methods=['GET'])
@@ -4270,7 +4320,7 @@ def legacy_interview_feedback():
     if interview_id:
         row = query_one(
             """
-            SELECT f.*
+            SELECT f.*, i.active_seconds, i.ended_at
             FROM interview_feedback f
             JOIN interviews i ON i.id = f.interview_id
             WHERE f.interview_id=%s AND i.user_id=%s
@@ -4283,7 +4333,7 @@ def legacy_interview_feedback():
     limit = int(request.args.get('limit', 100))
     rows = query_all(
         """
-        SELECT f.*
+        SELECT f.*, i.active_seconds, i.ended_at
         FROM interview_feedback f
         JOIN interviews i ON i.id = f.interview_id
         WHERE i.user_id=%s
@@ -4316,7 +4366,12 @@ def legacy_chat_history():
     if request.method == 'GET':
         rows = query_all('SELECT * FROM chat_history WHERE interview_id=%s ORDER BY created_at ASC', (interview_id,))
         content = '\n'.join(f"{row['role']}:{row['content']}" for row in rows)
-        return jsonify({'success': True, 'history': [{'content': content}] if content else []})
+        ui_state = _interview_session_ui_state(interview_id, request.user['id'])
+        return jsonify({
+            'success': True,
+            'history': [{'content': content}] if content else [],
+            **ui_state,
+        })
     if request.method == 'DELETE':
         execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
         return jsonify({'success': True})
@@ -4526,7 +4581,8 @@ def delete_account():
         return jsonify({'error': 'Password confirmation failed'}), 403
     try:
         # Delete stored audio/resume files
-        audio_files = list_folder(f'audio/{user_id}')
+        audio_folder = build_protected_storage_path("audio", user_id)
+        audio_files = list_folder(audio_folder) if audio_folder else []
         if audio_files:
             delete_files([f['relative_path'] for f in audio_files])
         resume_rows = query_all('SELECT stored_path FROM resumes WHERE user_id=%s', (user_id,))

@@ -1,8 +1,8 @@
 # InterviewCoach AI
 
-AI-powered mock interview platform (React + Flask + PostgreSQL + Ollama).
+AI-powered mock interview platform (React + Flask + PostgreSQL).
 
-Production: **https://ugaanlabs.ai**
+Production: **https://www.ugaanlabs.ai**
 
 ## Quick start (local)
 
@@ -23,36 +23,28 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 
 | Branch | Role | Deploy |
 |--------|------|--------|
-| `develop` | Integration (default) | Yes — auto after merged PR |
+| `develop` | Integration (default) | Yes — via DevSecOps after merged PR |
 | `develop/<feature>` | Feature work | Yes — after admin PR approval |
 | `main` | Monthly snapshot | **Never** deploys |
 
-### Is a manual deploy button required?
+**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers release by merging a PR to `develop` and requesting deploy.
 
-**Usually no** — merging an admin-approved PR into `develop` triggers **Deploy · Auto (develop)**, which starts **Deploy · Production**.
-
-**Use the manual button when you need to:**
-
-- Re-deploy the same commit (no new merge)
-- Force `deploy_target: all` when `auto` skipped unchanged paths
-- Deploy a specific SHA or feature branch tip
-
-**Where to find it:** GitHub → **Actions** → **Deploy · Production** → **Run workflow** (top right).
-
-You can also run **Deploy · Auto (develop)** manually with a branch name if the auto trigger did not fire.
-
-Both paths still require **production environment approval** before anything reaches servers. Failed deploys roll back to the last stable release.
-
-Full steps: [docs/DEPLOY.md](docs/DEPLOY.md) · Requirements map: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) · Workflows: [.github/workflows/README.md](.github/workflows/README.md)
+- [docs/DEPLOY.md](docs/DEPLOY.md) — developer release flow  
+- [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — who deploys and how  
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — prod topology (CloudFront, Bedrock, S3)  
+- [docs/PROD_RUNBOOK.md](docs/PROD_RUNBOOK.md) — production deploy steps  
+- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — team requirements map  
 
 ## Project layout
 
 ```
-backend/          Flask API (app.py), INTERVIEW AI, support bot
+backend/          Flask API, common/ (llm, speech, storage, redis)
 frontend/         Vite + React 19
 database/         Schema and SQL migrations
+docker/           Dockerfile.prod, compose files
+infra/prod/       CloudFormation, IAM, deploy scripts, prod.env
+docs/             Architecture, deploy runbooks, security
 scripts/          Dev, deploy, security scan helpers
-docs/             Deploy and security runbooks
 ```
 
 ## Tests
@@ -68,7 +60,7 @@ cd frontend && npm run test:e2e
 cd backend && python -m pytest tests/ -q
 ```
 
-Security scans run on every PR via the **Security** workflow. See [SECURITY.md](SECURITY.md) and [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
+Security scans run on PRs. See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
 
 ## Security
 

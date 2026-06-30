@@ -1,17 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye } from 'react-icons/fi'; // Add FiLoader, FiRefreshCw, FiEye
-import { useTheme } from '../hooks/useTheme';
 import Navbar from '../components/Navbar';
 import LazySyntaxHighlightedCode from '../components/common/LazySyntaxHighlightedCode';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '../lib/authClient';
 import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from '../components/common/NoticeModal';
+import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
+import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 
 
 const getLevelColor = (level) => {
@@ -317,7 +317,6 @@ const processTextWithCode = (text, baseIndex) => {
 
 export default function QuestionsPage() {
   const [searchParams] = useSearchParams(); // ✅ Add this
-  const { theme } = useTheme();
   const [expandedQuestions, setExpandedQuestions] = useState(new Set());
   const [filterLevel, setFilterLevel] = useState('all');
   const [filterStrength, setFilterStrength] = useState('all');
@@ -329,17 +328,19 @@ export default function QuestionsPage() {
   const [error, setError] = useState(null);
   const [currentQuestionSet, setCurrentQuestionSet] = useState(null);
   const [availableQuestionSets, setAvailableQuestionSets] = useState([]);
-  const [paymentStatus, setPaymentStatus] = useState(null);
-  const [signatureOk, setSignatureOk] = useState(null);
-  const [paymentDebug, setPaymentDebug] = useState([]);
   const [currentResumeId, setCurrentResumeId] = useState(null);
   const [currentJdId, setCurrentJdId] = useState(null);
   const [interviewHistory, setInterviewHistory] = useState([]);
   const [hasExistingInterviews, setHasExistingInterviews] = useState(false);
+  const [interviewQuota, setInterviewQuota] = useState(null);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
+
+  useEffect(() => {
+    unlockBodyScroll();
+  }, []);
 
   // ✅ Updated useEffect - now filters by resume_id + jd_id combination
   useEffect(() => {
@@ -458,6 +459,24 @@ export default function QuestionsPage() {
 
     fetchQuestions();
   }, [searchParams]); // ✅ Add searchParams as dependency
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadQuota = async () => {
+      try {
+        const quota = await fetchInterviewQuota();
+        if (!cancelled) {
+          setInterviewQuota(quota);
+        }
+      } catch (error) {
+        console.warn('Could not load interview quota:', error);
+      }
+    };
+    loadQuota();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ✅ New function to fetch interview history for the current question set
   const fetchInterviewHistory = async (resumeId, jdId, questionSet, accessToken) => {
@@ -601,16 +620,35 @@ export default function QuestionsPage() {
     }
     setExpandedQuestions(newExpanded);
   };
-  const { user } = useAuth();
+  const runScheduleInterview = async ({ retakeFrom } = {}) => {
+    if (!currentResumeId || !currentJdId || !currentQuestionSet) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Missing data',
+        message: 'Please ensure resume, job description, and question set are available.',
+        variant: 'info',
+      });
+      return;
+    }
 
-  const buildRedirectUrl = (resumeId, jdId, transactionId) => {
-    const baseUrl = `${window.location.origin}/payment-status`;
-    const params = new URLSearchParams({
-      resume_id: resumeId,
-      jd_id: jdId,
-      transaction_id: transactionId
-    });
-    return `${baseUrl}?${params.toString()}`;
+    setIsPaymentLoading(true);
+    try {
+      await scheduleInterview({
+        resumeId: currentResumeId,
+        jdId: currentJdId,
+        questionSet: currentQuestionSet,
+        retakeFrom,
+      });
+    } catch (error) {
+      console.error('Error scheduling interview:', error);
+      setNoticeModal({
+        isOpen: true,
+        title: retakeFrom ? 'Retake failed' : 'Payment failed',
+        message: error.message,
+        variant: 'error',
+      });
+      setIsPaymentLoading(false);
+    }
   };
 
   const handlePayment = async () => {
@@ -623,246 +661,47 @@ export default function QuestionsPage() {
       });
       return;
     }
-    
-    // Track payment page visit
-    trackEvents.paymentPage({
-      resume_id: currentResumeId,
-      jd_id: currentJdId,
-      question_set: currentQuestionSet,
-      payment_timestamp: new Date().toISOString()
-    });
-    
-    try {
-      // ✅ STEP 1: Create blank interview record first
-      const session = await getSession();
-      if (!session?.access_token) {
-        throw new Error('No active session');
-      }
-
-      // Create blank interview with minimal data
-      const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          // ✅ Only store what we need to identify the interview
-          user_id: session.user.id, // For security/ownership
-          status: 'PENDING', // Status to track payment state
-          scheduled_at: new Date().toISOString() // Timestamp
-          // ❌ Don't store resume_id, jd_id, question_set, retake_from here
-        })
-      });
-
-      if (!blankInterviewResponse.ok) {
-        throw new Error('Failed to create interview record');
-      }
-
-      const blankInterviewResult = await blankInterviewResponse.json();
-      const blankInterviewId = blankInterviewResult.data.id;
-
-      console.log('✅ Blank interview created:', blankInterviewId);
-
-      // ✅ STEP 2: Create payment with interview_id in metadata
-      const response = await fetch(`${getBackendOrigin()}/functions/v1/create-payment`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          resume_id: currentResumeId,
-          jd_id: currentJdId,
-          question_set: currentQuestionSet,
-          interview_id: blankInterviewId // ✅ Pass the blank interview ID
-        })
-      });
-      
-      if (!response.ok) {
-        // ✅ If payment creation fails, delete the blank interview
-        await fetch(`${getBackendOrigin()}/functions/v1/interviews/${blankInterviewId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        });
-        throw new Error('Failed to create payment');
-      }
-      
-      const result = await response.json();
-      console.log('Payment created:', result);
-      
-      // ✅ STEP 3: Redirect to Dodo payment page
-      window.location.href = result.payment_url;
-      
-    } catch (error) {
-      console.error('Error creating payment:', error);
-      setNoticeModal({
-        isOpen: true,
-        title: 'Payment failed',
-        message: error.message,
-        variant: 'error',
-      });
-    }
+    await runScheduleInterview();
   };
 
-  // ✅ Updated function to handle retake interview
   const handleRetakeInterview = async () => {
-    if (!currentResumeId || !currentJdId || !currentQuestionSet) {
+    const originalInterview = interviewHistory.find(
+      (interview) => interview.status === 'completed' || interview.status === 'ENDED'
+    );
+
+    if (!originalInterview) {
       setNoticeModal({
         isOpen: true,
-        title: 'Missing data',
-        message: 'Please ensure resume, job description, and question set are available.',
+        title: 'Retake unavailable',
+        message: 'No completed interview found to retake from.',
         variant: 'info',
       });
       return;
     }
 
-    try {
-      // Get the original interview ID for retake context
-      const originalInterview = interviewHistory.find(interview => 
-        interview.status === 'completed' || interview.status === 'ENDED'
-      );
-      
-      if (!originalInterview) {
-        setNoticeModal({
-          isOpen: true,
-          title: 'Retake unavailable',
-          message: 'No completed interview found to retake from.',
-          variant: 'info',
-        });
-        return;
-      }
-
-      // ✅ STEP 1: Create blank interview record first
-      const session = await getSession();
-      if (!session?.access_token) {
-        throw new Error('No active session');
-      }
-
-      // Find existing interviews to determine attempt number
-      const existingInterviewsResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews?resume_id=${currentResumeId}&jd_id=${currentJdId}&question_set=${currentQuestionSet}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`
-        }
-      });
-
-      const existingInterviewsResult = await existingInterviewsResponse.json();
-      const existingInterviews = existingInterviewsResult.data || [];
-      
-      const nextAttemptNumber = existingInterviews.length > 0 
-        ? Math.max(...existingInterviews.map(i => i.attempt_number || 1)) + 1
-        : 1;
-
-      // Create blank interview with PENDING status
-      const blankInterviewResponse = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          resume_id: currentResumeId,
-          jd_id: currentJdId,
-          question_set: currentQuestionSet,
-          retake_from: originalInterview.id,
-          attempt_number: nextAttemptNumber,
-          status: 'PENDING', // ✅ PENDING status until payment is confirmed
-          scheduled_at: new Date().toISOString()
-        })
-      });
-
-      if (!blankInterviewResponse.ok) {
-        throw new Error('Failed to create interview record');
-      }
-
-      const blankInterviewResult = await blankInterviewResponse.json();
-      const blankInterviewId = blankInterviewResult.data.id;
-
-      console.log('✅ Blank interview created:', blankInterviewId);
-
-      // ✅ STEP 2: Create payment with interview_id in metadata
-      const paymentResponse = await fetch(`${getBackendOrigin()}/functions/v1/create-payment`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          resume_id: currentResumeId,
-          jd_id: currentJdId,
-          question_set: currentQuestionSet,
-          retake_from: originalInterview.id,
-          interview_id: blankInterviewId // ✅ Pass the blank interview ID
-        })
-      });
-      
-      if (!paymentResponse.ok) {
-        // ✅ If payment creation fails, delete the blank interview
-        await fetch(`${getBackendOrigin()}/functions/v1/interviews/${blankInterviewId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        });
-        throw new Error('Failed to create payment');
-      }
-      
-      const paymentResult = await paymentResponse.json();
-      console.log('Payment created:', paymentResult);
-      
-      // ✅ STEP 3: Redirect to Dodo payment page
-      window.location.href = paymentResult.payment_url;
-      
-    } catch (error) {
-      console.error('Error initiating retake:', error);
-      setNoticeModal({
-        isOpen: true,
-        title: 'Could not start retake',
-        message: error.message,
-        variant: 'error',
-      });
-    }
-  };
-  
-  
-  
-  const pollPaymentStatus = async (transactionId, accessToken) => {
-    try {
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL;
-      const res = await fetch(`${apiBaseUrl}/check-payment-status?transaction_id=${transactionId}`, {
-        headers: { 'Authorization': `Bearer ${accessToken}` },
-      });
-      const data = await res.json();
-
-      if (!res.ok || !data.success) return;
-
-      setPaymentStatus(data.status || null);
-      setSignatureOk(
-        typeof data.signature_ok === 'boolean' ? data.signature_ok : null
-      );
-
-      if (Array.isArray(data.debug)) {
-        setPaymentDebug(data.debug);
-      }
-
-      if (['succeeded', 'failed', 'cancelled'].includes(data.status)) {
-        // stop polling
-        return;
-      }
-      // continue polling
-      setTimeout(() => pollPaymentStatus(transactionId, accessToken), 1500);
-    } catch (err) {
-      console.error('Status check error:', err);
-      setTimeout(() => pollPaymentStatus(transactionId, accessToken), 2500);
-    }
+    await runScheduleInterview({ retakeFrom: originalInterview.id });
   };
 
+  const scheduleButtonLabel = (() => {
+    if (isPaymentLoading) return 'Processing...';
+    if (interviewQuota?.free_remaining > 0) {
+      return `Schedule Interview (Free)`;
+    }
+    return 'Schedule Interview';
+  })();
 
-
+  const quotaBadgeText = (() => {
+    if (!interviewQuota) return null;
+    if (interviewQuota.free_remaining > 0) {
+      const n = interviewQuota.free_remaining;
+      return `${n} free interview${n !== 1 ? 's' : ''} remaining`;
+    }
+    if (interviewQuota.payment_required) {
+      return 'Payment required for next interview';
+    }
+    return null;
+  })();
   
-
   return (
     <>
       <Navbar />
@@ -880,6 +719,11 @@ export default function QuestionsPage() {
             <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-4">
               Review generated questions and sample answers for your interview preparation
             </p>
+            {quotaBadgeText && (
+              <p className="text-xs sm:text-sm font-medium text-[var(--color-primary)] mb-2">
+                {quotaBadgeText}
+              </p>
+            )}
             
 
             {/* Question Set Display */}
@@ -1137,10 +981,13 @@ export default function QuestionsPage() {
                 {/* Retake Interview Button */}
                 <button
                   onClick={handleRetakeInterview}
-                  className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-gradient-to-r from-[var(--color-primary)] to-purple-600 hover:from-purple-600 hover:to-[var(--color-primary)] text-white shadow-lg hover:shadow-xl"
+                  disabled={isPaymentLoading}
+                  className={`inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-gradient-to-r from-[var(--color-primary)] to-purple-600 hover:from-purple-600 hover:to-[var(--color-primary)] text-white shadow-lg hover:shadow-xl ${
+                    isPaymentLoading ? 'opacity-60 cursor-not-allowed' : ''
+                  }`}
                 >
-                  <FiRefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
-                  Retake Interview
+                  <FiRefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${isPaymentLoading ? 'animate-spin' : ''}`} />
+                  {isPaymentLoading ? 'Processing...' : 'Retake Interview'}
                 </button>
                 
                 {/* View Dashboard Button */}
@@ -1163,8 +1010,8 @@ export default function QuestionsPage() {
                     : 'bg-gradient-to-r from-[var(--color-primary)] to-purple-600 hover:from-purple-600 hover:to-[var(--color-primary)] text-white shadow-lg hover:shadow-xl'
                 }`}
               >
-                <FiCreditCard className="w-4 h-4 sm:w-5 sm:w-5" />
-                {isPaymentLoading ? 'Processing...' : 'Schedule Interview'}
+                <FiCreditCard className="w-4 h-4 sm:w-5 sm:h-5" />
+                {scheduleButtonLabel}
               </button>
             )}
           </motion.div>

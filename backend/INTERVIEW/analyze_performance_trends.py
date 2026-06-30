@@ -5,11 +5,7 @@ import requests
 from datetime import datetime
 import numpy as np
 import re
-try:
-    import ollama
-except Exception as ollama_import_error:
-    ollama = None
-
+from common.llm.factory import chat as llm_chat, get_llm_diagnostics
 from common.runtime_config import load_runtime_config, optional_env
 
 load_runtime_config()
@@ -357,7 +353,7 @@ def analyze_performance_with_llm(numeric_summary, model="llama3"):
             'success': False,
             'error': 'No numeric summary provided'
         }
-    if ollama is None:
+    if not get_llm_diagnostics().get("ready"):
         return {
             'success': True,
             'summary': (
@@ -564,7 +560,7 @@ IMPORTANT
         attempt += 1
         try:
             print(f"[INFO] Using {model} to convert numeric results into readable text... (Attempt {attempt})")
-            response = ollama.chat(model=model, messages=[{"role": "system", "content": prompt}])
+            response = llm_chat(model=model, messages=[{"role": "system", "content": prompt}])
             response_text = response["message"]["content"].strip()
             
             # Extract JSON from response

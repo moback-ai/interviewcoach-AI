@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
 import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
-import { useTheme } from '../hooks/useTheme';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
@@ -13,10 +12,9 @@ import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
 import { getSession } from '../lib/authClient';
-import useBodyScrollLock from '../hooks/useBodyScrollLock';
+import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 
 function UploadPage() {
-  const { theme } = useTheme();
   const navigate = useNavigate();
   const { setIsOperationInProgress } = useOperation();
 
@@ -46,12 +44,10 @@ function UploadPage() {
   const [blendMode, setBlendMode] = useState(false);
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
-  const [questionValidationError, setQuestionValidationError] = useState('');
+  const [, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
-
-  useBodyScrollLock(loading || successModal.isOpen);
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -216,83 +212,28 @@ function UploadPage() {
     }
   };
 
-  const uploadFileToStorage = async (file, bucket, folder) => {
-    try {
-      // Upload through the app API
-      const backendOrigin = getBackendOrigin();
-      const edgeFunctionUrl = `${backendOrigin}/functions/v1/upload-file`;
-      
-      // Get current user session
-      const session = await getSession();
-      if (!session) {
-        throw new Error('No active session');
-      }
-      
-      // Create FormData for file upload
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('bucket', bucket);
-      formData.append('folder', folder);
-      
-      const response = await fetch(edgeFunctionUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          // Don't set Content-Type for FormData - browser will set it automatically
-        },
-        body: formData
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || errorData.message || `Upload failed: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      
-      if (!result.success) {
-        throw new Error(result.error || 'Upload failed');
-      }
-      
-      return result.data.public_url;
-    } catch (error) {
-      console.error('Upload error:', error);
-      throw error;
+  const uploadResume = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const result = await uploadFile('/upload-resume', formData);
+    if (!result.success) {
+      throw new Error(result.message || 'Resume upload failed');
     }
+    return {
+      resumeId: result.data.resume_id,
+      resumeUrl: result.data.url,
+    };
   };
 
-  const saveToDatabase = async (resumeUrl, jobDescUrl) => {
+  const saveJobDescription = async () => {
     try {
-      // Get current user session
       const session = await getSession();
       if (!session) {
         throw new Error('No active session');
       }
 
       const backendOrigin = getBackendOrigin();
-      
-      // 1. Save resume to database
-      const resumeResponse = await fetch(`${backendOrigin}/functions/v1/resumes`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          file_url: resumeUrl,
-          file_name: resume.name
-        })
-      });
-
-      if (!resumeResponse.ok) {
-        const errorData = await resumeResponse.json();
-        throw new Error(`Failed to save resume: ${errorData.message || 'Unknown error'}`);
-      }
-
-      const resumeData = await resumeResponse.json();
-
-      // 2. Save job description to database
-      const jdResponse = await fetch(`${backendOrigin}/functions/v1/job-descriptions`, {
+      const jdResponse = await fetch(`${backendOrigin}/api/job-descriptions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -301,8 +242,7 @@ function UploadPage() {
         body: JSON.stringify({
           title: jobTitle,
           description: jobDescription,
-          file_url: jobDescUrl,
-          technical: isTechnical  // ✅ ADD: Set technical based on whether coding slider is visible
+          technical: isTechnical
         })
       });
 
@@ -312,14 +252,9 @@ function UploadPage() {
       }
 
       const jdData = await jdResponse.json();
-
-      return {
-        resumeId: resumeData.data.id,
-        jdId: jdData.data.id
-      };
-
+      return { jdId: jdData.data.id };
     } catch (error) {
-      console.error('Error saving to database:', error);
+      console.error('Error saving job description:', error);
       throw error;
     }
   };
@@ -362,9 +297,9 @@ function UploadPage() {
     try {
       console.log('[DEBUG] Starting complete workflow...');
 
-      // Step 1: Upload the resume file
+      // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
       console.log('[DEBUG] Step 1: Uploading resume file...');
-      const resumeUrl = await uploadFileToStorage(resume, 'resumes', 'user_files');
+      const { resumeId, resumeUrl } = await uploadResume(resume);
 
       // Track resume upload
       trackEvents.resumeUploaded({
@@ -374,9 +309,9 @@ function UploadPage() {
         upload_timestamp: new Date().toISOString()
       });
 
-      // Step 2: Save resume and job description to database
-      console.log('[DEBUG] Step 2: Saving to database...');
-      const { resumeId, jdId } = await saveToDatabase(resumeUrl, resumeUrl);
+      // Step 2: Save job description to database
+      console.log('[DEBUG] Step 2: Saving job description...');
+      const { jdId } = await saveJobDescription();
 
       // Track job description save
       trackEvents.jobDescriptionSaved({
@@ -397,12 +332,9 @@ function UploadPage() {
 
       const generationDebug = questionsResult.debug || {};
       const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-      const usedLocalFallback = generationDebug.generator === 'local_fallback';
-      const generationWarning = usedLocalFallback
-        ? 'The live backend fell back to template-based generation because Ollama was unavailable or the configured model was missing.'
-        : fallbackAnswerCount > 0
-          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-          : '';
+      const generationWarning = fallbackAnswerCount > 0
+        ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+        : '';
 
       // Step 4: Save questions to database via edge function
       console.log('[DEBUG] Step 4: Saving questions to database...');
@@ -505,7 +437,6 @@ function UploadPage() {
           resume_url: resumeUrl,
           job_title: jobTitle,
           job_description: jobDescription,
-          prefer_local: true,
           question_counts: {
             beginner: easyQuestions,
             medium: mediumQuestions,
@@ -545,7 +476,7 @@ function UploadPage() {
       console.error('Error calling backend API:', error);
       if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
         throw new Error(
-          'Question generation timed out after 3 minutes. The server may still be busy — try again with fewer questions or check backend logs.'
+          'Question generation timed out. The server may still be busy try again with fewer questions.'
         );
       }
       throw error;
@@ -681,7 +612,8 @@ function UploadPage() {
   // Close success modal and go to the new question set (View Questions only)
   const handleNavigateToQuestions = () => {
     setSuccessModal({ isOpen: false, title: '', message: '', details: null });
-    
+    unlockBodyScroll();
+
     if (lastCreatedIds.resumeId && lastCreatedIds.jdId && lastCreatedIds.questionSet) {
       navigate(`/questions?resume_id=${lastCreatedIds.resumeId}&jd_id=${lastCreatedIds.jdId}&question_set=${lastCreatedIds.questionSet}`);
     } else {
@@ -689,9 +621,6 @@ function UploadPage() {
       navigate('/dashboard');
     }
   };
-
-  // Check if there's unsaved work that should trigger navigation warnings
-  const hasUnsavedWork = resume || jobDesc || jobTitle.trim() || jobDescription.trim() || loading || parsingJobDesc;
 
   // Check if any critical operations are in progress
   const isCriticalOperationInProgress = loading || parsingJobDesc;
@@ -1156,7 +1085,10 @@ function UploadPage() {
       {/* Success Modal */}
       <SuccessModal
         isOpen={successModal.isOpen}
-        onClose={() => setSuccessModal({ isOpen: false, title: '', message: '', details: null })}
+        onClose={() => {
+          unlockBodyScroll();
+          setSuccessModal({ isOpen: false, title: '', message: '', details: null });
+        }}
         title={successModal.title}
         message={successModal.message}
         details={successModal.details}

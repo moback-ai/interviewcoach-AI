@@ -28,7 +28,7 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
       }
     };
 
-    // Only fetch if we have 2+ interviews
+    // Only fetch if we have 3+ completed interviews with metrics
     if (resumeJobPairings.length > 0) {
       const totalInterviews = resumeJobPairings.reduce((count, pairing) => {
         return count + pairing.questionSets.reduce((qCount, qSet) => {
@@ -38,7 +38,7 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
         }, 0);
       }, 0);
 
-      if (totalInterviews >= 2) {
+      if (totalInterviews >= 3) {
         fetchOverallEvaluation();
       }
     }
@@ -308,10 +308,10 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
     );
   };
 
-  // Show helpful message if less than 2 interviews (need at least 2 for trends)
-  if (chartData.length < 2) {
+  // Show helpful message if less than 3 interviews (need at least 3 for trends)
+  if (chartData.length < 3) {
     const interviewCount = chartData.length;
-    const progressPercentage = (interviewCount / 2) * 100;
+    const progressPercentage = (interviewCount / 3) * 100;
     
     return (
       <div className="w-full bg-[var(--color-card)] rounded-xl border border-[var(--color-border)] shadow-lg overflow-hidden">
@@ -350,8 +350,8 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
             {/* Subtitle */}
             <p className="text-sm text-[var(--color-text-secondary)] mb-6 text-center">
               {interviewCount === 0 
-                ? "Complete 2 interviews to view your personalized insights."
-                : `You've completed ${interviewCount} of 2 interviews.`
+                ? "Complete 3 interviews to view your personalized insights."
+                : `You've completed ${interviewCount} of 3 interviews.`
               }
             </p>
 
@@ -362,7 +362,7 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
                   Progress
                 </span>
                 <span className="text-xs font-semibold text-[var(--color-primary)]">
-                  {interviewCount}/2
+                  {interviewCount}/3
                 </span>
               </div>
               <div className="w-full h-2.5 bg-[var(--color-input-bg)] rounded-full overflow-hidden border border-[var(--color-border)]">
@@ -391,8 +391,6 @@ const PerformanceGraph = ({ resumeJobPairings }) => {
   const analysis = overallEvaluation?.analysis_data || {};
   const fullAnalysis = analysis.full_analysis || {};
   const numericResults = fullAnalysis.numeric_results || {};
-  const llmExplanations = fullAnalysis.llm_explanations || {};
-
   // Get confidence level badge color
   const getConfidenceColor = (level) => {
     switch (level?.toLowerCase()) {

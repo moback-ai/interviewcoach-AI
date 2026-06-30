@@ -4,12 +4,16 @@
 
 ## Checklist
 
-- [ ] Target branch is `develop` (feature PR) or `main` (release PR from `develop` only)
+- [ ] Target branch is `develop`
 - [ ] Tested locally
-- [ ] Security workflow green (if code changed)
+- [ ] Security workflow green
+- [ ] **CODEOWNERS:** @govardhanreddy66 or @KFKishore23 approved (required for merge)
 
-## Deploy
+## Production deploy (DevSecOps only)
 
-**Feature PRs:** merge to `develop` → deploy runs automatically (admin approves production in Actions).
+- [ ] **Deploy needed after merge?** (yes / no)
+- If **yes**: ask **Govardhan or Kishore** to run **InterviewCoach · Deploy Production** from `moback-ai/devsecops-platform` after merge.
 
-**Release PR (`develop` → `main`):** one PR only; see [docs/DEPLOY.md](../docs/DEPLOY.md).
+**Developers cannot deploy to production.** No deploy workflows exist on this repo.
+
+See [docs/DEVSECOPS.md](../docs/DEVSECOPS.md).

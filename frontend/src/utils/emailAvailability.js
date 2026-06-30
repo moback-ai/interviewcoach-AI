@@ -9,10 +9,11 @@ export async function checkEmailAvailability(email) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email })
     });
+    if (!res.ok) return { exists: false, available: true, networkError: true };
     const data = await res.json();
     return { exists: data.exists, available: !data.exists };
   } catch {
-    return { exists: false, available: true };
+    return { exists: false, available: true, networkError: true };
   }
 }
 
@@ -23,9 +24,20 @@ export async function checkUsernameAvailability(username) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username })
     });
-    const data = await res.json();
-    return { exists: data.exists, available: !data.exists, error: data.error };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        exists: false,
+        available: false,
+        error: data.error || 'Could not check username availability.',
+      };
+    }
+    return { exists: data.exists, available: !data.exists, error: data.error || '' };
   } catch {
-    return { exists: false, available: true, error: '' };
+    return {
+      exists: false,
+      available: false,
+      error: 'Could not check username availability.',
+    };
   }
 }

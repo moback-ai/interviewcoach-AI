@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
-import { 
-  FiUser, 
+import {
+  FiUser,
   FiMail, 
   FiCalendar, 
   FiCamera,
@@ -28,6 +28,7 @@ import {
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
+import ProfileAvatarCanvas from '../components/profile/ProfileAvatarCanvas';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024;
@@ -93,12 +94,13 @@ const ProfileSection = ({
   formatDate,
   statusMessage,
   statusTone,
-  avatarPreview,
+  avatarPreviewTrusted,
+  savedAvatarReloadKey,
   avatarFile,
   avatarError,
   handleAvatarFileChange,
 }) => {
-  const avatarSource = avatarPreview || profileData.avatar_url;
+  const hasStoredAvatar = Boolean(profileData.avatar_url);
   const displayName = profileData.full_name || profileData.nickname || profileData.email || 'InterviewCoach';
 
   return (
@@ -153,11 +155,16 @@ const ProfileSection = ({
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-4">
               <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] text-2xl font-semibold text-[var(--color-primary)]">
-                {avatarSource ? (
-                  <img
-                    src={avatarSource}
-                    alt="Profile"
-                    className="h-full w-full object-cover"
+                {avatarPreviewTrusted && avatarFile ? (
+                  <ProfileAvatarCanvas
+                    previewFile={avatarFile}
+                    className="h-full w-full"
+                  />
+                ) : hasStoredAvatar ? (
+                  <ProfileAvatarCanvas
+                    loadSavedAvatar
+                    reloadKey={savedAvatarReloadKey}
+                    className="h-full w-full"
                   />
                 ) : (
                   <span>{getProfileInitials(displayName)}</span>
@@ -171,7 +178,7 @@ const ProfileSection = ({
                   Upload a JPG, PNG, GIF, or WEBP image up to 5 MB.
                 </p>
                 <p className="text-xs text-[var(--color-text-secondary)]">
-                  {avatarFile ? `Selected: ${avatarFile.name}` : avatarSource ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
+                  {avatarFile ? `Selected: ${avatarFile.name}` : hasStoredAvatar ? 'Current photo ready to update.' : 'Using initials until you upload a photo.'}
                 </p>
               </div>
             </div>
@@ -179,7 +186,7 @@ const ProfileSection = ({
             {isEditing ? (
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-input-bg)] px-4 py-2 text-sm font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]">
                 <FiCamera size={16} />
-                <span>{avatarSource ? 'Change photo' : 'Upload photo'}</span>
+                <span>{hasStoredAvatar || avatarPreviewTrusted ? 'Change photo' : 'Upload photo'}</span>
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp,image/gif"
@@ -357,7 +364,25 @@ const PaymentsSection = () => {
       const result = await response.json();
 
       if (response.ok && result.success) {
-        setPayments(result.data || []);
+        const paymentRows = (result.data || []).map((row) => ({
+          ...row,
+          kind: 'payment',
+          display_status: row.payment_status,
+          display_date: row.recorded_at || row.paid_at,
+        }));
+        const attemptRows = (result.attempts || []).map((row) => ({
+          ...row,
+          kind: 'attempt',
+          display_status: row.status,
+          display_date: row.created_at,
+          id: row.checkout_intent_id,
+        }));
+        const merged = [...paymentRows, ...attemptRows].sort((a, b) => {
+          const aTime = new Date(a.display_date || 0).getTime();
+          const bTime = new Date(b.display_date || 0).getTime();
+          return bTime - aTime;
+        });
+        setPayments(merged);
       } else {
         setError(result.message || 'Failed to fetch payment history');
       }
@@ -381,7 +406,10 @@ const PaymentsSection = () => {
       case 'success':
         return <FiCheckCircle className="w-5 h-5 text-green-500" />;
       case 'failed':
+      case 'checkout_creation_failed':
         return <FiXCircle className="w-5 h-5 text-red-500" />;
+      case 'expired':
+        return <FiClock className="w-5 h-5 text-gray-500" />;
       case 'pending':
       case 'processing':
         return <FiClock className="w-5 h-5 text-yellow-500" />;
@@ -396,13 +424,22 @@ const PaymentsSection = () => {
       case 'success':
         return 'text-green-600 bg-green-100';
       case 'failed':
+      case 'checkout_creation_failed':
         return 'text-red-600 bg-red-100';
+      case 'expired':
+        return 'text-gray-600 bg-gray-100';
       case 'pending':
       case 'processing':
         return 'text-yellow-600 bg-yellow-100';
       default:
         return 'text-gray-600 bg-gray-100';
     }
+  };
+
+  const formatStatusLabel = (status) => {
+    if (status === 'checkout_creation_failed') return 'checkout failed';
+    if (status === 'expired') return 'expired';
+    return status;
   };
 
   const formatDate = (dateString) => {
@@ -427,8 +464,12 @@ const PaymentsSection = () => {
 
   // Calculate summary statistics
   const totalPayments = payments.length;
-  const successfulPayments = payments.filter(p => p.payment_status === 'succeeded' || p.payment_status === 'success').length;
-  const totalAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const successfulPayments = payments.filter(
+    (p) => p.display_status === 'succeeded' || p.display_status === 'success'
+  ).length;
+  const totalAmount = payments
+    .filter((p) => p.kind === 'payment')
+    .reduce((sum, p) => sum + (p.amount || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -509,41 +550,42 @@ const PaymentsSection = () => {
         <div className="space-y-4">
           {payments.map((payment) => (
             <div
-              key={payment.id}
+              key={`${payment.kind}-${payment.id}`}
               className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-6 hover:shadow-md transition-shadow"
             >
               {/* Main Payment Info */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center space-x-4">
-                  {getStatusIcon(payment.payment_status)}
+                  {getStatusIcon(payment.display_status)}
                   <div>
                     <h3 className="font-semibold text-[var(--color-text-primary)] text-lg">
-                      {payment.provider?.toUpperCase()} Payment
+                      {payment.kind === 'attempt'
+                        ? 'Checkout attempt'
+                        : `${payment.provider?.toUpperCase() || 'DODO'} Payment`}
                     </h3>
                     <p className="text-sm text-[var(--color-text-secondary)]">
-                      {formatDate(payment.paid_at)}
+                      {payment.display_date ? formatDate(payment.display_date) : '—'}
                     </p>
                   </div>
                 </div>
                 
                 <div className="text-right">
                   <div className="text-2xl font-bold text-[var(--color-text-primary)]">
-                    {formatAmount(payment.amount)}
+                    {formatAmount(payment.amount || 0)}
                   </div>
-                  <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(payment.payment_status)}`}>
-                    {payment.payment_status}
+                  <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(payment.display_status)}`}>
+                    {formatStatusLabel(payment.display_status)}
                   </span>
                 </div>
               </div>
 
-              {/* Payment IDs Section */}
+              {payment.kind === 'payment' && payment.transaction_id && (
               <div className="bg-[var(--color-bg)] rounded-lg p-4 mb-4">
                 <h4 className="font-medium text-[var(--color-text-primary)] mb-3 flex items-center">
                   <FiHash className="w-4 h-4 mr-2" />
                   Payment Identifiers
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Payment ID (Dodo's ID) */}
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wide">
                       Payment ID (Dodo)
@@ -565,7 +607,6 @@ const PaymentsSection = () => {
                     </p>
                   </div>
 
-                  {/* Transaction ID (Internal) */}
                   <div className="space-y-2">
                     <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wide">
                       Transaction ID (Internal)
@@ -588,8 +629,9 @@ const PaymentsSection = () => {
                   </div>
                 </div>
               </div>
+              )}
 
-              {/* Additional Details */}
+              {payment.kind === 'payment' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                 <div className="space-y-2">
                   <label className="text-xs font-medium text-[var(--color-text-secondary)] uppercase tracking-wide">
@@ -612,6 +654,7 @@ const PaymentsSection = () => {
                   </div>
                 </div>
               </div>
+              )}
             </div>
           ))}
         </div>
@@ -627,8 +670,6 @@ const AnalyticsSection = () => {
     const [job_descriptions, setJobDescriptions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [refreshing, setRefreshing] = useState(false);
-
     //Initialized structures to be used in RecentActivity
     let searchableResumes;
     let searchableJDs;
@@ -752,14 +793,6 @@ const AnalyticsSection = () => {
         } finally {
             setLoading(false);
         }
-    };
-
-    const handleRefresh = async () => {
-        setRefreshing(true);
-        await fetchInterviewHistory();
-        await fetchResumeHistory();
-        await fetchJDHistory();
-        setRefreshing(false);
     };
 
     // Reformat resumes and job_descriptions to be searchable
@@ -1099,21 +1132,14 @@ function ProfilePage() {
   const [loading, setLoading] = useState(false);
   const [profileStatus, setProfileStatus] = useState(null);
   const [avatarFile, setAvatarFile] = useState(null);
-  const [avatarPreview, setAvatarPreview] = useState('');
+  const [avatarPreviewTrusted, setAvatarPreviewTrusted] = useState(false);
+  const [savedAvatarReloadKey, setSavedAvatarReloadKey] = useState(0);
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
 
   useEffect(() => {
     setProfileData(buildProfileState(user));
   }, [user]);
-
-  useEffect(() => (
-    () => {
-      if (avatarPreview?.startsWith('blob:')) {
-        URL.revokeObjectURL(avatarPreview);
-      }
-    }
-  ), [avatarPreview]);
 
   const navigationItems = [
     { id: 'profile', label: 'Profile', icon: FiUser, description: 'Personal information' },
@@ -1123,11 +1149,8 @@ function ProfilePage() {
   ];
 
   const clearAvatarDraft = () => {
-    if (avatarPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-    setAvatarPreview('');
     setAvatarFile(null);
+    setAvatarPreviewTrusted(false);
     setAvatarError('');
   };
 
@@ -1140,17 +1163,13 @@ function ProfilePage() {
     const validationMessage = validateAvatarFile(file);
     if (validationMessage) {
       setAvatarError(validationMessage);
+      setAvatarPreviewTrusted(false);
       event.target.value = '';
       return;
     }
 
-    const nextPreview = URL.createObjectURL(file);
-    if (avatarPreview?.startsWith('blob:')) {
-      URL.revokeObjectURL(avatarPreview);
-    }
-
     setAvatarFile(file);
-    setAvatarPreview(nextPreview);
+    setAvatarPreviewTrusted(true);
     setAvatarError('');
     setProfileStatus(null);
     event.target.value = '';
@@ -1201,10 +1220,8 @@ function ProfilePage() {
       });
 
       setProfileData(buildProfileState(nextUser));
+      setSavedAvatarReloadKey((value) => value + 1);
       clearAvatarDraft();
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('interviewcoach.voicePresetManual');
-      }
       setIsEditing(false);
       setProfileStatus({
         tone: 'success',
@@ -1259,7 +1276,8 @@ function ProfilePage() {
         formatDate={formatDate}
         statusMessage={profileStatus?.message || ''}
         statusTone={profileStatus?.tone || 'success'}
-        avatarPreview={avatarPreview}
+        avatarPreviewTrusted={avatarPreviewTrusted}
+        savedAvatarReloadKey={savedAvatarReloadKey}
         avatarFile={avatarFile}
         avatarError={avatarError}
         handleAvatarFileChange={handleAvatarFileChange}

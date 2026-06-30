@@ -101,6 +101,21 @@ def execute_many(sql, params_list):
         _put_conn(conn)
 
 
+def run_transaction(callback):
+    """Run callback(cur) in a single transaction; commit on success, rollback on error."""
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        result = callback(cur)
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        _put_conn(conn)
+
+
 def close_pool():
     """Gracefully close all pooled connections (call on app shutdown)."""
     global _pool

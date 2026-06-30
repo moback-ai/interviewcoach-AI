@@ -1,25 +1,10 @@
 import json
 import os
 import re
-try:
-    import ollama
-except Exception as ollama_import_error:
-    ollama = None
 
-
-def resolve_ollama_model_name(model=None):
-    configured_model = ""
-    try:
-        from common.runtime_config import optional_env as runtime_optional_env
-        configured_model = runtime_optional_env("OLLAMA_MODEL", "llama3")
-    except Exception:
-        configured_model = os.getenv("OLLAMA_MODEL", "llama3")
-
-    configured_model = (configured_model or "llama3").strip()
-    requested_model = (model or "").strip()
-    if not requested_model or requested_model == "llama3":
-        return configured_model
-    return requested_model
+from common.llm.factory import chat as llm_chat, chat_stream as llm_chat_stream
+from common.llm.ollama_provider import resolve_ollama_model_name
+from common.runtime_config import optional_env as runtime_optional_env
 
 
 RED = "\033[31m"
@@ -32,12 +17,7 @@ RESET = "\033[0m"
 
 def _ollama_chat_options():
     """Cap generation length for faster interview turns (override via OLLAMA_NUM_PREDICT)."""
-    raw = ""
-    try:
-        from common.runtime_config import optional_env as runtime_optional_env
-        raw = runtime_optional_env("OLLAMA_NUM_PREDICT", "384")
-    except Exception:
-        raw = os.getenv("OLLAMA_NUM_PREDICT", "384")
+    raw = runtime_optional_env("OLLAMA_NUM_PREDICT", "384")
     try:
         num_predict = max(64, min(int(raw or 384), 1024))
     except (TypeError, ValueError):
@@ -46,29 +26,11 @@ def _ollama_chat_options():
 
 
 def ollama_chat(*, model, messages):
-    if ollama is None:
-        raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
-    resolved_model = resolve_ollama_model_name(model)
-    return ollama.chat(
-        model=resolved_model,
-        messages=messages,
-        options=_ollama_chat_options(),
-    )
+    return llm_chat(model=model, messages=messages)
 
 
 def ollama_chat_stream(*, model, messages):
-    if ollama is None:
-        raise RuntimeError(f"Ollama is not installed or failed to import: {ollama_import_error}")
-    resolved_model = resolve_ollama_model_name(model)
-    for chunk in ollama.chat(
-        model=resolved_model,
-        messages=messages,
-        stream=True,
-        options=_ollama_chat_options(),
-    ):
-        part = (chunk.get("message") or {}).get("content") or ""
-        if part:
-            yield part
+    yield from llm_chat_stream(model=model, messages=messages)
 
 
 def log(func_name):

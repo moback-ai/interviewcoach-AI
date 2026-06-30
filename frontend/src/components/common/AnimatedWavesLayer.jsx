@@ -6,17 +6,17 @@ const EFFECT_PRESETS = {
     light: {
       backgroundColor: 0xe8f5ff,
       color: 0x5ebfff,
-      shininess: 32,
-      waveHeight: 8,
-      waveSpeed: 0.48,
+      shininess: 36,
+      waveHeight: 12,
+      waveSpeed: 0.62,
       zoom: 0.92,
     },
     dark: {
       backgroundColor: 0x071526,
       color: 0x185b8c,
-      shininess: 26,
-      waveHeight: 7,
-      waveSpeed: 0.4,
+      shininess: 30,
+      waveHeight: 10,
+      waveSpeed: 0.52,
       zoom: 0.9,
     },
   },
@@ -204,7 +204,11 @@ export default function AnimatedWavesLayer({
     };
   }, [defer, interactive, preset, theme]);
 
-  const layerClass = ['animated-waves-layer', className].filter(Boolean).join(' ');
+  const layerClass = [
+    'animated-waves-layer',
+    interactive ? 'animated-waves-layer--interactive' : '',
+    className,
+  ].filter(Boolean).join(' ');
 
   return <div ref={elementRef} className={layerClass} aria-hidden="true" />;
 }

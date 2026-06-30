@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: InterviewCoach PROD - S3 buckets import (no outputs)
+
+Parameters:
+  StaticBucketName:
+    Type: String
+    Default: ic-static-prod
+  UserFilesBucketName:
+    Type: String
+    Default: ic-user-files-prod
+
+Resources:
+  StaticBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref StaticBucketName
+
+  UserFilesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref UserFilesBucketName

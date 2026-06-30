@@ -62,21 +62,78 @@ def validate_extracted_document_text(
     return True, ""
 
 
+def _is_likely_resume(text):
+    text_lower = (text or "").lower()
+    primary_terms = ["experience", "education", "skills", "projects", "employment", "professional history", "cv", "resume", "certifications"]
+    secondary_terms = [
+        "contact", "email", "phone", "gpa", "university", "college", "school", "summary", 
+        "objective", "achievements", "profile", "developer", "engineer", "software", "analyst", 
+        "manager", "designer", "consultant", "technical", "senior", "junior", "lead"
+    ]
+    
+    score = 0
+    for term in primary_terms:
+        if term in text_lower:
+            score += 2
+    for term in secondary_terms:
+        if term in text_lower:
+            score += 1
+    return score >= 3
+
+
+def _is_likely_job_description(text):
+    text_lower = (text or "").lower()
+    primary_terms = ["responsibilities", "requirements", "qualifications", "job description", "about the role", "key responsibilities", "skills required"]
+    secondary_terms = [
+        "experience", "duties", "benefits", "compensation", "salary", "apply", "role", 
+        "position", "full-time", "part-time", "candidate", "seeking", "looking for", "developer", 
+        "engineer", "software", "analyst", "manager", "designer", "consultant", "team",
+        "senior", "junior", "lead", "backend", "frontend", "fullstack"
+    ]
+    
+    score = 0
+    for term in primary_terms:
+        if term in text_lower:
+            score += 2
+    for term in secondary_terms:
+        if term in text_lower:
+            score += 1
+    return score >= 2
+
+
 def validate_resume_text(text):
-    return validate_extracted_document_text(
+    is_valid, msg = validate_extracted_document_text(
         text,
         min_chars=100,
         min_words=15,
         min_alpha_ratio=0.35,
         doc_label="resume",
     )
+    if not is_valid:
+        return False, msg
+
+    if not _is_likely_resume(text):
+        return False, (
+            "The uploaded file does not appear to be a valid resume. "
+            "Please upload a document containing work experience, education, skills, or projects."
+        )
+    return True, ""
 
 
 def validate_job_description_extracted_text(text):
-    return validate_extracted_document_text(
+    is_valid, msg = validate_extracted_document_text(
         text,
         min_chars=30,
         min_words=6,
         min_alpha_ratio=0.45,
         doc_label="job description",
     )
+    if not is_valid:
+        return False, msg
+
+    if not _is_likely_job_description(text):
+        return False, (
+            "The uploaded file does not appear to be a valid job description. "
+            "Please upload a document containing role responsibilities, requirements, or qualifications."
+        )
+    return True, ""
