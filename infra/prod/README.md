@@ -69,6 +69,8 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `01-aws-bedrock.sh` | Bedrock model access checklist |
 | `02-aws-cloudformation.sh` | Deploy S3 stack |
 | `02b-rename-s3-stack.sh` | Rename `interviewcoach-prod-hybrid-s3` → `interviewcoach-prod-s3` (import retain) |
+| `02c-rename-compute-stack.sh` | Rename `interviewcoach-prod-hybrid` → `interviewcoach-prod-compute` |
+| `02d-rename-proxy-stack.sh` | Rename `interviewcoach-prod-rds-proxy` → `interviewcoach-prod-proxy` |
 | `03-aws-secrets-manager.sh` | Create/update secrets JSON |
 | `04-aws-iam-attach.sh` | Attach API IAM policy |
 | `05-devsecops-build-ecr.sh` | Build `Dockerfile.prod` → ECR (devsecops Actions) |
