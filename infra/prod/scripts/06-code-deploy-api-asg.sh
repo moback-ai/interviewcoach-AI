@@ -11,33 +11,11 @@ source "$(dirname "$0")/require-devsecops.sh"
 # shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REGION="${AWS_REGION:-ap-south-1}"
-COMPUTE_TEMPLATE="$(dirname "$0")/../cloudformation/prod-compute-stack.yaml"
-
-resolve_stack_name() {
-  local preferred="$1"
-  shift
-  if aws cloudformation describe-stacks --region "$REGION" --stack-name "$preferred" >/dev/null 2>&1; then
-    echo "$preferred"
-    return
-  fi
-  for legacy in "$@"; do
-    if aws cloudformation describe-stacks --region "$REGION" --stack-name "$legacy" >/dev/null 2>&1; then
-      echo "$legacy"
-      return
-    fi
-  done
-  echo "$preferred"
-}
-
-COMPUTE_STACK=$(resolve_stack_name \
-  "${COMPUTE_STACK_NAME:-interviewcoach-prod-compute}" \
-  "interviewcoach-prod-hybrid")
 ASG="${ASG_NAME:-interviewcoach-prod-api-asg}"
 ECR_REGISTRY="${ECR_REGISTRY:?Set ECR_REGISTRY}"
 IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
-VPC_ID="${VPC_ID:?Set VPC_ID}"
-PUBLIC_SUBNETS="${PUBLIC_SUBNET_IDS:?Set PUBLIC_SUBNET_IDS}"
 
 resume_asg_scheduled_actions() {
   aws autoscaling resume-processes \
@@ -53,25 +31,25 @@ aws autoscaling suspend-processes \
   --scaling-processes ScheduledActions
 trap resume_asg_scheduled_actions EXIT
 
-echo "Updating compute stack $COMPUTE_STACK with IMAGE_TAG=$IMAGE_TAG ..."
-aws cloudformation deploy \
+LT_ID=$(aws autoscaling describe-auto-scaling-groups \
   --region "$REGION" \
-  --stack-name "$COMPUTE_STACK" \
-  --template-file "$COMPUTE_TEMPLATE" \
-  --parameter-overrides \
-    VpcId="$VPC_ID" \
-    PublicSubnetIds="$PUBLIC_SUBNETS" \
-    KeyName="${KEY_NAME:-interviewcoach-key-v2}" \
-    AmiId="${AMI_ID:-ami-0a1b0c508e1fa9fce}" \
-    InstanceType="${INSTANCE_TYPE:-c6i.xlarge}" \
-    InstanceProfileName="${INSTANCE_PROFILE_NAME:-InterviewCoachBackendSecretsProfile}" \
-    EcrRegistry="$ECR_REGISTRY" \
-    ImageTag="$IMAGE_TAG" \
-    DesiredCapacity="${ASG_DESIRED_CAPACITY:-2}" \
-    MinSize="${ASG_MIN_SIZE:-2}" \
-    MaxSize="${ASG_MAX_SIZE:-4}" \
-    RdsSecurityGroupId="${RDS_SECURITY_GROUP_ID:?Set RDS_SECURITY_GROUP_ID}" \
-  --no-fail-on-empty-changeset
+  --auto-scaling-group-names "$ASG" \
+  --query 'AutoScalingGroups[0].LaunchTemplate.LaunchTemplateId' \
+  --output text)
+if [[ -z "$LT_ID" || "$LT_ID" == "None" ]]; then
+  echo "Could not resolve launch template for ASG $ASG"
+  exit 1
+fi
+
+echo "Bumping launch template $LT_ID to image ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG} ..."
+NEW_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/bump-launch-template-image.py" \
+  "$REGION" "$LT_ID" "$ECR_REGISTRY" "$IMAGE_TAG")
+echo "Created launch template version $NEW_LT_VERSION"
+
+aws autoscaling update-auto-scaling-group \
+  --region "$REGION" \
+  --auto-scaling-group-name "$ASG" \
+  --launch-template "LaunchTemplateId=${LT_ID},Version=\$Latest"
 
 REFRESH_ID=$(aws autoscaling start-instance-refresh \
   --region "$REGION" \
@@ -80,7 +58,7 @@ REFRESH_ID=$(aws autoscaling start-instance-refresh \
   --query InstanceRefreshId --output text)
 echo "Instance refresh started: $REFRESH_ID"
 
-for i in $(seq 1 40); do
+for i in $(seq 1 60); do
   STATUS=$(aws autoscaling describe-instance-refreshes \
     --region "$REGION" \
     --auto-scaling-group-name "$ASG" \
@@ -91,12 +69,13 @@ for i in $(seq 1 40); do
   [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" ]] && exit 1
   sleep 30
 done
+[[ "$STATUS" == "Successful" ]] || { echo "Instance refresh did not complete: $STATUS"; exit 1; }
 
 trap - EXIT
 resume_asg_scheduled_actions
 
 ALB_DNS="${ALB_DNS_NAME:-}"
 if [[ -n "$ALB_DNS" ]]; then
-  curl -fsS "http://${ALB_DNS}/api/health" | head -c 400 || true
+  curl -fsS --max-time 15 "http://${ALB_DNS}/api/health" | head -c 400 || true
 fi
 echo "ASG deploy complete. Image: ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG}"
