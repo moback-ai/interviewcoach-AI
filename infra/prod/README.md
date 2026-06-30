@@ -15,7 +15,7 @@ Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) · Runbook: [do
 
 | Role | Repository | Actions |
 |------|------------|---------|
-| **Developers** | `moback-ai/interviewcoach-AI` | PR → `develop`, Security CI only |
+| **Developers** | `moback-ai/interviewcoach-AI` | PR → `develop`, Security CI; **CloudWatch logs read-only** ([DEV_ACCESS.md](../../docs/DEV_ACCESS.md)) |
 | **DevSecOps** | `moback-ai/devsecops-platform` | Deploy, secrets, SSH, AWS infra scripts |
 
 Deploy workflow template: `github-workflows/deploy-prod.yml` → copy to devsecops-platform `.github/workflows/`

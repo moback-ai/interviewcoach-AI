@@ -29,7 +29,7 @@ This document captures what was requested across prior setup sessions, and what 
 | Deploy **only from `develop` / `develop/*`** — never `main` | Done |
 | **Admin PR approval** before merge to `develop` | GitHub PR review |
 | **Production environment approval** (second admin) | `Deploy · Production` |
-| Failed deploy **rolls back** to last stable — failed code never stays live | `deploy.yml` rollback jobs |
+| Failed deploy **rolls back** to last stable | devsecops-platform **InterviewCoach · Deploy PROD** |
 | **Deploy after merge** to `develop` | DevSecOps runs **InterviewCoach · Deploy PROD** in `devsecops-platform` |
 | **Re-deploy** same SHA or hotfix | DevSecOps manual workflow in `devsecops-platform` |
 | **PR quick check** — lint / pytest / gitleaks on changed files before merge | `Security` workflow `pr-quick` job |
