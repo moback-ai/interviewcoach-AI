@@ -13,7 +13,7 @@ flowchart TB
   CF[CloudFront\nwww.ugaanlabs.ai]
   S3[S3 ic-static-prod\nReact SPA]
   ALB[ALB\ninterviewcoach-prod-alb]
-  ASG[ASG c6i.xlarge x2+\nDocker API]
+  ASG[ASG c6i.xlarge x1-4\nDocker API]
   RDS[(RDS PostgreSQL\nMulti-AZ + Proxy)]
   S3Files[S3 ic-user-files-prod]
   Bedrock[Amazon Bedrock]
@@ -88,7 +88,7 @@ S3 stack rename/import (legacy): `infra/prod/scripts/02b-rename-s3-stack.sh`
 | Resource | Role |
 |----------|------|
 | ALB `interviewcoach-prod-alb` | API load balancer (CloudFront origin) |
-| ASG `interviewcoach-prod-api-asg` | 2–4 × `c6i.xlarge`, Docker API + nginx |
+| ASG `interviewcoach-prod-api-asg` | **1–4** × `c6i.xlarge` (CPU autoscale; min 1 in business hours) |
 | ElastiCache `interviewcoach-prod-redis` | Redis 7 (Multi-AZ, 2 nodes) |
 | RDS Proxy `interviewcoach-prod-proxy` | Connection pooling to RDS |
 | ECR `interviewcoach-api` | Prod API container image |
