@@ -285,12 +285,6 @@ Resources:
         - Key: Environment
           Value: prod
           PropagateAtLaunch: true
-    UpdatePolicy:
-      AutoScalingRollingUpdate:
-        MinInstancesInService: 1
-        MaxBatchSize: 1
-        PauseTime: PT5M
-        WaitOnResourceSignals: false
 
   CpuScaleUpPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
