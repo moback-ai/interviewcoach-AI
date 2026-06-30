@@ -1,11 +1,11 @@
-import { getAccessToken, setAccessToken, persistAuth } from './lib/authClient';
+import { getAccessToken, setAccessToken, persistAuth, FETCH_CREDENTIALS } from './lib/authClient';
 import { redirectToExpiredLogin } from './utils/authInterceptor';
 import { getApiBaseUrl } from './utils/apiConfig';
 
 const API_BASE = getApiBaseUrl();
 
-// ── Token helpers ─────────────────────────────────────────────────────────────
-export const getToken = () => localStorage.getItem('ic_token');
+// ── Token helpers (dev fallback; production uses HttpOnly session cookie) ─────
+export const getToken = () => getAccessToken();
 export const isLoggedIn = () => !!getToken();
 
 function snapshotFormData(formData) {
@@ -55,18 +55,23 @@ function buildUrl(endpoint) {
 async function refreshAccessToken() {
   const refreshRes = await fetch(buildUrl('/api/refresh-token'), {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: getHeaders(false, { allowExpiredToken: true }),
   });
   if (!refreshRes.ok) {
     return null;
   }
   const refreshData = await refreshRes.json().catch(() => ({}));
-  if (!refreshData.token) {
-    return null;
+  if (refreshData.token) {
+    persistAuth(refreshData.token, refreshData.user || null);
+    setAccessToken(refreshData.token);
+    return refreshData.token;
   }
-  persistAuth(refreshData.token, refreshData.user || null);
-  setAccessToken(refreshData.token);
-  return refreshData.token;
+  if (refreshData.user) {
+    persistAuth(null, refreshData.user);
+    return 'cookie';
+  }
+  return 'cookie';
 }
 
 // ── Core fetch wrapper ────────────────────────────────────────────────────────
@@ -80,7 +85,13 @@ export async function apiCall(endpoint, options = {}) {
       ? rebuildFormData(formDataSnapshot)
       : restOptions.body;
 
-    const config = { method: restOptions.method || 'GET', headers, ...restOptions, body: requestBody };
+    const config = {
+      method: restOptions.method || 'GET',
+      headers,
+      ...FETCH_CREDENTIALS,
+      ...restOptions,
+      body: requestBody,
+    };
     if (requestBody && !isFileUpload) {
       config.body = JSON.stringify(requestBody);
     }
@@ -124,6 +135,9 @@ export async function apiCall(endpoint, options = {}) {
       } catch (parseErr) {
         if (parseErr.busy) throw parseErr;
       }
+      throw new Error(
+        'InterviewCoach is temporarily unavailable (outside service hours 10:00 AM – 7:00 PM IST). Please try again during business hours.'
+      );
     }
 
     if (!response.ok) {

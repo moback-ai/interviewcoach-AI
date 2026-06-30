@@ -2,6 +2,8 @@ import { getApiBaseUrl } from '../utils/apiConfig';
 
 const API_BASE = getApiBaseUrl();
 
+export const FETCH_CREDENTIALS = { credentials: 'include' };
+
 const decodeJwtPayload = (token) => {
   if (!token) return null;
   try {
@@ -45,6 +47,7 @@ const normalizeUser = (user) => {
   };
 };
 
+/** Dev-only fallback when AUTH_RETURN_TOKEN_IN_BODY is enabled. Production uses HttpOnly cookies. */
 export const getAccessToken = () => {
   const token = localStorage.getItem('ic_token');
   if (!token) return null;
@@ -70,19 +73,33 @@ export const clearStoredAuth = () => {
 export const persistAuth = (token, user) => {
   if (token) {
     localStorage.setItem('ic_token', token);
+  } else {
+    localStorage.removeItem('ic_token');
   }
   if (user) {
     localStorage.setItem('ic_user', JSON.stringify(normalizeUser(user)));
   }
 };
 
+export const fetchCurrentUser = async () => {
+  const response = await fetch(`${API_BASE}/me`, {
+    ...FETCH_CREDENTIALS,
+    headers: getAuthHeaders(),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) return null;
+  const user = normalizeUser(payload.user);
+  persistAuth(getAccessToken(), user);
+  return user;
+};
+
 export const getSession = async () => {
-  const token = getAccessToken();
-  const user = getStoredUser();
-  if (!token || !user) {
+  const user = await fetchCurrentUser();
+  if (!user) {
+    clearStoredAuth();
     return null;
   }
-  return { access_token: token, user };
+  return { user, access_token: getAccessToken() };
 };
 
 export const getAuthHeaders = (headers = {}) => {
@@ -93,21 +110,12 @@ export const getAuthHeaders = (headers = {}) => {
   };
 };
 
-export const refreshCurrentUser = async (token = getAccessToken()) => {
-  if (!token) return null;
-  const response = await fetch(`${API_BASE}/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) return null;
-  const user = normalizeUser(payload.user);
-  persistAuth(token, user);
-  return user;
-};
+export const refreshCurrentUser = fetchCurrentUser;
 
 export const signUp = async ({ username, email, password, fullName = '' }) => {
   const response = await fetch(`${API_BASE}/signup`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       username: username.toLowerCase().trim(),
@@ -121,17 +129,14 @@ export const signUp = async ({ username, email, password, fullName = '' }) => {
     throw new Error(data.error || 'Signup failed');
   }
   const user = normalizeUser(data.user);
-  if (data.token) {
-    persistAuth(data.token, user);
-  } else {
-    clearStoredAuth();
-  }
-  return { token: data.token, user, ...data };
+  persistAuth(data.token || null, user);
+  return { token: data.token || null, user, ...data };
 };
 
 export const signIn = async ({ identifier, password }) => {
   const response = await fetch(`${API_BASE}/login`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       identifier: identifier.toLowerCase().trim(),
@@ -143,13 +148,14 @@ export const signIn = async ({ identifier, password }) => {
     throw new Error(data.error || 'Login failed');
   }
   const user = normalizeUser(data.user);
-  persistAuth(data.token, user);
-  return { token: data.token, user };
+  persistAuth(data.token || null, user);
+  return { token: data.token || null, user };
 };
 
 export const resendVerification = async (email) => {
   const response = await fetch(`${API_BASE}/resend-verification`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.toLowerCase().trim() }),
   });
@@ -161,23 +167,35 @@ export const resendVerification = async (email) => {
 };
 
 export const verifyEmail = async (token) => {
-  const response = await fetch(`${API_BASE}/verify-email?token=${encodeURIComponent(token)}`);
+  const response = await fetch(`${API_BASE}/verify-email?token=${encodeURIComponent(token)}`, {
+    ...FETCH_CREDENTIALS,
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error || 'Email verification failed');
   }
   const user = normalizeUser(data.user);
-  persistAuth(data.token, user);
-  return { token: data.token, user, ...data };
+  persistAuth(data.token || null, user);
+  return { token: data.token || null, user, ...data };
 };
 
 export const signOut = async () => {
+  try {
+    await fetch(`${API_BASE}/logout`, {
+      method: 'POST',
+      ...FETCH_CREDENTIALS,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch {
+    // Best-effort server logout; always clear local state.
+  }
   clearStoredAuth();
 };
 
 export const updateCurrentUser = async (payload = {}) => {
   const response = await fetch(`${API_BASE}/me`, {
     method: 'PUT',
+    ...FETCH_CREDENTIALS,
     headers: {
       ...getAuthHeaders(),
       'Content-Type': 'application/json',
@@ -204,12 +222,17 @@ export const formatAuthError = (error) => {
 export const isValidUsername = (username) => /^[a-zA-Z0-9._-]{3,}$/.test(username);
 
 export const setAccessToken = (token) => {
-  if (token) localStorage.setItem('ic_token', token);
+  if (token) {
+    localStorage.setItem('ic_token', token);
+  } else {
+    localStorage.removeItem('ic_token');
+  }
 };
 
 export const forgotPassword = async (email) => {
   const response = await fetch(`${API_BASE}/forgot-password`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.toLowerCase().trim() }),
   });
@@ -223,6 +246,7 @@ export const forgotPassword = async (email) => {
 export const forgotUsername = async (email) => {
   const response = await fetch(`${API_BASE}/forgot-username`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.toLowerCase().trim() }),
   });
@@ -236,18 +260,22 @@ export const forgotUsername = async (email) => {
 export const resetPassword = async (token, password) => {
   const response = await fetch(`${API_BASE}/reset-password`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token, password }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Password reset failed');
-  if (data.token) persistAuth(data.token, null);
+  if (data.token) {
+    persistAuth(data.token, null);
+  }
   return data;
 };
 
 export const deleteAccount = async (password) => {
   const response = await fetch(`${API_BASE}/me`, {
     method: 'DELETE',
+    ...FETCH_CREDENTIALS,
     headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ password }),
   });

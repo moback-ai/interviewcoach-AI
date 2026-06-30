@@ -5,8 +5,15 @@ import Navbar from '../components/Navbar';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
-const POLL_INTERVAL_MS = 1500;
-const MAX_POLL_ATTEMPTS = 40;
+const MAX_POLL_ATTEMPTS = 60;
+
+function pollDelayMs(attempt) {
+  return Math.min(1500 + attempt * 500, 5000);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default function PaymentSuccess() {
   const [searchParams] = useSearchParams();
@@ -96,7 +103,7 @@ export default function PaymentSuccess() {
           }
 
           if (attempt < MAX_POLL_ATTEMPTS - 1) {
-            await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+            await sleep(pollDelayMs(attempt));
           }
         }
 

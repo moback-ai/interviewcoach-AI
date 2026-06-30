@@ -17,11 +17,11 @@ Repository: **`moback-ai/devsecops-platform`** (private)
 2. **DevSecOps approves and merges** (developers do not merge)
 3. Ask DevSecOps for **build + deploy** if needed
 
-### AWS access (read-only logs)
+### AWS access (CloudWatch only — no in-app log UI)
 
 | Allowed | Blocked |
 |---------|---------|
-| CloudWatch Logs read on `/interviewcoach/prod/*` | Secrets Manager (all `interviewcoach/*` incl. SSH keys) |
+| CloudWatch Logs read on `/interviewcoach/prod/api` | Secrets Manager (all `interviewcoach/*` incl. SSH keys) |
 | Change own IAM password | EC2, RDS, S3, IAM, CFN, Bedrock, etc. |
 
 See [DEV_ACCESS.md](DEV_ACCESS.md).
