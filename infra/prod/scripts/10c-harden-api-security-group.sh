@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Harden prod API security group: remove public :5000; optionally restrict SSH.
+# Harden prod API ASG security group: remove public :5000; optionally restrict SSH.
 # CloudFront reaches the API via nginx on :80 only.
 #
 # Usage: bash infra/prod/scripts/10c-harden-api-security-group.sh
@@ -9,7 +9,7 @@ set -euo pipefail
 source "$(dirname "$0")/load-prod-env.sh"
 
 REGION="${AWS_REGION:-ap-south-1}"
-INSTANCE_ID="${API_INSTANCE_ID:?Set API_INSTANCE_ID in prod.env}"
+SG_ID="${API_ASG_SG_ID:?Set API_ASG_SG_ID in prod.env}"
 SSH_ALLOW_CIDR="${SSH_ALLOW_CIDR:-}"
 SSH_AUTO_DETECT_IP="${SSH_AUTO_DETECT_IP:-0}"
 
@@ -23,11 +23,7 @@ if [[ -z "$SSH_ALLOW_CIDR" && "$SSH_AUTO_DETECT_IP" == "1" ]]; then
   fi
 fi
 
-SG_ID=$(aws ec2 describe-instances --region "$REGION" --instance-ids "$INSTANCE_ID" \
-  --query 'Reservations[0].Instances[0].SecurityGroups[0].GroupId' --output text)
-
-echo "API instance: $INSTANCE_ID"
-echo "Security group: $SG_ID"
+echo "API ASG security group: $SG_ID"
 
 revoke_public_port() {
   local port="$1"

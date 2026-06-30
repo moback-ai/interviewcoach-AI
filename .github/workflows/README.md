@@ -13,12 +13,14 @@ Do **not** build on Mac or EC2. Use:
 
 Required secrets on the `production` environment:
 
-| Secret | Example |
-|--------|---------|
-| `AWS_DEPLOY_ROLE_ARN` | IAM role for OIDC |
+| Secret | Value (from `infra/prod/prod.env`) |
+|--------|-------------------------------------|
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::328991713462:role/InterviewCoach-GitHubActions-Deploy` |
 | `ECR_REGISTRY` | `328991713462.dkr.ecr.ap-south-1.amazonaws.com` |
 | `STATIC_S3_BUCKET` | `ic-static-prod` |
 | `CLOUDFRONT_DIST_ID` | `E5YX3P309ZTK0` |
+
+One-shot setup: `bash infra/prod/scripts/16-set-github-prod-secrets.sh`
 
 `infra/prod/prod.env` is loaded from the repo on the runner (no secrets in that file).
 

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Terminate Plan B EC2 hosts (API + AI + frontend) and launch one fresh prod API instance.
-# Usage: CONFIRM=YES bash infra/prod/scripts/11-aws-fresh-ec2.sh
+# RETIRED — prod uses ALB + ASG (prod-compute-stack.yaml). Do not run unless recovering legacy.
+# Usage: CONFIRM_LEGACY_EC2=YES CONFIRM=YES bash infra/prod/scripts/11-aws-fresh-ec2.sh
 set -euo pipefail
+
+if [[ "${CONFIRM_LEGACY_EC2:-}" != "YES" ]]; then
+  echo "ERROR: Single-EC2 deploy is retired. Prod API runs on ASG (interviewcoach-prod-api-asg)."
+  echo "Deploy via GitHub Actions → Deploy PROD, or: bash infra/prod/scripts/06-code-deploy-api-asg.sh"
+  exit 1
+fi
 
 # shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"

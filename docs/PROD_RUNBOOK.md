@@ -28,13 +28,15 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 | **1 AWS** | Attach IAM policy to API role | `04-aws-iam-attach.sh` |
 | **2 Build** | API + frontend on **GitHub Actions** | `.github/workflows/deploy-prod.yml` |
 | **3 Code** | ASG rollout + S3 sync (same workflow) | `06-code-deploy-api-asg.sh` |
-| **3 Code** | Verify health | `curl API:5000/api/health` |
+| **3 Code** | Verify health | `curl https://www.ugaanlabs.ai/api/health` (10:00–19:00 IST) |
 | **3 Code** | Migrate storage → S3 | `07b-migrate-legacy-storage.sh` |
 | **3 Code** | Frontend build → S3 | `08-code-frontend.sh` |
 | **3 Code** | CloudFront + ACM (us-east-1) | `09-code-cloudfront-deploy.sh` |
 | **3 Code** | DNS cutover (Namecheap) | `09b-namecheap-dns-cutover.sh` or `09-code-cutover.sh` |
 | **3 Code** | Prod smoke test | (below) |
 | **Monitor** | CloudWatch / Bedrock / OpenRouter | ongoing |
+| **Schedule** | ASG business hours 10:00–19:00 IST | `15-aws-schedule-business-hours.sh` |
+| **CI** | GitHub `production` secrets | `16-set-github-prod-secrets.sh` |
 
 **After 7 stable days:** `10-cleanup-decommission.sh` + [AWS_DECOMMISSION.md](AWS_DECOMMISSION.md)
 

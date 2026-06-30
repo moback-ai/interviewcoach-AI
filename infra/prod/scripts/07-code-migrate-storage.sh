@@ -10,12 +10,13 @@ chmod +x "$SSH"
 S3_BUCKET="${S3_BUCKET:-${USER_FILES_BUCKET:?Set USER_FILES_BUCKET in prod.env}}"
 LOCAL_PATH="${LOCAL_PATH:-/apps/storage}"
 
-echo "Syncing ${API_HOST}:${LOCAL_PATH} → s3://${S3_BUCKET}/"
+echo "Syncing ASG API ${LOCAL_PATH} → s3://${S3_BUCKET}/"
 "$SSH" "test -d ${LOCAL_PATH} || sudo mkdir -p ${LOCAL_PATH}"
 
 TMP="/tmp/ic-storage-migrate-$$"
 mkdir -p "$TMP"
-"$SSH" --scp -r "${SSH_USER}@${API_PUBLIC_IP}:${LOCAL_PATH}/" "$TMP/"
+TARGET="$("$SSH" --resolve)"
+"$SSH" --scp -r "${TARGET}:${LOCAL_PATH}/" "$TMP/"
 aws s3 sync "$TMP/" "s3://${S3_BUCKET}/"
 rm -rf "$TMP"
 

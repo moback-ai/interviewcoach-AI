@@ -68,11 +68,13 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `09b-namecheap-dns-cutover.sh` | Namecheap API: point `@`/`www` at CloudFront (preserves MX) |
 | `09-code-cutover.sh` | Manual DNS cutover confirmation |
 | `10-cleanup-decommission.sh` | Stop AI EC2 + old hosts |
-| `10c-harden-api-security-group.sh` | Remove public :5000; optional SSH CIDR lockdown |
-| `12-aws-cloudwatch-alarms.sh` | EC2 + RDS CloudWatch alarms |
+| `10c-harden-api-security-group.sh` | Harden ASG API SG: close :5000; optional SSH CIDR lockdown |
+| `12-aws-cloudwatch-alarms.sh` | ASG + RDS CloudWatch alarms (removes legacy EC2 alarms) |
+| `15-aws-schedule-business-hours.sh` | ASG scale 10:00–19:00 IST |
+| `16-set-github-prod-secrets.sh` | Push `production` env secrets from `prod.env` |
 | `cloudfront/apex-to-www.js` | CloudFront function source (apex → www redirect) |
 | `load-prod-env.sh` | Source `prod.env` |
-| `ssh-prod.sh` | SSH helper using `prod.env` keys |
+| `ssh-prod.sh` | SSH to first in-service ASG API instance |
 
 ---
 

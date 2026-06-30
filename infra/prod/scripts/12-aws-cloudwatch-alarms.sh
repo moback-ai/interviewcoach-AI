@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create basic CloudWatch alarms for prod API EC2 + RDS. Idempotent-ish (skips if exists).
+# CloudWatch alarms for prod ASG + RDS. Removes legacy single-EC2 alarms if present.
 #
 # Usage: bash infra/prod/scripts/12-aws-cloudwatch-alarms.sh
 set -euo pipefail
@@ -8,9 +8,18 @@ set -euo pipefail
 source "$(dirname "$0")/load-prod-env.sh"
 
 REGION="${AWS_REGION:-ap-south-1}"
-INSTANCE_ID="${API_INSTANCE_ID:?Set API_INSTANCE_ID}"
+ASG="${ASG_NAME:-interviewcoach-prod-api-asg}"
 RDS_ID="${RDS_INSTANCE_ID:-interviewcoach-db}"
 SNS_TOPIC_ARN="${ALARM_SNS_TOPIC_ARN:-}"
+
+delete_alarm_if_exists() {
+  local name="$1"
+  if aws cloudwatch describe-alarms --region "$REGION" --alarm-names "$name" \
+    --query 'length(MetricAlarms)' --output text 2>/dev/null | grep -q '^1$'; then
+    aws cloudwatch delete-alarms --region "$REGION" --alarm-names "$name"
+    echo "Deleted legacy alarm: $name"
+  fi
+}
 
 put_alarm() {
   local name="$1"
@@ -29,29 +38,21 @@ put_alarm() {
   echo "${action} alarm: $name"
 }
 
-put_alarm "interviewcoach-prod-ec2-cpu-high" \
-  --alarm-description "Prod API EC2 CPU > 80% for 10 min" \
+# Retired with legacy single-EC2 stack
+delete_alarm_if_exists "interviewcoach-prod-ec2-cpu-high"
+delete_alarm_if_exists "interviewcoach-prod-ec2-status-check"
+
+put_alarm "interviewcoach-prod-asg-cpu-high" \
+  --alarm-description "Prod API ASG average CPU > 80% for 10 min" \
   --namespace AWS/EC2 \
   --metric-name CPUUtilization \
-  --dimensions "Name=InstanceId,Value=$INSTANCE_ID" \
+  --dimensions "Name=AutoScalingGroupName,Value=$ASG" \
   --statistic Average \
   --period 300 \
   --evaluation-periods 2 \
   --threshold 80 \
   --comparison-operator GreaterThanThreshold \
   --treat-missing-data notBreaching
-
-put_alarm "interviewcoach-prod-ec2-status-check" \
-  --alarm-description "Prod API EC2 status check failed" \
-  --namespace AWS/EC2 \
-  --metric-name StatusCheckFailed \
-  --dimensions "Name=InstanceId,Value=$INSTANCE_ID" \
-  --statistic Maximum \
-  --period 60 \
-  --evaluation-periods 2 \
-  --threshold 0 \
-  --comparison-operator GreaterThanThreshold \
-  --treat-missing-data breaching
 
 put_alarm "interviewcoach-prod-rds-cpu-high" \
   --alarm-description "Prod RDS CPU > 80% for 15 min" \
@@ -78,6 +79,6 @@ put_alarm "interviewcoach-prod-rds-storage-low" \
   --treat-missing-data notBreaching
 
 echo ""
-echo "CloudWatch alarms configured."
-echo "Optional: set ALARM_EMAILS in prod.env for email/SMS notifications."
-echo "External uptime: monitor https://www.ugaanlabs.ai/api/health"
+echo "CloudWatch alarms configured (ASG + RDS)."
+echo "ASG scale alarms remain in the compute CloudFormation stack."
+echo "External uptime: monitor https://www.ugaanlabs.ai/api/health (10:00–19:00 IST)"

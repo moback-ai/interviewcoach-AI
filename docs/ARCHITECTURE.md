@@ -93,7 +93,9 @@ S3 stack rename/import (legacy): `infra/prod/scripts/02b-rename-s3-stack.sh`
 | RDS Proxy `interviewcoach-prod-proxy` | Connection pooling to RDS |
 | ECR `interviewcoach-api` | Prod API container image |
 
-Legacy single EC2 (`i-0642ed38dc5b8b740`) kept for rollback — terminate after stable.
+Legacy single EC2 stack (`interviewcoach-prod-api`) **decommissioned** — API runs on ASG only.
+
+**Business hours (IST):** API ASG scales **10:00–19:00** daily; off-hours `/api/*` returns 503. RDS, ElastiCache, ALB, CloudFront stay 24/7.
 
 Infra names and IDs: `infra/prod/prod.env` (no secrets — safe to commit).
 
