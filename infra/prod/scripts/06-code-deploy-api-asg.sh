@@ -39,6 +39,20 @@ IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
 VPC_ID="${VPC_ID:?Set VPC_ID}"
 PUBLIC_SUBNETS="${PUBLIC_SUBNET_IDS:?Set PUBLIC_SUBNET_IDS}"
 
+resume_asg_scheduled_actions() {
+  aws autoscaling resume-processes \
+    --region "$REGION" \
+    --auto-scaling-group-name "$ASG" \
+    --scaling-processes ScheduledActions >/dev/null 2>&1 || true
+}
+
+echo "Suspending ASG scheduled scaling for deploy ..."
+aws autoscaling suspend-processes \
+  --region "$REGION" \
+  --auto-scaling-group-name "$ASG" \
+  --scaling-processes ScheduledActions
+trap resume_asg_scheduled_actions EXIT
+
 echo "Updating compute stack $COMPUTE_STACK with IMAGE_TAG=$IMAGE_TAG ..."
 aws cloudformation deploy \
   --region "$REGION" \
@@ -77,6 +91,9 @@ for i in $(seq 1 40); do
   [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" ]] && exit 1
   sleep 30
 done
+
+trap - EXIT
+resume_asg_scheduled_actions
 
 ALB_DNS="${ALB_DNS_NAME:-}"
 if [[ -n "$ALB_DNS" ]]; then
