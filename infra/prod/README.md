@@ -87,6 +87,7 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `10-cleanup-decommission.sh` | Stop AI EC2 + old hosts |
 | `10c-harden-api-security-group.sh` | Harden ASG API SG: close :5000; optional SSH CIDR lockdown |
 | `12-aws-cloudwatch-alarms.sh` | ASG + RDS CloudWatch alarms |
+| `17-aws-cloudwatch-api-logs.sh` | API → CloudWatch Logs + dev read-only IAM |
 | `15-aws-schedule-business-hours.sh` | ASG scale 10:00–19:00 IST |
 | `16-set-github-prod-secrets.sh` | Push secrets to **devsecops-platform** `production` env |
 | `cloudfront/apex-to-www.js` | CloudFront function source (apex → www redirect) |

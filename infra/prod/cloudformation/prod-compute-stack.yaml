@@ -29,6 +29,10 @@ Parameters:
   ImageTag:
     Type: String
     Default: prod
+  ApiLogGroup:
+    Type: String
+    Default: /interviewcoach/prod/api
+    Description: CloudWatch Logs group for API container (awslogs driver)
   DesiredCapacity:
     Type: Number
     Default: 2
@@ -257,6 +261,13 @@ Resources:
                 environment:
                   AWS_REGION: ${AWS::Region}
                   AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
+                logging:
+                  driver: awslogs
+                  options:
+                    awslogs-region: ${AWS::Region}
+                    awslogs-group: ${ApiLogGroup}
+                    awslogs-stream-prefix: api
+                    awslogs-create-group: "true"
             COMPOSE
             aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${EcrRegistry}
             cd /apps/interviewcoach
