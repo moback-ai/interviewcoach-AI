@@ -3,6 +3,7 @@
 **Do not run production scripts from this application repo.**
 
 Copy this folder to **`moback-ai/devsecops-platform`** → `apps/interviewcoach/aws/prod/`  
+Or run from devsecops: `bash scripts/sync-interviewcoach-prod.sh`  
 All production operations (deploy, secrets, SSH, AWS changes) run **only** from devsecops-platform.
 
 **Prod only.** No staging.  
