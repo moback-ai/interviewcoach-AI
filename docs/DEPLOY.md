@@ -2,35 +2,43 @@
 
 Production: **https://www.ugaanlabs.ai**
 
-**Developers do not deploy.** Production deploy is **DevSecOps only** — see [DEVSECOPS.md](DEVSECOPS.md).
+**Developers do not deploy or merge PRs.** DevSecOps only — see [DEVSECOPS.md](DEVSECOPS.md).
 
 ---
 
-## Developers — release via PR
+## Developers
 
-1. Open a **PR** into `develop` from `develop/<feature>`
-2. Wait for **Security** CI (lint, tests, gitleaks)
-3. Get **PR approval** and **merge**
-4. In the PR (or Slack), **request deploy** from **Govardhan or Kishore**
-5. DevSecOps deploys from `moback-ai/devsecops-platform` after merge
-
-There is **no** deploy workflow on this repo. Do **not** use Actions → Run workflow for production.
+1. Open a **PR** into `develop`
+2. Pass **Security** CI
+3. **DevSecOps approves and merges** (ganesh/neeraj do not merge)
+4. Ask DevSecOps for **build + deploy** if needed
 
 ---
 
-## What to put in your PR
+## DevSecOps — build once, deploy without build
 
-- What changed and how to test
-- Whether you need a **production deploy** after merge (yes/no)
-- Any DB migration notes (`database/**` changes)
+### 1. Build image (when code changed)
+
+`devsecops-platform` → **InterviewCoach · Build Docker Images**
+
+- `app_git_ref`: merge SHA or `develop`
+- `image_tag`: e.g. `prod-20260701-abc1234`
+
+### 2. Deploy rollout only (no Docker build)
+
+`devsecops-platform` → **InterviewCoach · Deploy Production**
+
+- `app_git_ref`: same ref as build
+- `image_tag`: **exact tag from step 1** (must exist in ECR)
 
 ---
 
-## DevSecOps — deploy
+## ASG hours (IST)
 
-1. Confirm merge commit on `develop`
-2. `devsecops-platform` → **Actions** → **InterviewCoach · Deploy Production**
-3. Input `app_git_ref` = merge SHA or `develop`
+| Window | API EC2 |
+|--------|---------|
+| 10:00–19:00 | ≥ 1 node (up to 4 if CPU > 70%) |
+| After 19:00 | 0 nodes |
 
 ---
 
@@ -38,6 +46,6 @@ There is **no** deploy workflow on this repo. Do **not** use Actions → Run wor
 
 | Branch | Use |
 |--------|-----|
-| `develop/<feature>` | Your work → PR into `develop` |
-| `develop` | Integration; DevSecOps deploys from here |
-| `main` | Snapshot only — **not** deployed |
+| `develop/<feature>` | Feature → PR to `develop` |
+| `develop` | Integration |
+| `main` | Mirror of prod — DevSecOps merges from `develop` |

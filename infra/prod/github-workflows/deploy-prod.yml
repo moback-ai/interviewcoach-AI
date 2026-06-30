@@ -1,7 +1,7 @@
 # COPY to moback-ai/devsecops-platform → .github/workflows/interviewcoach-deploy-prod.yml
 # Do NOT enable this workflow in interviewcoach-AI.
 #
-# Production deploy — DevSecOps only. Checks out application code at deploy time.
+# Production deploy — rollout only (no Docker build). Build images separately first.
 name: InterviewCoach · Deploy Production
 
 on:
@@ -12,21 +12,16 @@ on:
         required: true
         default: develop
       image_tag:
-        description: ECR tag (leave "auto" for prod-YYYYMMDD-sha)
+        description: ECR image tag (must already exist — from Build Docker Images workflow)
         required: true
-        default: auto
       deploy_api:
-        description: Build API + roll out ASG
+        description: Roll out API image to ASG
         type: boolean
         default: true
       deploy_frontend:
         description: Build frontend + sync S3
         type: boolean
         default: true
-      force_rebuild:
-        description: Rebuild API image even if tag already exists in ECR
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -52,18 +47,12 @@ jobs:
           ref: ${{ inputs.app_git_ref }}
           path: app
 
-      - name: Resolve image tag
-        id: meta
+      - name: Set image tag
         working-directory: app
         env:
           INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          TAG="$INPUT_IMAGE_TAG"
-          if [[ "$TAG" == "auto" || -z "$TAG" ]]; then
-            TAG="prod-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=$INPUT_IMAGE_TAG" >> "$GITHUB_ENV"
 
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -71,17 +60,12 @@ jobs:
           aws-region: ap-south-1
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
-      - name: Login ECR
-        if: inputs.deploy_api
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push API image (if needed)
+      - name: Verify API image in ECR
         if: inputs.deploy_api
         working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-          FORCE_REBUILD: ${{ inputs.force_rebuild && '1' || '' }}
-        run: bash infra/prod/scripts/05-devsecops-build-ecr.sh
+        run: bash infra/prod/scripts/05a-verify-ecr-image.sh
 
       - name: Roll out API to ASG
         if: inputs.deploy_api
@@ -112,7 +96,7 @@ jobs:
           APP_GIT_REF: ${{ inputs.app_git_ref }}
         run: |
           set -euo pipefail
-          code=$(curl -s -o /tmp/health.json -w '%{http_code}' https://www.ugaanlabs.ai/api/health)
+          code=$(curl -s -o /dev/null -w '%{http_code}' https://www.ugaanlabs.ai/api/health)
           if [[ "$code" == "503" ]]; then
             echo "API returned 503 — ASG may be off-hours (10:00–19:00 IST). Rollout succeeded; verify health during business hours."
           else

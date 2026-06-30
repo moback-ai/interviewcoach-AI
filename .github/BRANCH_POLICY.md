@@ -1,21 +1,36 @@
-# Branch policy (short)
+# Branch policy
 
 | Branch | Purpose |
 |--------|---------|
-| `develop/<feature>` | Feature work → one PR into `develop` |
-| `develop` | **Deploy to production** |
-| `main` | Stable copy of production — **one PR** from `develop`, no deploy |
+| `develop/<feature>` | Feature work → PR into `develop` |
+| `develop` | Integration — **merge DevSecOps only** |
+| `main` | Production mirror — **merge DevSecOps only** from `develop` |
 
-## Deploy & release
+## Who approves and merges PRs
 
-**See [docs/DEPLOY.md](../docs/DEPLOY.md)** — simple steps (5 steps to production).
+**Only DevSecOps** may approve and merge pull requests:
 
-## Rules
+| DevSecOps | GitHub |
+|-----------|--------|
+| Govardhan | `@govardhanreddy66` |
+| Kishore | `@KFKishore23` |
 
-- Every production deploy needs **admin PR approval** + **production environment approval** in GitHub Actions.
-- Failed deploy **rolls back** automatically.
-- Do not merge PRs labeled `deploy-failed`.
+Developers (ganesh, neeraj) open PRs; they do **not** merge.
 
-## Security
+Enforced via `.github/CODEOWNERS` (required review from both DevSecOps).
 
-**Veracode** runs on every production deploy. See [docs/SECURITY_SCANNING.md](../docs/SECURITY_SCANNING.md).
+## Deploy flow
+
+1. **Build image once** — devsecops → **InterviewCoach · Build Docker Images**
+2. **Deploy rollout only** — devsecops → **InterviewCoach · Deploy Production** (existing ECR tag, no build)
+
+See [docs/DEPLOY.md](../docs/DEPLOY.md).
+
+## ASG schedule (IST)
+
+| Time | API instances |
+|------|----------------|
+| **10:00–19:00** | At least **1** (scale up to **4** if CPU > 70%) |
+| **After 19:00** | **0** (cost saving) |
+
+CPU autoscale only runs during business hours when `min ≥ 1`.
