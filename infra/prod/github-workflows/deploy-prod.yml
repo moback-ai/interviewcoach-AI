@@ -51,8 +51,10 @@ jobs:
       - name: Resolve image tag
         id: meta
         working-directory: app
+        env:
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          TAG="${{ inputs.image_tag }}"
+          TAG="$INPUT_IMAGE_TAG"
           if [[ "$TAG" == "auto" || -z "$TAG" ]]; then
             TAG="prod-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
           fi
@@ -101,6 +103,8 @@ jobs:
 
       - name: Post-deploy smoke tests
         if: inputs.deploy_api
+        env:
+          APP_GIT_REF: ${{ inputs.app_git_ref }}
         run: |
           set -euo pipefail
           code=$(curl -s -o /tmp/health.json -w '%{http_code}' https://www.ugaanlabs.ai/api/health)
@@ -121,4 +125,4 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
           test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
           echo "apex redirect OK"
-          echo "Deployed app ref: ${{ inputs.app_git_ref }}  image: $IMAGE_TAG"
+          echo "Deployed app ref: $APP_GIT_REF  image: $IMAGE_TAG"
