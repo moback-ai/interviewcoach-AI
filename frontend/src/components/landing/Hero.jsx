@@ -56,20 +56,6 @@ function Hero() {
 
         <div className="flex justify-center relative z-10 order-1 lg:order-2">
           <div className="relative w-full max-w-[280px] sm:max-w-[400px] md:max-w-[500px] lg:max-w-[640px]">
-            <div className="floating-card-static absolute -right-3 top-8 hidden md:flex rounded-2xl glass-panel px-4 py-3 text-left">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--color-text-secondary)]">Interview Flow</div>
-                <div className="mt-1 text-sm font-semibold">Upload, generate, rehearse, improve</div>
-              </div>
-            </div>
-
-            <div className="floating-card-static absolute -left-4 bottom-8 hidden md:flex rounded-2xl glass-panel px-4 py-3 text-left">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--color-text-secondary)]">Voice AI</div>
-                <div className="mt-1 text-sm font-semibold">Choose a calmer or sharper interviewer</div>
-              </div>
-            </div>
-
             <img
               src={heroImage}
               alt="Interview Coach preview"

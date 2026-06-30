@@ -1,86 +1,36 @@
-# Deploy (simple)
+# Deploy (application repo)
 
-Production: **https://ugaanlabs.ai**
+Production: **https://www.ugaanlabs.ai**
 
-Workflow index: [.github/workflows/README.md](../.github/workflows/README.md)
-
-**Production checklist ($650, Plan B, 10am–8pm IST):** [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)
+**Developers do not deploy.** Production deploy is **DevSecOps only** — see [DEVSECOPS.md](DEVSECOPS.md).
 
 ---
 
-## One PR per release (recommended)
+## Developers — release via PR
 
-Put **all** changes for a release in **one** PR: `develop/<feature>` → `develop`.
+1. Open a **PR** into `develop` from `develop/<feature>`
+2. Wait for **Security** CI (lint, tests, gitleaks)
+3. Get **PR approval** and **merge**
+4. In the PR (or Slack), **request deploy** from **Govardhan or Kishore**
+5. DevSecOps deploys from `moback-ai/devsecops-platform` after merge
 
-1. Investigate and test on the PR (Security runs on the PR).
-2. Get **admin approval** on that PR.
-3. **Merge once** → one auto-deploy (Option A) or use manual deploy (Option B) for the same commit.
-
-Avoid direct pushes to `develop` and avoid many small merges — each merge triggers deploy workflows.
-
----
-
-## Normal release — Option A (no manual button)
-
-1. Open PR: `develop/<your-feature>` → **`develop`**
-2. Get **admin approval** on the PR (@govardhanreddy66 or @KFKishore23) — **required before merge** or auto-deploy will fail
-3. **Merge** the PR into `develop`
-4. **Deploy · Auto (develop)** runs a **quality gate** (lint, build, login bundle check, pytest, merge-conflict scan with `develop`). If it fails, deploy is **rejected** — fix and merge again.
-5. On pass, **Deploy · Production** starts automatically.
-6. Second admin: open the run → **Review deployments** → **Approve** `production`
-7. Wait for green (~10–15 min). Failed deploys **roll back** automatically.
-8. Check:
-   - https://ugaanlabs.ai/api/health → `"status":"healthy"`
-   - https://ugaanlabs.ai/login → password field visible
-
-Do **not** merge PRs labeled `deploy-failed`.
-
-### If auto-deploy failed after merge
-
-Common cause: PR merged **without** admin `Approve` review (e.g. PR #73).
-
-1. **Option B**: **Actions → Deploy · Production → Run workflow** → `git_ref` = `develop` → approve `production`.
-2. Or: ask an admin to **Approve** on the merged PR (if still possible), then re-run **Deploy · Auto (develop)** manually.
+There is **no** deploy workflow on this repo. Do **not** use Actions → Run workflow for production.
 
 ---
 
-## Option B — manual deploy button
+## What to put in your PR
 
-GitHub → **Actions** → **Deploy · Production** → **Run workflow** (top right)
-
-Use it only if:
-
-- Auto deploy did not start after merge
-- You need to re-deploy the **same commit**
-- You need `deploy_target: **all**` (force every box)
-
-Inputs: `git_ref` = `develop` or a commit SHA, `deploy_target` = `auto` or `all`.
-
-Alternative: **Deploy · Auto (develop)** → **Run workflow** with branch `develop` or `develop/feat-…` (still needs admin-approved PR rules).
-
-`main` is **never** deployed.
+- What changed and how to test
+- Whether you need a **production deploy** after merge (yes/no)
+- Any DB migration notes (`database/**` changes)
 
 ---
 
-## Update `main` (no deploy)
+## DevSecOps — deploy
 
-One PR: **`develop` → `main`** when you want `main` to match production.
-
-- Needs **admin PR approval**
-- **Does not deploy** — production already came from `develop`
-
-Monthly sync can also open this PR automatically (`Maintenance · Scheduled`).
-
----
-
-## What `auto` deploys
-
-| Changed paths | Box |
-|---------------|-----|
-| `frontend/**` | Website |
-| `backend/**` (not INTERVIEW/Piper only) | API |
-| `backend/INTERVIEW/**`, `backend/Piper/**`, AI scripts | AI host |
-| `database/**` | RDS migrations |
+1. Confirm merge commit on `develop`
+2. `devsecops-platform` → **Actions** → **InterviewCoach · Deploy Production**
+3. Input `app_git_ref` = merge SHA or `develop`
 
 ---
 
@@ -89,32 +39,5 @@ Monthly sync can also open this PR automatically (`Maintenance · Scheduled`).
 | Branch | Use |
 |--------|-----|
 | `develop/<feature>` | Your work → PR into `develop` |
-| `develop` | Deploy to production |
-| `main` | Snapshot only |
-
----
-
-## Pre-deploy quality gate (blocks bad releases)
-
-Runs **before** production approval in **Deploy · Production** and **Deploy · Auto (develop)**:
-
-| Check | What it does |
-|-------|----------------|
-| Merge conflicts | Fails if the deploy ref would conflict with `develop` |
-| Frontend lint | `npm run lint` |
-| Frontend build | Production build + login bundle script (password field must not depend on heavy vendor-only chunks) |
-| Backend tests | `pytest backend/tests/` |
-
-If any step fails, the workflow stops — **no deploy**. Fix on `develop`, merge, and try again.
-
-Action: `.github/actions/pre-deploy-quality-gate/`
-
----
-
-## Security scans
-
-Automatic on every PR to `develop` (separate from the deploy gate).
-
-Manual: **Actions** → **Security** → Run workflow.
-
-Details: [SECURITY_SCANNING.md](SECURITY_SCANNING.md)
+| `develop` | Integration; DevSecOps deploys from here |
+| `main` | Snapshot only — **not** deployed |

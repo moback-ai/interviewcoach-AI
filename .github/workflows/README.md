@@ -1,19 +1,27 @@
 # Workflows
 
-Five workflows (not counting Dependabot). Fewer **runs**: feature branches only trigger **Security** on the PR; deploy runs after a **merged PR** to `develop` or manual dispatch.
+| Workflow | When | Purpose |
+|----------|------|---------|
+| **Security** | PR / push to `develop` | SAST, dependency scans |
+| **Deploy PROD** | Manual (`workflow_dispatch`) | **All prod builds** — API Docker image, ASG rollout, frontend → S3 |
 
-| Workflow | When it runs | What you do |
-|----------|----------------|-------------|
-| **Security** | PR to `develop` / `main`; push to `develop` after merge; weekly cron | Nothing — automatic |
-| **Deploy · Auto (develop)** | **Merged PR** to `develop`, or **Run workflow** (Option A) | Quality gate → approve `production` |
-| **Deploy · Production** | Manual or triggered by Auto (Option B) | Quality gate → approve `production` |
-| **Maintenance · Scheduled** | Weekly / monthly cron, or manual | Nothing — automatic |
-| **Security · Veracode** | Manual only | Add Veracode secrets, then Run |
+## Prod deploy (GitHub Actions only)
 
-Direct pushes to `develop` do **not** deploy (use one merged PR or Option B).
+Do **not** build on Mac or EC2. Use:
 
-Clear old runs: `./scripts/cleanup-github-actions-runs.sh --max 10 --days 2` (also daily via **Maintenance · Scheduled**)
+**Actions → Deploy PROD → Run workflow**
 
-`main` is **not** deployed.
+Required secrets on the `production` environment:
 
-Simple steps: [docs/DEPLOY.md](../../docs/DEPLOY.md)
+| Secret | Value (from `infra/prod/prod.env`) |
+|--------|-------------------------------------|
+| `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::328991713462:role/InterviewCoach-GitHubActions-Deploy` |
+| `ECR_REGISTRY` | `328991713462.dkr.ecr.ap-south-1.amazonaws.com` |
+| `STATIC_S3_BUCKET` | `ic-static-prod` |
+| `CLOUDFRONT_DIST_ID` | `E5YX3P309ZTK0` |
+
+One-shot setup: `bash infra/prod/scripts/16-set-github-prod-secrets.sh`
+
+`infra/prod/prod.env` is loaded from the repo on the runner (no secrets in that file).
+
+Emergency local override (not recommended): `ALLOW_LOCAL_PROD_DEPLOY=1` for ASG rollout only.

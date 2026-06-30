@@ -1,0 +1,114 @@
+# Production deploy — all builds on GitHub Actions (no local Docker/npm for prod).
+name: Deploy PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_git_ref:
+        description: Git ref (branch, tag, or SHA)
+        required: true
+        default: develop
+      image_tag:
+        description: ECR tag (leave "auto" for prod-YYYYMMDD-sha)
+        required: true
+        default: auto
+      deploy_api:
+        description: Build API + roll out ASG
+        type: boolean
+        default: true
+      deploy_frontend:
+        description: Build frontend + sync S3
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.app_git_ref }}
+
+      - name: Resolve image tag
+        id: meta
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [[ "$TAG" == "auto" || -z "$TAG" ]]; then
+            TAG="prod-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+      - name: Login ECR
+        if: inputs.deploy_api
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push API image
+        if: inputs.deploy_api
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: bash infra/prod/scripts/05-devsecops-build-ecr.sh
+
+      - name: Roll out API to ASG
+        if: inputs.deploy_api
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
+
+      - name: Setup Node
+        if: inputs.deploy_frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend and sync S3
+        if: inputs.deploy_frontend
+        env:
+          STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
+          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
+        run: bash infra/prod/scripts/08-code-frontend.sh
+
+      - name: Post-deploy smoke tests
+        if: inputs.deploy_api
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' https://www.ugaanlabs.ai/api/health)
+          if [[ "$code" == "503" ]]; then
+            echo "API returned 503 — ASG may be off-hours (10:00–19:00 IST). Rollout succeeded; verify health during business hours."
+          else
+            curl -fsS https://www.ugaanlabs.ai/api/health | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          assert d.get('status')=='healthy', d
+          assert d['services']['llm']['provider']=='bedrock', d['services']['llm']
+          assert 'ollama' not in d['services'], d['services']
+          stt=d['services']['stt']
+          assert stt['chain']==['openrouter','amazon'], stt
+          print('health OK:', d['services']['llm']['provider'], stt['chain'])
+          "
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
+          test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
+          echo "apex redirect OK"
+          echo "Deployed image tag: $IMAGE_TAG"

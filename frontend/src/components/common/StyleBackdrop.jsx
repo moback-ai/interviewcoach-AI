@@ -42,7 +42,10 @@ export default function StyleBackdrop({
       <div className="page-waves-shell__backdrop-aurora page-waves-shell__backdrop-aurora-a" />
       <div className="page-waves-shell__backdrop-aurora page-waves-shell__backdrop-aurora-b" />
       <AnimatedWavesLayer
-        className="page-waves-shell__backdrop-vanta"
+        className={[
+          'page-waves-shell__backdrop-vanta',
+          useInteractiveWaves ? 'page-waves-shell__backdrop-vanta--interactive' : '',
+        ].filter(Boolean).join(' ')}
         preset={style.vantaPreset}
         defer={deferWaves}
         interactive={useInteractiveWaves}

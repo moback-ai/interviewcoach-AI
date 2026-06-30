@@ -105,7 +105,7 @@ export const useIdleTimeout = (idleTimeoutMinutes = 10, warningTimeSeconds = 30)
         handleLogout();
       }
     }, idleTimeoutMs);
-  }, [isAuthenticated, idleTimeoutMs, warningTimeMs, warningTimeSeconds, handleLogout, isDisabled]);
+  }, [isAuthenticated, isOperationInProgress, idleTimeoutMs, warningTimeMs, warningTimeSeconds, handleLogout, isDisabled]);
 
   // Track user activity
   useEffect(() => {

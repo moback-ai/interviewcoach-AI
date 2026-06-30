@@ -1,2 +1,3 @@
-# Default admin reviewers for all repository changes.
+# Application code reviewers (this repo only).
+# Production deploy/AWS: Govardhan + Kishore only — private repo devsecops-platform.
 * @govardhanreddy66 @KFKishore23

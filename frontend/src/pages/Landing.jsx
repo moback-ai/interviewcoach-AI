@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import MouseWaveLayer from '../components/common/MouseWaveLayer';
 import { trackEvents } from '../services/mixpanel';
 
 const Hero = lazy(() => import('../components/landing/Hero'));
@@ -50,6 +51,7 @@ function Landing() {
   return (
     <div className="landing-shell">
       <div className="landing-shell__bg bg-style-aurora-dream" aria-hidden="true" />
+      <MouseWaveLayer className="landing-shell__mouse-waves" />
       <Navbar />
       <main className="landing-shell__main relative overflow-hidden">
         <Suspense fallback={<div className="landing-hero-skeleton" aria-hidden="true" />}>

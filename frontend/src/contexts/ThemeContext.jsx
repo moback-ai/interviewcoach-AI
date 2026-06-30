@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -84,11 +85,11 @@ export function ThemeProvider({ children }) {
     ));
   };
 
-  const toggleTheme = () => {
+  const toggleTheme = useCallback(() => {
     setThemePreference((currentPreference) => (
       resolveTheme(currentPreference) === 'dark' ? 'light' : 'dark'
     ));
-  };
+  }, []);
 
   const value = useMemo(() => ({
     theme,
@@ -98,7 +99,7 @@ export function ThemeProvider({ children }) {
     toggleTheme,
     setThemePreference,
     resetThemePreference: () => setThemePreference('auto'),
-  }), [theme, themePreference]);
+  }), [theme, themePreference, toggleTheme]);
 
   return (
     <ThemeContext.Provider value={value}>

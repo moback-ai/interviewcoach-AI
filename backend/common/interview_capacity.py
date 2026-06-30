@@ -5,6 +5,8 @@ import threading
 from contextlib import contextmanager
 
 from common.runtime_config import optional_env
+from common.redis_client import redis_enabled
+from common.redis_store import redis_interview_turn_slot
 
 
 class InterviewCapacityError(Exception):
@@ -44,6 +46,11 @@ def _queue_wait_seconds() -> int:
 
 @contextmanager
 def interview_turn_slot():
+    if redis_enabled():
+        with redis_interview_turn_slot() as slot:
+            yield slot
+        return
+
     global _waiting
     sem = _get_semaphore()
     wait_s = _queue_wait_seconds()

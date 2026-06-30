@@ -1,38 +1,26 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Sparkles, Waves, Crown } from 'lucide-react';
+import { Sparkles } from 'lucide-react';
 import { useHeadTracking } from '@/hooks/useHeadTracking';
 import ChatWindow from '@/components/interview/ChatWindow';
-import ServiceHoursNotice from '@/components/interview/ServiceHoursNotice';
-import { trackEvents } from '../services/mixpanel';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
 import WaveAnimation from '@/components/interview/WaveAnimation';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
-import { useAuth } from '../contexts/AuthContext';
 import { useOperation } from '../contexts/OperationContext';
-import {
-  INTERVIEWER_VOICE_PRESETS,
-  getInterviewerVoicePreset,
-  getStoredVoicePresetId,
-  persistVoicePresetChoice,
-  resolveInterviewerImageUrl,
-} from '../utils/interviewerVoices';
 import { devLog } from '../utils/devLog';
-
-/** Header order: Classic → Ava → Mira → Noah (matches product layout). */
-const HEADER_VOICE_IDS = ['server_default', 'ava', 'mira', 'noah'];
+import { useInterviewTimer } from '@/hooks/useInterviewTimer';
 
 function InterviewPage() {
-  const { user } = useAuth();
   const { setIsOperationInProgress } = useOperation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const userGender = user?.user_metadata?.gender || user?.gender || '';
+  const interviewId = searchParams.get('interview_id');
   const [isValidated, setIsValidated] = useState(false);
+  useInterviewTimer(interviewId, isValidated);
   const [isValidating, setIsValidating] = useState(true); // ✅ RENAMED: Validation loading
   
   // ✅ ADD: Separate loading state for ChatWindow
@@ -48,10 +36,6 @@ function InterviewPage() {
     canEndInterview: true,
     isSpeakCooldown: false,
   });
-  const [selectedVoiceId, setSelectedVoiceId] = useState(() => getStoredVoicePresetId(userGender));
-  const [interviewerImageSrc, setInterviewerImageSrc] = useState(
-    () => resolveInterviewerImageUrl(getInterviewerVoicePreset(getStoredVoicePresetId(userGender)), userGender),
-  );
 
   // ✅ ADD: Callback to receive state changes from ChatWindow
   const handleChatStateChange = useCallback((newStates) => {
@@ -91,10 +75,6 @@ function InterviewPage() {
   const calibrationInProgressRef = useRef(false);
   
   const streamRef = useRef(null);
-  const activeVoicePreset = getInterviewerVoicePreset(selectedVoiceId);
-  const headerVoicePresets = HEADER_VOICE_IDS.map((id) =>
-    INTERVIEWER_VOICE_PRESETS.find((p) => p.id === id)
-  ).filter(Boolean);
   /** Aligns with Speak button + Head tracking: lock UI during audio, recording, API work, response pipeline, or mic cooldown */
   const interviewInteractionLocked =
     isAudioPlaying ||
@@ -113,18 +93,41 @@ function InterviewPage() {
   const cameraRetryCountRef = useRef(0);
   const MAX_RETRIES = 3;
 
-  // Initialize camera with retry logic and proper error handling
-  useEffect(() => {
-    const nextVoiceId = getStoredVoicePresetId(userGender);
-    setSelectedVoiceId(nextVoiceId);
-    setInterviewerImageSrc(
-      resolveInterviewerImageUrl(getInterviewerVoicePreset(nextVoiceId), userGender),
-    );
-  }, [userGender]);
+  // Handle calibration success
+  const handleCalibrationSuccess = useCallback(() => {
+    setCalibrationState('success');
+    setShowCalibrationSuccess(true);
+    
+    // Clear any ongoing calibration check timer
+    if (calibrationCheckTimer) {
+      clearTimeout(calibrationCheckTimer);
+      setCalibrationCheckTimer(null);
+    }
+    // Reset the calibration progress flag
+    calibrationInProgressRef.current = false;
+    devLog('🎉 Calibration completed successfully');
+    
+    // Auto-hide success message after 3 seconds
+    setTimeout(() => {
+      setShowCalibrationSuccess(false);
+      setCalibrationState('idle');
+    }, 3000);
+  }, [calibrationCheckTimer]);
 
-  useEffect(() => {
-    persistVoicePresetChoice(selectedVoiceId, { manual: true });
-  }, [selectedVoiceId]);
+  // Initialize head tracking
+  const {
+    isCalibrated,
+    isLooking,
+    isConnected,
+    error,
+    readyForCalibration,
+    calibrationMessage,
+    videoRef,
+    startCalibration,
+    pauseFrameSending,
+    resumeFrameSending,
+    startMonitoring
+  } = useHeadTracking(headTrackingEnabled, handleCalibrationSuccess);
 
   useEffect(() => {
     const startCamera = async (retryCount = 0) => {
@@ -191,7 +194,7 @@ function InterviewPage() {
             resolve();
           };
 
-          const handleError = (e) => {
+          const handleError = () => {
             video.removeEventListener('loadedmetadata', handleLoadedMetadata);
             video.removeEventListener('error', handleError);
             reject(new Error('Video element failed to load stream'));
@@ -260,47 +263,8 @@ function InterviewPage() {
         streamRef.current = null;
       }
     };
-  }, [isValidated, isValidating]); // ✅ Changed dependency - wait for validation
+  }, [isValidated, isValidating, videoRef]); // wait for validation before starting camera
 
-  // Handle calibration success
-  const handleCalibrationSuccess = useCallback(() => {
-    setCalibrationState('success');
-    setShowCalibrationSuccess(true);
-    
-    // Clear any ongoing calibration check timer
-    if (calibrationCheckTimer) {
-      clearTimeout(calibrationCheckTimer);
-      setCalibrationCheckTimer(null);
-    }
-    // Reset the calibration progress flag
-    calibrationInProgressRef.current = false;
-    devLog('🎉 Calibration completed successfully');
-    
-    // Auto-hide success message after 3 seconds
-    setTimeout(() => {
-      setShowCalibrationSuccess(false);
-      setCalibrationState('idle');
-    }, 3000);
-  }, [calibrationCheckTimer]);
-
-  // Initialize head tracking
-  const {
-    isCalibrated,
-    isLooking,
-    isConnected,
-    error,
-    personStatus,
-    readyForCalibration,
-    calibrationMessage,
-    videoRef,
-    startFrameSending,
-    stopFrameSending,
-    startCalibration,
-    pauseFrameSending,
-    resumeFrameSending,
-    startMonitoring,
-    stopMonitoring
-  } = useHeadTracking(headTrackingEnabled, handleCalibrationSuccess);
 
   // Show head tracking popup when user enables the toggle
   useEffect(() => {
@@ -371,7 +335,8 @@ function InterviewPage() {
   useEffect(() => {
     devLog(`🔍 Monitoring check: videoRef=${!!videoRef.current}, isConnected=${isConnected}, headTrackingStarted=${headTrackingStarted}, showHeadTrackingPopup=${showHeadTrackingPopup}`);
     
-    if (videoRef.current && headTrackingStarted && !showHeadTrackingPopup) {
+    const video = videoRef.current;
+    if (video && headTrackingStarted && !showHeadTrackingPopup) {
       const handleVideoReady = () => {
         devLog('🎥 Video ready, starting monitoring...');
         startMonitoring();
@@ -380,12 +345,12 @@ function InterviewPage() {
         // Calibration will start automatically when readyForCalibration becomes true
       };
 
-      if (videoRef.current.readyState >= 2) {
+      if (video.readyState >= 2) {
         handleVideoReady();
       } else {
-        videoRef.current.addEventListener('loadeddata', handleVideoReady);
+        video.addEventListener('loadeddata', handleVideoReady);
         return () => {
-          videoRef.current?.removeEventListener('loadeddata', handleVideoReady);
+          video.removeEventListener('loadeddata', handleVideoReady);
         };
       }
     }
@@ -562,7 +527,7 @@ function InterviewPage() {
     };
     
     validateInterview();
-  }, []); // ✅ FIXED: Empty dependency array - only runs once on mount
+  }, [navigate, searchParams]);
 
   // Handle head tracking confirmation
   const confirmHeadTracking = () => {
@@ -577,48 +542,6 @@ function InterviewPage() {
     }, 1000);
   };
 
-  // Toggle head tracking on/off
-  const toggleHeadTracking = () => {
-    const newMode = !headTrackingEnabled;
-    devLog(`🔄 Toggle requested: ${headTrackingEnabled} → ${newMode}`);
-    setHeadTrackingEnabled(newMode);
-    
-    if (newMode) {
-      // Switching TO head tracking - start fresh calibration session
-      devLog('🔄 Setting up head tracking mode...');
-      setCurrentMode('head_tracking');
-      setHeadTrackingStarted(false); // Reset to show popup again
-      setCalibrationState('idle'); // Reset calibration state
-      
-      // Reset all head tracking state for fresh session
-      setShowWarningModal(false);
-      setWarningType(null);
-      
-      // Clear any existing calibration check timers
-      if (calibrationCheckTimer) {
-        clearTimeout(calibrationCheckTimer);
-        setCalibrationCheckTimer(null);
-      }
-      
-      devLog('🔄 Toggled to head tracking - will show popup for calibration');
-    } else {
-      // Switching OFF head tracking - stop all monitoring
-      setCurrentMode('disabled');
-      setHeadTrackingStarted(false); // Stop monitoring
-      
-      // Clean up head tracking session
-      setShowHeadTrackingPopup(false);
-      setCalibrationState('idle');
-      setShowWarningModal(false);
-      setWarningType(null);
-      
-      // Reset calibration progress flag
-      calibrationInProgressRef.current = false;
-      
-      devLog('🔄 Toggled off head tracking - stopped all monitoring');
-    }
-  };
-
   // Handle warning modal close
   const closeWarningModal = () => {
     setShowWarningModal(false);
@@ -629,23 +552,6 @@ function InterviewPage() {
     }, 1000); // Small delay to ensure user has time to adjust
     
     devLog(`✅ Monitoring resumed for ${currentMode} mode`);
-  };
-
-  const endInterview = () => {
-    // Note: Interview completion and feedback generation events are tracked in ChatWindow.jsx
-    // when the backend confirms completion with interview_done: true, not here when button is clicked
-    
-    // Stop monitoring
-    stopMonitoring();
-    
-    // Stop camera stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    
-    // Navigate to feedback page with the actual interview ID
-    const interviewId = searchParams.get('interview_id');
-    navigate(`/interview-feedback?interview_id=${interviewId}`);
   };
 
   // Show loading while validating
@@ -668,7 +574,6 @@ function InterviewPage() {
   // Original interview page content
   return (
     <>
-      <ServiceHoursNotice />
       {/* Head Tracking Alert */}
       <HeadTrackingAlert 
         isCalibrated={isCalibrated}
@@ -775,12 +680,12 @@ function InterviewPage() {
       </AnimatePresence>
       
       <div className="relative min-h-screen interview-page-photo-bg">
-        {/* Session header — dark bar, voice pill center, premium + head tracking right */}
+        {/* Session header — dark bar, head tracking */}
         <header
           className="sticky top-0 z-40 border-b border-white/10 bg-[#0a0b12] px-4 py-3 sm:px-6 sm:py-3.5 text-white shadow-[0_4px_24px_rgba(0,0,0,0.35)] backdrop-blur-md"
           aria-label="Interview session controls"
         >
-          <div className="mx-auto flex max-w-[1600px] flex-col gap-3 lg:flex-row lg:items-center lg:justify-between lg:gap-4">
+          <div className="mx-auto flex max-w-[1600px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             {/* Left: title */}
             <div className="flex min-w-0 flex-shrink-0 items-center gap-2.5">
               <Sparkles className="h-5 w-5 shrink-0 text-sky-400" aria-hidden />
@@ -789,66 +694,8 @@ function InterviewPage() {
               </h1>
             </div>
 
-            {/* Center: voice mode pill */}
-            <div className="flex min-w-0 flex-1 justify-center lg:px-4">
-              <div
-                className="inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full bg-white/[0.07] p-1 ring-1 ring-white/10"
-                role="tablist"
-                aria-label="Interviewer voice"
-              >
-                {headerVoicePresets.map((preset) => {
-                  const active = preset.id === selectedVoiceId;
-                  const waveIcon = preset.id === 'server_default' || preset.id === 'ava';
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      disabled={interviewInteractionLocked}
-                      onClick={() => {
-                        if (interviewInteractionLocked) return;
-                        setSelectedVoiceId(preset.id);
-                      }}
-                      title={
-                        interviewInteractionLocked
-                          ? 'Available when the interviewer is idle'
-                          : `${preset.label} — ${preset.subtitle}`
-                      }
-                      className={[
-                        'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium transition-all duration-200',
-                        interviewInteractionLocked && 'cursor-not-allowed opacity-45',
-                        !interviewInteractionLocked && active && 'bg-[#2563eb] text-white shadow-md ring-1 ring-sky-400/50',
-                        !interviewInteractionLocked &&
-                          !active &&
-                          'text-white/90 hover:bg-white/10',
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                    >
-                      {waveIcon ? (
-                        <Waves className="h-3.5 w-3.5 shrink-0 opacity-90" aria-hidden />
-                      ) : (
-                        <Sparkles className="h-3.5 w-3.5 shrink-0 opacity-90" aria-hidden />
-                      )}
-                      <span>{preset.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {/* Right: premium + head tracking */}
             <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-3 sm:gap-4">
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.04] px-3.5 py-2 text-sm font-medium text-white/95 transition hover:bg-white/[0.08]"
-              >
-                <Crown className="h-4 w-4 shrink-0 text-amber-400" aria-hidden />
-                Premium Mode
-              </button>
-
-              <div className="hidden h-6 w-px bg-white/15 sm:block" aria-hidden />
 
               <label
                 className={`flex cursor-pointer items-center gap-2.5 ${interviewInteractionLocked ? 'cursor-not-allowed opacity-55' : ''}`}
@@ -911,18 +758,17 @@ function InterviewPage() {
                   borderWidth: isAudioPlaying ? '3px' : '1px'
                 }}
               >
-                <div className="ambient-orb h-40 w-40 opacity-70" style={{ background: `radial-gradient(circle, ${activeVoicePreset.accentColor}44, transparent 70%)` }} />
+                <div className="ambient-orb h-40 w-40 opacity-70" style={{ background: 'radial-gradient(circle, #5B8CFF44, transparent 70%)' }} />
                 {/* Interviewer Image and Info Container */}
                 <div className="flex flex-col items-center">
                   {/* Interviewer Image - Circular with Wave Animation */}
                   <div className="relative mb-2 sm:mb-4">
                     <motion.img
-                      src={interviewerImageSrc}
+                      src="/assets/interview/interviewer_1.png"
                       loading="lazy"
                       decoding="async"
                       fetchPriority="low"
-                      alt={activeVoicePreset.personaName}
-                      onError={() => setInterviewerImageSrc('/assets/interview/interviewer_1.png')}
+                      alt="Sadhan"
                       className="w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 lg:w-36 lg:h-36 xl:w-40 xl:h-40 object-cover object-top rounded-full border-2 sm:border-4 shadow-xl relative z-10"
                       style={{
                         borderColor: isAudioPlaying ? 'var(--color-primary)' : 'white'
@@ -969,9 +815,9 @@ function InterviewPage() {
                     className="font-bold text-sm sm:text-base md:text-lg lg:text-xl mb-1 drop-shadow-lg"
                     style={{ color: 'var(--color-text-primary)' }}
                   >
-                    {activeVoicePreset.personaName}
+                    Sadhan
                   </h3>
-                  <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">{activeVoicePreset.role}</p>
+                  <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">Balanced interviewer</p>
                 </div>
               </div>
             </div>
@@ -1080,7 +926,6 @@ function InterviewPage() {
               isAudioPlaying={isAudioPlaying}
               setIsAudioPlaying={setIsAudioPlaying}
               onStateChange={handleChatStateChange}
-              selectedVoiceId={selectedVoiceId}
             />
           </div>
         </motion.div>

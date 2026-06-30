@@ -121,13 +121,8 @@ export async function apiCall(endpoint, options = {}) {
           err.retryAfter = payload.retry_after;
           throw err;
         }
-        if (payload.closed) {
-          const err = new Error(payload.message || 'Service is outside operating hours.');
-          err.closed = true;
-          throw err;
-        }
       } catch (parseErr) {
-        if (parseErr.busy || parseErr.closed) throw parseErr;
+        if (parseErr.busy) throw parseErr;
       }
     }
 
@@ -185,3 +180,9 @@ export const getInterviewHistory = (page = 1, limit = 10) =>
 
 export const getDashboard = (page = 1, limit = 20) =>
   apiGet(`/api/dashboard?page=${page}&limit=${limit}`);
+
+export const tickInterviewTimer = (id) =>
+  apiPost(`/api/interviews/${id}/timer-tick`, {});
+
+export const pauseInterviewTimer = (id) =>
+  apiPost(`/api/interviews/${id}/timer-pause`, {});

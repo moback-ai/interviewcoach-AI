@@ -62,6 +62,8 @@ CREATE TABLE interviews (
     retake_from UUID REFERENCES interviews(id),
     attempt_number INTEGER DEFAULT 1 CHECK (attempt_number > 0),
     scheduled_at TIMESTAMPTZ DEFAULT now(),
+    active_seconds INTEGER NOT NULL DEFAULT 0,
+    ended_at TIMESTAMPTZ,
     CONSTRAINT check_retake_not_self CHECK (retake_from != id)
 );
 
@@ -117,17 +119,73 @@ CREATE TABLE overall_evaluation (
 
 CREATE INDEX idx_overall_eval_user ON overall_evaluation(user_id, created_at DESC);
 
--- Payments
+-- Checkout intents (created before payment; fulfilled by webhook)
+CREATE TABLE checkout_intents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+    jd_id UUID NOT NULL REFERENCES job_descriptions(id) ON DELETE CASCADE,
+    question_set INTEGER NOT NULL,
+    retake_from UUID REFERENCES interviews(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    dodo_session_id TEXT,
+    amount_paise BIGINT NOT NULL DEFAULT 49900,
+    expires_at TIMESTAMPTZ NOT NULL,
+    question_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    interview_id UUID REFERENCES interviews(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    fulfilled_at TIMESTAMPTZ,
+    failure_reason TEXT,
+    error_metadata JSONB,
+    CONSTRAINT checkout_intents_status_check CHECK (
+        status IN (
+            'pending', 'failed', 'fulfilled', 'paid_needs_review',
+            'expired', 'checkout_creation_failed'
+        )
+    )
+);
+
+CREATE INDEX idx_checkout_intents_user_created ON checkout_intents(user_id, created_at DESC);
+CREATE INDEX idx_checkout_intents_status ON checkout_intents(status);
+CREATE INDEX idx_checkout_intents_pending_expires
+    ON checkout_intents(expires_at) WHERE status = 'pending';
+CREATE UNIQUE INDEX idx_checkout_intents_dodo_session
+    ON checkout_intents(dodo_session_id) WHERE dodo_session_id IS NOT NULL;
+
+-- Webhook idempotency and retry safety
+CREATE TABLE webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'received',
+    payload JSONB,
+    error_message TEXT,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    processed_at TIMESTAMPTZ,
+    CONSTRAINT webhook_events_status_check CHECK (
+        status IN ('received', 'processing', 'processed', 'failed')
+    )
+);
+
+CREATE INDEX idx_webhook_events_status ON webhook_events(status);
+
+-- Payments (amount stored in paise)
 CREATE TABLE payments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     interview_id UUID REFERENCES interviews(id) ON DELETE SET NULL,
-    amount NUMERIC(12,2) NOT NULL,
-    provider TEXT NOT NULL DEFAULT 'razorpay',
-    payment_status TEXT NOT NULL DEFAULT 'success',
+    checkout_intent_id UUID REFERENCES checkout_intents(id) ON DELETE SET NULL,
+    amount BIGINT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'dodo',
+    payment_status TEXT NOT NULL DEFAULT 'pending',
     transaction_id TEXT NOT NULL,
-    paid_at TIMESTAMPTZ DEFAULT now()
+    metadata JSONB,
+    paid_at TIMESTAMPTZ,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX idx_payments_transaction_id ON payments(transaction_id);
+CREATE UNIQUE INDEX idx_payments_checkout_intent_id
+    ON payments(checkout_intent_id) WHERE checkout_intent_id IS NOT NULL;
 
 -- Chat history
 CREATE TABLE chat_history (

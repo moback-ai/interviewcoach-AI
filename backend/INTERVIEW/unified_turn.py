@@ -17,14 +17,17 @@ from Interview_functions import (
 META_MARKER = "\nMETA_JSON:"
 
 
+from common.runtime_config import optional_env as runtime_optional_env
+
+
 def unified_turns_enabled() -> bool:
-    return os.getenv("INTERVIEW_UNIFIED_TURNS", "true").strip().lower() in {
+    return runtime_optional_env("INTERVIEW_UNIFIED_TURNS", "true").strip().lower() in {
         "1", "true", "yes", "on",
     }
 
 
 def _model_name() -> str:
-    return os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip() or "llama3.2:3b"
+    return runtime_optional_env("BEDROCK_CHAT_MODEL", runtime_optional_env("OLLAMA_MODEL", "llama3.2:3b"))
 
 
 def build_turn_context(manager) -> dict:

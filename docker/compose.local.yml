@@ -1,0 +1,51 @@
+# Local smoke test: docker compose -f docker/compose.local.yml up --build
+# Local prod validation. Requires RUNTIME_CONFIG_ALLOW_ENV=true in backend/.env
+# OR AWS_SECRETS_MANAGER_SECRET_ID + AWS credentials for real secrets.
+
+name: interviewcoach-local
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      AWS_REGION: ap-south-1
+      AWS_SECRETS_MANAGER_SECRET_ID: ${AWS_SECRETS_MANAGER_SECRET_ID:-}
+    volumes:
+      - ../backend/.env:/app/.env:ro
+      - local-storage:/apps/storage
+
+  transcribe:
+    build:
+      context: ..
+      dockerfile: docker/api/Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      AWS_REGION: ap-south-1
+      AWS_SECRETS_MANAGER_SECRET_ID: ${AWS_SECRETS_MANAGER_SECRET_ID:-}
+      HEALTH_PORT: "5001"
+      ENABLE_AI_WARMUP: "false"
+    command:
+      - python
+      - -c
+      - |
+        from app import app
+        app.run(host="0.0.0.0", port=5001, threaded=True)
+    volumes:
+      - ../backend/.env:/app/.env:ro
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/web/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  local-storage:

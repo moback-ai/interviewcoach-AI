@@ -1,0 +1,18 @@
+# PROD API — ElastiCache Redis (no local sidecar). Build with docker/api/Dockerfile.prod
+name: interviewcoach-prod
+
+services:
+  api:
+    image: ${ECR_REGISTRY}/interviewcoach-api:${IMAGE_TAG:-prod}
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_SECRETS_MANAGER_SECRET_ID: interviewcoach/prod/app
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s

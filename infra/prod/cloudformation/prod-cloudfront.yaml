@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: InterviewCoach PROD — CloudFront (S3 static + EC2 API origin). ACM cert must be in us-east-1.
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: ugaanlabs.ai
+  AcmCertificateArn:
+    Type: String
+    Description: ACM certificate ARN in us-east-1 for DomainName + www
+  StaticBucketName:
+    Type: String
+    Default: ic-static-prod
+  StaticBucketRegion:
+    Type: String
+    Default: ap-south-1
+    Description: Region where the static S3 bucket lives (must match bucket location)
+  ApiOriginDomain:
+    Type: String
+    Description: EC2 public DNS (e.g. ec2-43-205-215-217.ap-south-1.compute.amazonaws.com)
+
+Resources:
+  StaticBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticBucketName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${StaticBucketName}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "interviewcoach-prod-static-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ApexToWwwFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${AWS::StackName}-apex-to-www"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Redirect apex hostname to www
+        Runtime: cloudfront-js-2.0
+      FunctionCode: !Sub |
+        function handler(event) {
+          var request = event.request;
+          var host = request.headers.host.value;
+          if (host === '${DomainName}') {
+            var uri = request.uri;
+            var parts = [];
+            for (var key in request.querystring) {
+              if (request.querystring[key].multiValue) {
+                request.querystring[key].multiValue.forEach(function(v) {
+                  parts.push(key + '=' + v.value);
+                });
+              } else {
+                parts.push(key + '=' + request.querystring[key].value);
+              }
+            }
+            var location = 'https://www.${DomainName}' + uri;
+            if (parts.length > 0) {
+              location += '?' + parts.join('&');
+            }
+            return {
+              statusCode: 301,
+              statusDescription: 'Moved Permanently',
+              headers: { location: { value: location } }
+            };
+          }
+          return request;
+        }
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: InterviewCoach PROD
+        Aliases:
+          - !Ref DomainName
+          - !Sub "www.${DomainName}"
+        ViewerCertificate:
+          AcmCertificateArn: !Ref AcmCertificateArn
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        Origins:
+          - Id: S3Static
+            DomainName: !Sub "${StaticBucketName}.s3.${StaticBucketRegion}.amazonaws.com"
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: ApiOrigin
+            DomainName: !Ref ApiOriginDomain
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          TargetOriginId: S3Static
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt ApexToWwwFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d2-40f3-bcb3-5a6aad2fe2b8
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ApexToWwwFunction.FunctionARN
+          - PathPattern: /functions/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d2-40f3-bcb3-5a6aad2fe2b8
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ApexToWwwFunction.FunctionARN
+          - PathPattern: /socket.io/*
+            TargetOriginId: ApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d2-40f3-bcb3-5a6aad2fe2b8
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ApexToWwwFunction.FunctionARN
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+Outputs:
+  DistributionId:
+    Value: !Ref CloudFrontDistribution
+  DistributionDomainName:
+    Value: !GetAtt CloudFrontDistribution.DomainName

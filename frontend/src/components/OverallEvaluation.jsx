@@ -11,8 +11,6 @@ const OverallEvaluation = ({ evaluationData }) => {
   const analysis = evaluationData.analysis_data;
   const fullAnalysis = analysis.full_analysis || {};
   const numericResults = fullAnalysis.numeric_results || {};
-  const llmExplanations = fullAnalysis.llm_explanations || {};
-
   // Get confidence level badge color
   const getConfidenceColor = (level) => {
     switch (level?.toLowerCase()) {
