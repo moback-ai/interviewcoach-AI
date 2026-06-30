@@ -20,13 +20,28 @@ Repository: **`moback-ai/devsecops-platform`** (private)
 
 You **cannot**:
 
-- Run **Deploy · Production** (removed from this repo)
-- Access `devsecops-platform`, SSH keys, or production secrets
-- Trigger production deploy from GitHub Actions on this repo
+- Run production deploy workflows (none exist on this repo)
+- Run `infra/prod/scripts/*` (blocked by `require-devsecops.sh`)
+- Access `devsecops-platform`, SSH keys, AWS deploy roles, or production secrets
 
 ---
 
 ## DevSecOps
 
-Deploy: `devsecops-platform` → **InterviewCoach · Deploy Production**  
+1. Sync `infra/prod/` from interviewcoach-AI → `devsecops-platform/apps/interviewcoach/aws/prod/` when scripts change
+2. Copy `infra/prod/github-workflows/deploy-prod.yml` → devsecops `.github/workflows/interviewcoach-deploy-prod.yml` (if not already)
+3. Secrets on **devsecops-platform** `production` environment: run `16-set-github-prod-secrets.sh` from devsecops copy
+4. Deploy: **Actions → InterviewCoach · Deploy Production**  
+   - `app_git_ref`: merge SHA or `develop`
+
 Access rules: `devsecops-platform/docs/TEAM_ACCESS.md`
+
+---
+
+## What runs where
+
+| Action | Repository |
+|--------|------------|
+| Code, PRs, Security CI | `moback-ai/interviewcoach-AI` |
+| Prod build, ASG rollout, S3 sync | `moback-ai/devsecops-platform` |
+| AWS infra scripts, SSH, secrets | `moback-ai/devsecops-platform` (copied scripts) |

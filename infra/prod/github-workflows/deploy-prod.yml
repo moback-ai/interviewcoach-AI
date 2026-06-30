@@ -1,11 +1,14 @@
-# Production deploy — all builds on GitHub Actions (no local Docker/npm for prod).
-name: Deploy PROD
+# COPY to moback-ai/devsecops-platform → .github/workflows/interviewcoach-deploy-prod.yml
+# Do NOT enable this workflow in interviewcoach-AI.
+#
+# Production deploy — DevSecOps only. Checks out application code at deploy time.
+name: InterviewCoach · Deploy Production
 
 on:
   workflow_dispatch:
     inputs:
       app_git_ref:
-        description: Git ref (branch, tag, or SHA)
+        description: interviewcoach-AI git ref (branch, tag, or SHA)
         required: true
         default: develop
       image_tag:
@@ -26,10 +29,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: deploy-prod
+  group: interviewcoach-deploy-prod
   cancel-in-progress: false
 
 env:
+  DEVSECOPS_RUN: "1"
   AWS_REGION: ap-south-1
 
 jobs:
@@ -37,13 +41,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Checkout
+      - name: Checkout application repo
         uses: actions/checkout@v4
         with:
+          repository: moback-ai/interviewcoach-AI
           ref: ${{ inputs.app_git_ref }}
+          path: app
 
       - name: Resolve image tag
         id: meta
+        working-directory: app
         run: |
           TAG="${{ inputs.image_tag }}"
           if [[ "$TAG" == "auto" || -z "$TAG" ]]; then
@@ -64,12 +71,14 @@ jobs:
 
       - name: Build and push API image
         if: inputs.deploy_api
+        working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: bash infra/prod/scripts/05-devsecops-build-ecr.sh
 
       - name: Roll out API to ASG
         if: inputs.deploy_api
+        working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
@@ -80,10 +89,11 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: app/frontend/package-lock.json
 
       - name: Build frontend and sync S3
         if: inputs.deploy_frontend
+        working-directory: app
         env:
           STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
           CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
@@ -111,4 +121,4 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
           test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
           echo "apex redirect OK"
-          echo "Deployed image tag: $IMAGE_TAG"
+          echo "Deployed app ref: ${{ inputs.app_git_ref }}  image: $IMAGE_TAG"

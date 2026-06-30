@@ -3,6 +3,9 @@
 # Usage: bash infra/prod/scripts/00-backup-secrets.sh
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 REGION="${AWS_REGION:-ap-south-1}"
 SECRET_ID="${SECRET_ID:-interviewcoach/prod/app}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"

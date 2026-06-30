@@ -8,6 +8,9 @@
 # Usage: bash infra/prod/scripts/13-prod-hardening-all.sh
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 SCRIPT_DIR="$(dirname "$0")"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/load-prod-env.sh"

@@ -6,6 +6,9 @@
 #   bash infra/prod/scripts/06-code-deploy-api.sh   # restart API to pick up secret
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
   echo "Provide a new key: OPENROUTER_API_KEY=sk-or-v1-... $0"
   echo "Revoke the old key at https://openrouter.ai/keys after deploy."

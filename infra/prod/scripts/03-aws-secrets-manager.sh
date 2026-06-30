@@ -7,6 +7,9 @@
 #     bash infra/prod/scripts/03-aws-secrets-manager.sh
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 REGION="${AWS_REGION:-ap-south-1}"
 SECRET_ID="${SECRET_ID:-interviewcoach/prod/app}"
 SECRETS_FILE="${SECRETS_FILE:-$(dirname "$0")/../../../backend/secrets.prod.example.json}"

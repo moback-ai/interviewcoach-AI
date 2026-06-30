@@ -6,6 +6,9 @@
 set -euo pipefail
 
 # shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
+# shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 
 REGION="${AWS_REGION:-ap-south-1}"
@@ -35,12 +38,6 @@ ECR_REGISTRY="${ECR_REGISTRY:?Set ECR_REGISTRY}"
 IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
 VPC_ID="${VPC_ID:?Set VPC_ID}"
 PUBLIC_SUBNETS="${PUBLIC_SUBNET_IDS:?Set PUBLIC_SUBNET_IDS}"
-
-if [[ "${GITHUB_ACTIONS:-}" != "true" && "${ALLOW_LOCAL_PROD_DEPLOY:-}" != "1" ]]; then
-  echo "ERROR: PROD API rollouts run via GitHub Actions (.github/workflows/deploy-prod.yml)."
-  echo "Emergency only: ALLOW_LOCAL_PROD_DEPLOY=1 $0"
-  exit 1
-fi
 
 echo "Updating compute stack $COMPUTE_STACK with IMAGE_TAG=$IMAGE_TAG ..."
 aws cloudformation deploy \

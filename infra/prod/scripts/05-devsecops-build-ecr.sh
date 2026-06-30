@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# Build PROD API image and push to ECR — GitHub Actions ONLY.
-# Local/Mac/EC2 builds are blocked. Use: .github/workflows/deploy-prod.yml
+# Build PROD API image and push to ECR — devsecops-platform GitHub Actions only.
 set -euo pipefail
 
-if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
-  echo "ERROR: Prod API images are built only on GitHub Actions."
-  echo "  Actions → Deploy PROD → Run workflow"
-  echo "  https://github.com/moback-ai/interviewcoach-AI/actions/workflows/deploy-prod.yml"
-  exit 1
-fi
-
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
 # shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 

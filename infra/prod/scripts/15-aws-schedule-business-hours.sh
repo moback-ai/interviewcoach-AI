@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # ASG business hours: 10:00–19:00 IST (API nodes only). RDS/ElastiCache stay 24/7.
 set -euo pipefail
+
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
 source "$(dirname "$0")/load-prod-env.sh"
 REGION="${AWS_REGION:-ap-south-1}"
 ASG="${ASG_NAME:-interviewcoach-prod-api-asg}"
