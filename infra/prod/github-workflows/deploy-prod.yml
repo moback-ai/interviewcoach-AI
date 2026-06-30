@@ -23,6 +23,10 @@ on:
         description: Build frontend + sync S3
         type: boolean
         default: true
+      force_rebuild:
+        description: Rebuild API image even if tag already exists in ECR
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -71,11 +75,12 @@ jobs:
         if: inputs.deploy_api
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push API image
+      - name: Build and push API image (if needed)
         if: inputs.deploy_api
         working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild && '1' || '' }}
         run: bash infra/prod/scripts/05-devsecops-build-ecr.sh
 
       - name: Roll out API to ASG

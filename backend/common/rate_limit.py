@@ -24,7 +24,10 @@ def _user_key(prefix: str) -> str:
 
 def _check(key: str, max_calls: int, window_seconds: int) -> bool:
     if redis_enabled():
-        return redis_rate_limit_check(f"ic:rl:{key}", max_calls, window_seconds)
+        try:
+            return redis_rate_limit_check(f"ic:rl:{key}", max_calls, window_seconds)
+        except Exception:
+            pass  # fall back to in-process limiter when Redis is unreachable
 
     now = time.time()
     cutoff = now - window_seconds

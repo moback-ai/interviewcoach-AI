@@ -81,8 +81,8 @@ if "openrouter" in stt_primary and empty(merged.get("OPENROUTER_API_KEY")):
 if empty(merged.get("DB_HOST")) and not empty(current.get("DB_HOST")):
     merged["DB_HOST"] = current["DB_HOST"]
 
-# Redis: sidecar on API host (see docker/compose.prod.yml)
-merged["REDIS_URL"] = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+# Redis: ElastiCache in prod (see infra/prod/prod.env REDIS_URL)
+merged["REDIS_URL"] = os.environ.get("REDIS_URL", merged.get("REDIS_URL", "")).strip() or "redis://redis:6379/0"
 
 or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
 stt_primary = overrides.get("STT_PRIMARY") or merged.get("STT_PRIMARY") or "amazon"
