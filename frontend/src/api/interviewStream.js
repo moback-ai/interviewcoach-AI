@@ -1,5 +1,29 @@
-import { getAccessToken } from '../lib/authClient';
+import { getAccessToken, persistAuth, FETCH_CREDENTIALS } from '../lib/authClient';
 import { getApiBaseUrl } from '../utils/apiConfig';
+
+async function refreshAccessToken() {
+  const normalizedBase = getApiBaseUrl().replace(/\/$/, '');
+  const token = localStorage.getItem('ic_token');
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  const refreshRes = await fetch(`${normalizedBase}/refresh-token`, {
+    method: 'POST',
+    ...FETCH_CREDENTIALS,
+    headers,
+  });
+  if (!refreshRes.ok) return null;
+  const refreshData = await refreshRes.json().catch(() => ({}));
+  if (refreshData.token) {
+    persistAuth(refreshData.token, refreshData.user || null);
+    return refreshData.token;
+  }
+  if (refreshData.user) {
+    persistAuth(null, refreshData.user);
+  }
+  return refreshRes.ok ? 'cookie' : null;
+}
 
 function buildUrl(endpoint) {
   const normalizedBase = getApiBaseUrl().replace(/\/$/, '');
@@ -10,21 +34,33 @@ function buildUrl(endpoint) {
   return `${normalizedBase}${clean}`;
 }
 
+async function postInterviewStreamRequest(endpoint, body, signal) {
+  const token = getAccessToken();
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  return fetch(buildUrl(endpoint), {
+    method: 'POST',
+    ...FETCH_CREDENTIALS,
+    headers,
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
 /**
  * SSE interview response: started | queued | token | complete | error
  * Falls back to null on failure so caller can use apiPost.
  */
 export async function apiPostInterviewStream(endpoint, body, { onEvent, signal } = {}) {
-  const token = getAccessToken();
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  let response = await postInterviewStreamRequest(endpoint, body, signal);
 
-  const response = await fetch(buildUrl(endpoint), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
+  if (response.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      response = await postInterviewStreamRequest(endpoint, body, signal);
+    }
+  }
 
   if (response.status === 401) {
     const err = new Error('Session expired. Please log in again.');
@@ -49,27 +85,14 @@ export async function apiPostInterviewStream(endpoint, body, { onEvent, signal }
     buffer = chunks.pop() || '';
 
     for (const chunk of chunks) {
-      const lines = chunk.split('\n');
-      let eventName = 'message';
-      let dataLine = '';
-      for (const line of lines) {
-        if (line.startsWith('event:')) eventName = line.slice(6).trim();
-        if (line.startsWith('data:')) dataLine += line.slice(5).trim();
-      }
+      const dataLine = chunk.split('\n').find((line) => line.startsWith('data: '));
       if (!dataLine) continue;
-      let parsed = {};
       try {
-        parsed = JSON.parse(dataLine);
+        const payload = JSON.parse(dataLine.slice(6));
+        lastPayload = payload;
+        onEvent?.(payload);
       } catch {
-        parsed = { raw: dataLine };
-      }
-      if (onEvent) onEvent(eventName, parsed);
-      if (eventName === 'complete') lastPayload = parsed;
-      if (eventName === 'error') {
-        const err = new Error(parsed.message || 'Interview stream failed');
-        err.payload = parsed;
-        err.busy = parsed.busy;
-        throw err;
+        // ignore malformed SSE chunks
       }
     }
   }

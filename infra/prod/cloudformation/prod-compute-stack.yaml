@@ -352,8 +352,12 @@ Outputs:
     Value: !GetAtt ApplicationLoadBalancer.DNSName
   AlbArn:
     Value: !Ref ApplicationLoadBalancer
+  LoadBalancerFullName:
+    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerFullName
   TargetGroupArn:
     Value: !Ref ApiTargetGroup
+  TargetGroupFullName:
+    Value: !GetAtt ApiTargetGroup.TargetGroupFullName
   AutoScalingGroupName:
     Value: !Ref ApiAutoScalingGroup
   ApiSecurityGroupId:

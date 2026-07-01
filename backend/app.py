@@ -14,11 +14,10 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
-import ipaddress
 import mimetypes
 from urllib.parse import urlencode
 
-from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context
+from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context, redirect, make_response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from PIL import Image, UnidentifiedImageError
@@ -29,7 +28,6 @@ import requests as http_requests
 
 # ── Environment ───────────────────────────────────────────────────────────────
 from common.runtime_config import load_runtime_config, optional_env, require_env, config_source
-from common.host_metrics import collect_linux_metrics, collect_via_ssh
 from common.lazy_deps import get_cv2, get_numpy, get_soundfile, get_pydub, get_mediapipe, get_inference_device
 from common.ttl_cache import cached
 
@@ -52,7 +50,14 @@ if SUPPORT_BOT_PATH not in sys.path:
     sys.path.append(SUPPORT_BOT_PATH)
 
 # ── Internal modules ──────────────────────────────────────────────────────────
-from common.auth import verify_auth_token, create_token, hash_password, check_password
+from common.auth import (
+    verify_auth_token,
+    verify_auth_token_allow_expired,
+    authenticate_socket_auth,
+    create_token,
+    hash_password,
+    check_password,
+)
 from common.db import query_one, query_all, execute, execute_many
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import (
@@ -70,7 +75,20 @@ from common.storage import (
     user_owns_storage_path,
     safe_storage_file_path,
     send_storage_file,
+    validated_legacy_upload_folder,
 )
+from common.canonical_url import (
+    canonical_redirect_url,
+    enforce_https_www,
+    is_local_dev,
+    normalize_public_origin,
+)
+from common.auth_cookies import (
+    clear_auth_cookie,
+    include_token_in_auth_body,
+    set_auth_cookie,
+)
+from common.service_hours import service_hours_status
 from common.rate_limit import rate_limit, user_rate_limit
 from common.session_store import load_session, save_session, delete_session, purge_old_sessions
 from common.interview_timer import (
@@ -123,40 +141,19 @@ DOMAIN = require_env("DOMAIN")
 
 
 def _build_cors_origins():
-    origins = {
-        DOMAIN.rstrip("/"),
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    }
-    frontend = optional_env("FRONTEND_DOMAIN", "").strip()
-    if frontend:
-        origins.add(f"https://{frontend}")
-        origins.add(f"http://{frontend}")
-    domain = DOMAIN.rstrip("/")
-    if domain.startswith("https://www."):
-        origins.add(domain.replace("https://www.", "https://", 1))
-    elif domain.startswith("http://www."):
-        origins.add(domain.replace("http://www.", "http://", 1))
-    elif domain.startswith("https://"):
-        origins.add(domain.replace("https://", "https://www.", 1))
-    elif domain.startswith("http://"):
-        origins.add(domain.replace("http://", "http://www.", 1))
+    origins = {normalize_public_origin()}
+    if is_local_dev():
+        origins.update({
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        })
     return sorted(origins)
 
 
 _CORS_ORIGINS = _build_cors_origins()
 EMAIL_VERIFICATION_TTL_HOURS = int(optional_env("EMAIL_VERIFICATION_TTL_HOURS", "24"))
-ADMIN_LOG_ROOT = os.path.abspath(optional_env("ADMIN_LOG_ROOT", "/apps/logs"))
-ADMIN_LIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_LIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "live")))
-ADMIN_ARCHIVE_LOG_DIR = os.path.abspath(optional_env("ADMIN_ARCHIVE_LOG_DIR", os.path.join(ADMIN_LOG_ROOT, "archive")))
-ADMIN_SERVER_LOG_DIR = os.path.abspath(os.path.join(ADMIN_LOG_ROOT, "server"))
-SERVER_LOG_CATEGORIES = ("DB", "FRONTEND", "BACKEND", "AI")
-ADMIN_METRICS_SNAPSHOT_FILE = os.path.abspath(
-    os.path.join(ADMIN_SERVER_LOG_DIR, "METRICS", "latest.json")
-)
-API_FAILURES_LOG_FILE = os.path.abspath(os.path.join(ADMIN_SERVER_LOG_DIR, "BACKEND", "api-failures.log"))
-DEPLOYMENT_LIVE_LOG_FILE = os.path.abspath(
-    optional_env("DEPLOYMENT_LIVE_LOG_FILE", os.path.join(ADMIN_LIVE_LOG_DIR, "deploy-current.log"))
+API_FAILURES_LOG_FILE = os.path.abspath(
+    optional_env("API_FAILURES_LOG_FILE", "/apps/logs/server/BACKEND/api-failures.log")
 )
 
 CORS(app,
@@ -174,7 +171,24 @@ def _bootstrap_app_once():
     _ensure_app_schemas_once()
 
 
+@app.before_request
+def _enforce_https_www():
+    if not enforce_https_www():
+        return None
+    target = canonical_redirect_url(
+        request.host,
+        request.headers.get("X-Forwarded-Proto", request.scheme),
+        request.path,
+        request.query_string,
+    )
+    if target:
+        return redirect(target, code=301)
+    return None
+
+
 def get_public_origin():
+    if enforce_https_www():
+        return normalize_public_origin()
     return require_env("DOMAIN").rstrip("/")
 
 
@@ -183,6 +197,16 @@ def build_public_url(path: str, **params):
     if not params:
         return base
     return f"{base}?{urlencode(params)}"
+
+
+def _issue_auth_response(body: dict, token: str | None, status: int = 200):
+    payload = dict(body)
+    if token and include_token_in_auth_body():
+        payload["token"] = token
+    resp = make_response(jsonify(payload), status)
+    if token:
+        set_auth_cookie(resp, token)
+    return resp
 
 
 def hash_verification_token(token: str) -> str:
@@ -427,6 +451,11 @@ def serialize_user(user):
     return payload
 
 
+def _allow_manual_auth_links():
+    """Only expose verification/reset links in API responses on local dev."""
+    return config_source() == "environment"
+
+
 def build_verification_payload(user, verification_link, delivery="email"):
     payload = {
         "verification_required": True,
@@ -469,7 +498,7 @@ def issue_email_verification(user, allow_manual_fallback=False):
         send_email("Verify your InterviewCoach account", user["email"], text_body, html_body)
         return build_verification_payload(user, verification_link, delivery="email")
 
-    if allow_manual_fallback:
+    if allow_manual_fallback and _allow_manual_auth_links():
         print(f"[WARN] SMTP not configured. Verification link for {user['email']}: {verification_link}")
         return build_verification_payload(user, verification_link, delivery="manual")
 
@@ -499,6 +528,7 @@ def _ensure_app_schemas_once():
 
 PUBLIC_DOC_ENDPOINTS = {
     "/api/health",
+    "/api/service-hours",
     "/api/signup",
     "/api/login",
     "/api/check-email",
@@ -749,11 +779,15 @@ def build_openapi_spec():
 
 @app.route('/api/openapi.json', methods=['GET'])
 def openapi_json():
+    if not _api_docs_enabled():
+        return jsonify({"error": "Not found"}), 404
     return jsonify(build_openapi_spec())
 
 
 @app.route('/api/docs', methods=['GET'])
 def swagger_ui():
+    if not _api_docs_enabled():
+        return jsonify({"error": "Not found"}), 404
     html = """
     <!doctype html>
     <html lang="en">
@@ -786,16 +820,15 @@ def swagger_ui():
     return render_template_string(html)
 
 
-DEFAULT_ADMIN_LOG_EMAILS = {
-    "govardhanr@moback.com",
-}
-DEFAULT_ADMIN_LOG_USERNAMES = {
-    "govardhan",
-}
 
 
-def _split_env_values(value: str):
-    return {item.strip().lower() for item in (value or "").split(",") if item.strip()}
+def _api_docs_enabled():
+    flag = optional_env("ENABLE_API_DOCS", "").lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return config_source() == "environment"
 
 
 def _extract_request_ip():
@@ -807,56 +840,14 @@ def _extract_request_ip():
     return (request.headers.get("X-Real-IP") or request.remote_addr or "").strip()
 
 
-def _ip_allowlist_entries():
-    raw = optional_env("ADMIN_LOG_IP_ALLOWLIST")
-    if not raw:
-        return []
-    entries = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            entries.append(ipaddress.ip_network(item, strict=False))
-        except ValueError:
-            pass
-    return entries
-
-
-def _is_allowed_ip(ip_text: str):
-    allowlist = _ip_allowlist_entries()
-    if not allowlist:
-        return True
-    try:
-        ip_obj = ipaddress.ip_address(ip_text)
-    except ValueError:
-        return False
-    return any(ip_obj in network for network in allowlist)
-
-
-def _get_admin_user_record(user_id):
-    return query_one(
-        "SELECT id, username, email, full_name, plan FROM users WHERE id=%s",
-        (user_id,),
-    )
-
-
-def _can_view_admin_logs(user):
+def _is_admin_user(user):
     if not user:
         return False
-    user_email = (user.get("email") or "").strip().lower()
-    user_plan = (user.get("plan") or "").strip().lower()
-    user_record = _get_admin_user_record(user.get("id"))
-    username = ((user_record or {}).get("username") or "").strip().lower()
-
-    allowed_emails = _split_env_values(optional_env("ADMIN_LOG_VIEWER_EMAILS")) or DEFAULT_ADMIN_LOG_EMAILS
-    allowed_usernames = _split_env_values(optional_env("ADMIN_LOG_VIEWER_USERNAMES")) or DEFAULT_ADMIN_LOG_USERNAMES
-
-    return (
-        user_plan == "admin"
-        or user_email in allowed_emails
-        or username in allowed_usernames
-    )
+    plan = (user.get("plan") or "").strip().lower()
+    if plan == "admin":
+        return True
+    record = query_one("SELECT plan FROM users WHERE id=%s", (user.get("id"),))
+    return ((record or {}).get("plan") or "").strip().lower() == "admin"
 
 
 def _redact_log_text(text: str):
@@ -867,153 +858,21 @@ def _redact_log_text(text: str):
     return redacted
 
 
-def _tail_text_file(path: str, line_count: int = 200):
-    if not os.path.exists(path):
-        return {"available": False, "path": path, "lines": []}
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        lines = handle.readlines()[-line_count:]
-    return {
-        "available": True,
-        "path": path,
-        "lines": [_redact_log_text(line.rstrip("\n")) for line in lines],
-    }
-
-
-def _database_log_snapshot():
-    summary = {
-        "connections": query_all(
-            """
-            SELECT state, count(*) AS total
-            FROM pg_stat_activity
-            WHERE datname = current_database()
-            GROUP BY state
-            ORDER BY state NULLS LAST
-            """
-        ),
-        "table_counts": {
-            "users": (query_one("SELECT count(*) AS total FROM users") or {}).get("total", 0),
-            "interviews": (query_one("SELECT count(*) AS total FROM interviews") or {}).get("total", 0),
-            "payments": (query_one("SELECT count(*) AS total FROM payments") or {}).get("total", 0),
-            "questions": (query_one("SELECT count(*) AS total FROM questions") or {}).get("total", 0),
-        },
-    }
-    lines = [
-        f"users={summary['table_counts']['users']}",
-        f"interviews={summary['table_counts']['interviews']}",
-        f"payments={summary['table_counts']['payments']}",
-        f"questions={summary['table_counts']['questions']}",
-    ]
-    for row in summary["connections"]:
-        lines.append(f"connections[{row.get('state') or 'unknown'}]={row.get('total')}")
-    return {
-        "available": True,
-        "path": "database diagnostics",
-        "lines": lines,
-        "summary": summary,
-    }
-
-
-def _ensure_server_log_dirs():
+def _ensure_api_failure_log_dir():
     global _server_log_dirs_ready
     if _server_log_dirs_ready:
         return
-    for category in SERVER_LOG_CATEGORIES:
-        os.makedirs(os.path.join(ADMIN_SERVER_LOG_DIR, category), exist_ok=True)
+    os.makedirs(os.path.dirname(API_FAILURES_LOG_FILE), exist_ok=True)
     _server_log_dirs_ready = True
-
-
-def _server_category_path(category: str, filename: str = ""):
-    base = os.path.join(ADMIN_SERVER_LOG_DIR, category)
-    return os.path.join(base, filename) if filename else base
-
-
-def _newest_server_log_file(category: str):
-    directory = _server_category_path(category)
-    if not os.path.isdir(directory):
-        return None
-    candidates = []
-    for filename in os.listdir(directory):
-        if not filename.endswith((".log", ".txt")):
-            continue
-        absolute_path = os.path.join(directory, filename)
-        if os.path.isfile(absolute_path):
-            candidates.append(absolute_path)
-    if not candidates:
-        return None
-    return max(candidates, key=os.path.getmtime)
-
-
-def _tail_server_log(category: str, preferred_names: tuple, line_count: int):
-    for filename in preferred_names:
-        path = _server_category_path(category, filename)
-        result = _tail_text_file(path, line_count)
-        if result["available"]:
-            result["server_category"] = category
-            return result
-
-    newest_path = _newest_server_log_file(category)
-    if newest_path:
-        result = _tail_text_file(newest_path, line_count)
-        result["server_category"] = category
-        return result
-
-    directory = _server_category_path(category)
-    return {
-        "available": False,
-        "path": directory,
-        "lines": [],
-        "server_category": category,
-    }
-
-
-def _persist_database_server_log():
-    snapshot = _database_log_snapshot()
-    _ensure_server_log_dirs()
-    target_path = _server_category_path("DB", "db-snapshot.log")
-    timestamp = datetime.utcnow().isoformat() + "Z"
-    with open(target_path, "w", encoding="utf-8") as handle:
-        handle.write(f"# snapshot_at={timestamp}\n")
-        for line in snapshot.get("lines", []):
-            handle.write(f"{line}\n")
-    return target_path
-
-
-def _database_server_log_snapshot(line_count: int = 200):
-    path = _server_category_path("DB", "db-snapshot.log")
-    if not os.path.exists(path):
-        try:
-            path = _persist_database_server_log()
-        except Exception as exc:
-            return {
-                "available": False,
-                "path": path,
-                "lines": [f"database snapshot unavailable: {exc}"],
-                "server_category": "DB",
-            }
-    result = _tail_text_file(path, line_count)
-    result["server_category"] = "DB"
-    return result
-
-
-def _tail_with_server_fallback(category: str, preferred_names: tuple, legacy_path: str, line_count: int):
-    server_result = _tail_server_log(category, preferred_names, line_count)
-    if server_result.get("available"):
-        return server_result
-    legacy_result = _tail_text_file(legacy_path, line_count)
-    legacy_result["server_category"] = category
-    return legacy_result
 
 
 def _append_api_failure_line(status_code: int, detail: str = ""):
     if request.path.startswith((
-        "/logs/",
-        "/api/admin/logs",
-        "/api/admin/metrics",
         "/api/docs",
         "/api/openapi.json",
     )):
         return
-    _ensure_server_log_dirs()
+    _ensure_api_failure_log_dir()
     timestamp = datetime.utcnow().isoformat() + "Z"
     query_string = request.query_string.decode("utf-8", errors="replace") if request.query_string else ""
     line = (
@@ -1029,476 +888,16 @@ def _append_api_failure_line(status_code: int, detail: str = ""):
         handle.write(line)
 
 
-def _admin_log_sources(line_count: int):
-    pm2_error = "/home/ubuntu/.pm2/logs/backend-error.log"
-    pm2_out = "/home/ubuntu/.pm2/logs/backend-out.log"
-    legacy_frontend = os.path.join(ADMIN_LIVE_LOG_DIR, "frontend-nginx.log")
-
-    return {
-        "deployment-live": {
-            "resolver": lambda: _tail_text_file(DEPLOYMENT_LIVE_LOG_FILE, line_count),
-            "path": DEPLOYMENT_LIVE_LOG_FILE,
-            "live_supported": True,
-            "server_category": None,
-        },
-        "api-failures": {
-            "resolver": lambda: _tail_text_file(API_FAILURES_LOG_FILE, line_count),
-            "path": API_FAILURES_LOG_FILE,
-            "live_supported": True,
-            "server_category": "BACKEND",
-        },
-        "server-backend": {
-            "resolver": lambda: _tail_server_log(
-                "BACKEND",
-                ("backend-error.log", "backend-out.log", "gunicorn-error.log", "gunicorn-access.log"),
-                line_count,
-            ),
-            "path": _server_category_path("BACKEND"),
-            "live_supported": True,
-            "server_category": "BACKEND",
-        },
-        "server-frontend": {
-            "resolver": lambda: _tail_server_log(
-                "FRONTEND",
-                ("nginx-access.log", "nginx-error.log", "frontend-nginx.log"),
-                line_count,
-            ),
-            "path": _server_category_path("FRONTEND"),
-            "live_supported": True,
-            "server_category": "FRONTEND",
-        },
-        "server-ai": {
-            "resolver": lambda: _tail_server_log(
-                "AI",
-                ("ollama-journal.log", "nginx-access.log", "nginx-error.log"),
-                line_count,
-            ),
-            "path": _server_category_path("AI"),
-            "live_supported": True,
-            "server_category": "AI",
-        },
-        "server-db": {
-            "resolver": lambda: _database_server_log_snapshot(line_count),
-            "path": _server_category_path("DB", "db-snapshot.log"),
-            "live_supported": False,
-            "server_category": "DB",
-        },
-        "backend-error": {
-            "resolver": lambda: _tail_with_server_fallback(
-                "BACKEND",
-                ("backend-error.log",),
-                pm2_error,
-                line_count,
-            ),
-            "path": pm2_error,
-            "live_supported": True,
-            "server_category": "BACKEND",
-        },
-        "backend-out": {
-            "resolver": lambda: _tail_with_server_fallback(
-                "BACKEND",
-                ("backend-out.log",),
-                pm2_out,
-                line_count,
-            ),
-            "path": pm2_out,
-            "live_supported": True,
-            "server_category": "BACKEND",
-        },
-        "frontend-access": {
-            "resolver": lambda: _tail_with_server_fallback(
-                "FRONTEND",
-                ("nginx-access.log", "frontend-nginx.log"),
-                legacy_frontend,
-                line_count,
-            ),
-            "path": legacy_frontend,
-            "live_supported": True,
-            "server_category": "FRONTEND",
-        },
-        "database": {
-            "resolver": _database_log_snapshot,
-            "path": "database diagnostics",
-            "live_supported": False,
-            "server_category": "DB",
-        },
-        "ai-diagnostics": {
-            "resolver": _ollama_diagnostic_snapshot,
-            "path": "AI diagnostics",
-            "live_supported": False,
-            "server_category": "AI",
-        },
-    }
-
-
-def _resolve_log_stream_path(source_config):
-    path = source_config.get("path")
-    if path and os.path.isfile(path):
-        return path
-
-    category = source_config.get("server_category")
-    if category:
-        newest = _newest_server_log_file(category)
-        if newest:
-            return newest
-    return None
-
-
-def _admin_log_http_urls(source: str):
-    return {
-        "live_url": build_public_url("/admin/logs", view="live", source=source),
-        "folder_url": build_public_url("/admin/logs", view="files"),
-        "files_api_url": build_public_url("/api/admin/logs/files"),
-        "http_logs_index": build_public_url("/logs/"),
-        "http_logs_api": build_public_url(f"/logs/api/{source}"),
-        "http_logs_file": build_public_url("/logs/files/live/deploy-current.log"),
-        "server_log_root": build_public_url("/api/admin/logs/files/server/"),
-    }
-
-
-PUBLIC_HTTP_LOG_PREFIXES = (
-    "live/deploy",
-    "archive/",
-)
-
-
-def _is_public_http_log_path(relative_path: str) -> bool:
-    normalized = relative_path.replace("\\", "/").strip("/")
-    if normalized == "live/deploy-current.log":
-        return True
-    return any(normalized.startswith(prefix) for prefix in PUBLIC_HTTP_LOG_PREFIXES)
-
-
-def _logs_hub_urls():
-    return {
-        "index_url": build_public_url("/logs/"),
-        "live_page_url": build_public_url("/logs/live.html"),
-        "deployment_file_url": build_public_url("/logs/files/live/deploy-current.log"),
-        "api_base_url": build_public_url("/logs/api"),
-        "admin_url": build_public_url("/admin/logs"),
-        "server_categories": list(SERVER_LOG_CATEGORIES),
-        "server_log_root": ADMIN_SERVER_LOG_DIR,
-    }
-
-
-def _verify_admin_log_access():
-    client_ip = _extract_request_ip()
-    if not _is_allowed_ip(client_ip):
-        return None, (jsonify({"error": "IP not allowed for admin logs", "client_ip": client_ip}), 403)
-    if not _can_view_admin_logs(request.user):
-        return None, (jsonify({"error": "Admin access required"}), 403)
-    return client_ip, None
-
-
-def _metrics_ssh_key_path():
-    candidates = [
-        optional_env("ADMIN_METRICS_SSH_KEY", ""),
-        os.path.expanduser("~/.ssh/interviewcoach-deploy.pem"),
-    ]
-    for candidate in candidates:
-        if candidate and os.path.isfile(candidate):
-            return candidate
-    return ""
-
-
-def _collect_database_metrics():
-    snapshot = {
-        "role": "DB",
-        "host": optional_env("DB_HOST", "rds"),
-        "available": False,
-        "note": "RDS CPU/RAM require CloudWatch; showing connection stats only.",
-    }
-    try:
-        rows = query_all(
-            """
-            SELECT coalesce(state, 'unknown') AS state, count(*)::int AS total
-            FROM pg_stat_activity
-            WHERE datname = current_database()
-            GROUP BY state
-            ORDER BY state
-            """
-        ) or []
-        snapshot["available"] = True
-        snapshot["connections"] = [dict(row) for row in rows]
-        snapshot["connection_total"] = sum(row.get("total", 0) for row in snapshot["connections"])
-        size_row = query_one(
-            "SELECT pg_database_size(current_database())::bigint AS size_bytes"
-        )
-        if size_row:
-            snapshot["database_size_bytes"] = int(size_row.get("size_bytes") or 0)
-    except Exception as exc:
-        snapshot["error"] = str(exc)[:300]
-    snapshot["collected_at"] = datetime.utcnow().isoformat() + "Z"
-    return snapshot
-
-
-def _collect_admin_server_metrics():
-    hosts = []
-    backend_label = optional_env("API_PUBLIC_IP", "") or optional_env("BACKEND_HOST", "api")
-    hosts.append(collect_linux_metrics("BACKEND", backend_label))
-
-    ssh_key = _metrics_ssh_key_path()
-    ssh_user = optional_env("ADMIN_METRICS_SSH_USER", "ubuntu")
-    frontend_ip = (optional_env("FRONTEND_PUBLIC_IP", "") or optional_env("FRONTEND_HOST", "")).strip()
-    ai_ip = (optional_env("AI_PUBLIC_IP", "") or optional_env("AI_HOST", "")).strip()
-
-    if frontend_ip and ssh_key:
-        hosts.append(collect_via_ssh("FRONTEND", frontend_ip, ssh_key, ssh_user))
-    else:
-        hosts.append({
-            "role": "FRONTEND",
-            "host": frontend_ip or "unset",
-            "available": False,
-            "error": "FRONTEND_PUBLIC_IP or SSH key not configured",
-        })
-
-    if ai_ip and ssh_key:
-        hosts.append(collect_via_ssh("AI", ai_ip, ssh_key, ssh_user))
-    else:
-        hosts.append({
-            "role": "AI",
-            "host": ai_ip or "unset",
-            "available": False,
-            "error": "AI_PUBLIC_IP or SSH key not configured",
-        })
-
-    hosts.append(_collect_database_metrics())
-
-    payload = {
-        "collected_at": datetime.utcnow().isoformat() + "Z",
-        "hosts": hosts,
-    }
-
-    try:
-        os.makedirs(os.path.dirname(ADMIN_METRICS_SNAPSHOT_FILE), exist_ok=True)
-        with open(ADMIN_METRICS_SNAPSHOT_FILE, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
-    except OSError as exc:
-        payload["snapshot_warning"] = f"Could not persist metrics snapshot: {exc}"
-
-    return payload
-
-
-def _stream_text_file(path: str):
-    if not os.path.exists(path):
-        return None
-
-    def generate():
-        keepalive_started_at = time.time()
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            handle.seek(0, os.SEEK_END)
-            yield json.dumps({
-                "type": "meta",
-                "path": path,
-                "timestamp": datetime.utcnow().isoformat(),
-            }) + "\n"
-
-            while True:
-                line = handle.readline()
-                if line:
-                    keepalive_started_at = time.time()
-                    yield json.dumps({
-                        "type": "line",
-                        "line": _redact_log_text(line.rstrip("\n")),
-                    }) + "\n"
-                    continue
-
-                try:
-                    if os.path.getsize(path) < handle.tell():
-                        handle.seek(0)
-                except OSError:
-                    pass
-
-                if time.time() - keepalive_started_at >= 10:
-                    keepalive_started_at = time.time()
-                    yield json.dumps({
-                        "type": "keepalive",
-                        "timestamp": datetime.utcnow().isoformat(),
-                    }) + "\n"
-
-                time.sleep(1)
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="application/x-ndjson",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-def _relative_log_path(root_path: str, absolute_path: str):
-    root_real = os.path.realpath(root_path)
-    absolute_real = os.path.realpath(absolute_path)
-    if absolute_real == root_real:
-        return "."
-    if not absolute_real.startswith(f"{root_real}{os.sep}"):
-        raise ValueError("Path is outside the allowed log root.")
-    return os.path.relpath(absolute_real, root_real)
-
-
-def _safe_log_file_path(relative_path: str):
-    candidate = os.path.realpath(os.path.join(ADMIN_LOG_ROOT, relative_path))
-    root_real = os.path.realpath(ADMIN_LOG_ROOT)
-    if candidate == root_real or not candidate.startswith(f"{root_real}{os.sep}"):
-        return None
-    if not os.path.isfile(candidate):
-        return None
-    return candidate
-
-
-def _list_admin_log_files(limit: int = 200):
-    entries = []
-    if not os.path.isdir(ADMIN_LOG_ROOT):
-        return entries
-
-    for root, _, files in os.walk(ADMIN_LOG_ROOT):
-        for filename in files:
-            absolute_path = os.path.join(root, filename)
-            try:
-                stat_result = os.stat(absolute_path)
-                relative_path = _relative_log_path(ADMIN_LOG_ROOT, absolute_path)
-            except (OSError, ValueError):
-                continue
-
-            if absolute_path.startswith(ADMIN_ARCHIVE_LOG_DIR):
-                category = "archive"
-            elif absolute_path.startswith(ADMIN_SERVER_LOG_DIR):
-                category = "server"
-            else:
-                category = "live"
-            entries.append({
-                "name": filename,
-                "relative_path": relative_path,
-                "category": category,
-                "server_category": next(
-                    (item for item in SERVER_LOG_CATEGORIES if f"server/{item}/" in relative_path.replace("\\", "/")),
-                    None,
-                ),
-                "size_bytes": stat_result.st_size,
-                "modified_at": datetime.utcfromtimestamp(stat_result.st_mtime).isoformat() + "Z",
-                "download_url": build_public_url(f"/api/admin/logs/files/{relative_path}"),
-            })
-
-    entries.sort(key=lambda item: item["modified_at"], reverse=True)
-    return entries[:limit]
-
-
-@app.route('/logs/api', methods=['GET'])
-def logs_api_index():
-    return jsonify({
-        "success": True,
-        "data": {
-            "sources": sorted(_admin_log_sources(1).keys()),
-            **_logs_hub_urls(),
-            "usage": "GET /logs/api/<source> with Authorization: Bearer <token>",
-        },
-    })
-
-
-@app.route('/logs/api/<source>', methods=['GET'])
-@verify_auth_token
-def logs_api_source(source):
-    client_ip, error_response = _verify_admin_log_access()
-    if error_response:
-        return error_response
-
-    line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
-    sources = _admin_log_sources(line_count)
-    source_config = sources.get(source.strip().lower())
-    if not source_config:
-        return jsonify({
-            "error": "Unknown log source",
-            "available_sources": sorted(sources.keys()),
-        }), 400
-
-    payload = source_config["resolver"]()
-    payload.update({
-        "source": source,
-        "live_supported": source_config.get("live_supported", False),
-        "requested_by": request.user.get("email"),
-        "client_ip": client_ip,
-        **_admin_log_http_urls(source),
-    })
-    return jsonify({"success": True, "data": payload})
-
-
-@app.route('/logs/files/<path:relative_path>', methods=['GET'])
-def logs_http_files(relative_path):
-    if not _is_public_http_log_path(relative_path):
-        return jsonify({
-            "error": "This log path requires admin access.",
-            "admin_files_api": build_public_url("/api/admin/logs/files"),
-        }), 403
-
-    file_path = _safe_log_file_path(relative_path)
-    if not file_path:
-        return jsonify({"error": "Log file not found."}), 404
-
-    directory = os.path.dirname(file_path)
-    filename = os.path.basename(file_path)
-    return send_from_directory(directory, filename, as_attachment=False)
-
-
-@app.route('/api/admin/logs', methods=['GET'])
-@verify_auth_token
-def admin_logs():
-    client_ip, error_response = _verify_admin_log_access()
-    if error_response:
-        return error_response
-
-    source = (request.args.get("source") or "backend-error").strip().lower()
-    line_count = min(max(int(request.args.get("lines", 200)), 20), 500)
-    sources = _admin_log_sources(line_count)
-    source_config = sources.get(source)
-    if not source_config:
-        return jsonify({
-            "error": "Unknown log source",
-            "available_sources": sorted(sources.keys()),
-        }), 400
-
-    payload = source_config["resolver"]()
-    payload.update({
-        "source": source,
-        "live_supported": source_config.get("live_supported", False),
-        "requested_by": request.user.get("email"),
-        "client_ip": client_ip,
-        **_admin_log_http_urls(source),
-    })
-    return jsonify({"success": True, "data": payload})
-
-
-@app.route('/api/admin/logs/stream', methods=['GET'])
-@verify_auth_token
-def admin_logs_stream():
-    client_ip, error_response = _verify_admin_log_access()
-    if error_response:
-        return error_response
-
-    source = (request.args.get("source") or "backend-error").strip().lower()
-    sources = _admin_log_sources(200)
-    source_config = sources.get(source)
-    if not source_config:
-        return jsonify({
-            "error": "Unknown log source",
-            "available_sources": sorted(sources.keys()),
-        }), 400
-
-    if not source_config.get("live_supported"):
-        return jsonify({"error": "Selected log source does not support live streaming."}), 400
-
-    stream_path = _resolve_log_stream_path(source_config)
-    response = _stream_text_file(stream_path) if stream_path else None
-    if response is None:
-        return jsonify({
-            "error": "Log file is not available yet.",
-            "source": source,
-            "client_ip": client_ip,
-        }), 404
-    return response
-
-
 @app.after_request
 def _record_api_failure_response(response):
     try:
+        if enforce_https_www():
+            forwarded = (request.headers.get("X-Forwarded-Proto") or request.scheme or "").lower()
+            if forwarded == "https" or request.scheme == "https":
+                response.headers.setdefault(
+                    "Strict-Transport-Security",
+                    "max-age=31536000; includeSubDomains; preload",
+                )
         if request.path.startswith("/api/") and response.status_code >= 400:
             detail = ""
             if hasattr(response, "get_json"):
@@ -1517,56 +916,6 @@ def _log_unhandled_api_exception(exc):
     if request.path.startswith("/api/"):
         _append_api_failure_line(500, detail=str(exc))
     raise exc
-
-
-@app.route('/api/admin/metrics', methods=['GET'])
-@verify_auth_token
-def admin_metrics():
-    client_ip, error_response = _verify_admin_log_access()
-    if error_response:
-        return error_response
-
-    return jsonify({
-        "success": True,
-        "data": _collect_admin_server_metrics(),
-        "requested_by": request.user.get("email"),
-        "client_ip": client_ip,
-    })
-
-
-@app.route('/api/admin/logs/files', methods=['GET'])
-@verify_auth_token
-def admin_log_files():
-    client_ip, error_response = _verify_admin_log_access()
-    if error_response:
-        return error_response
-
-    return jsonify({
-        "success": True,
-        "data": {
-            "root_path": ADMIN_LOG_ROOT,
-            "requested_by": request.user.get("email"),
-            "client_ip": client_ip,
-            "folder_url": build_public_url("/admin/logs", view="files"),
-            "files": _list_admin_log_files(),
-        },
-    })
-
-
-@app.route('/api/admin/logs/files/<path:relative_path>', methods=['GET'])
-@verify_auth_token
-def admin_log_file_download(relative_path):
-    _, error_response = _verify_admin_log_access()
-    if error_response:
-        return error_response
-
-    file_path = _safe_log_file_path(relative_path)
-    if not file_path:
-        return jsonify({"error": "Log file not found."}), 404
-
-    directory = os.path.dirname(file_path)
-    filename = os.path.basename(file_path)
-    return send_from_directory(directory, filename, as_attachment=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1867,7 +1216,12 @@ def health_check():
             "secret_id": optional_env("AWS_SECRETS_MANAGER_SECRET_ID") or os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", ""),
         },
         "services": services,
-    }), 200
+    })
+
+
+@app.route('/api/service-hours', methods=['GET'])
+def service_hours():
+    return jsonify({"success": True, "data": service_hours_status()}), 200
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (
@@ -2214,13 +1568,11 @@ def login():
             "email": user['email'],
         }), 403
     token = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
-    return jsonify({
-        "token": token,
-        "user": serialize_user(user)
-    })
+    return _issue_auth_response({"user": serialize_user(user)}, token)
 
 
 @app.route('/api/check-email', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=20, window_seconds=60)
 def check_email():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2231,6 +1583,7 @@ def check_email():
 
 
 @app.route('/api/check-username', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=20, window_seconds=60)
 def check_username():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2244,6 +1597,7 @@ def check_username():
 
 
 @app.route('/api/resend-verification', methods=['POST', 'OPTIONS'])
+@rate_limit(max_calls=5, window_seconds=300)
 def resend_verification():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2259,7 +1613,9 @@ def resend_verification():
         (email,),
     )
     if not user:
-        return jsonify({"error": "Account not found"}), 404
+        return jsonify({
+            "message": "If an account exists, a verification email has been sent.",
+        }), 200
     if user.get('email_verified_at'):
         return jsonify({"message": "Email already verified"}), 200
     try:
@@ -2298,11 +1654,10 @@ def verify_email():
         (record['user_id'],),
     )
     token_value = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
-    return jsonify({
+    return _issue_auth_response({
         "message": "Email verified successfully.",
-        "token": token_value,
         "user": serialize_user(user),
-    }), 200
+    }, token_value)
 
 
 @app.route('/api/me', methods=['GET'])
@@ -3515,7 +2870,9 @@ _DANGER_PATTERNS = _re.compile(
     r'(import\s+os|import\s+subprocess|import\s+sys|'
     r'__import__|open\s*\(|exec\s*\(|eval\s*\(|'
     r'shutil|socket|requests|urllib|http\.client|'
-    r'importlib|ctypes|threading|multiprocessing)',
+    r'importlib|ctypes|threading|multiprocessing|'
+    r'require\s*\(\s*[\'"]child_process|require\s*\(\s*[\'"]fs|'
+    r'require\s*\(\s*[\'"]net|process\.|global\.|Function\s*\()',
     _re.IGNORECASE
 )
 
@@ -3523,7 +2880,7 @@ _DANGER_PATTERNS = _re.compile(
 def _run_code(cmd, code, suffix, timeout=8):
     if len(code) > _CODE_SIZE_LIMIT:
         return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
-    if _DANGER_PATTERNS.search(code) and suffix == '.py':
+    if _DANGER_PATTERNS.search(code):
         return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
     with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
         f.write(code)
@@ -3557,21 +2914,39 @@ def execute_code():
     language = data.get('language', 'python').lower()
     if not code:
         return jsonify({"success": False, "message": "No code provided"}), 400
+    if language == 'javascript':
+        return jsonify({
+            "success": False,
+            "message": "JavaScript execution is disabled for security reasons",
+        }), 400
     try:
         if language == 'python':
             return _run_code(['python3'], code, '.py')
-        elif language == 'javascript':
-            return _run_code(['node'], code, '.js')
         elif language == 'java':
             with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as f:
                 f.write(code); path = f.name
             try:
-                c = subprocess.run(['javac', path], capture_output=True, text=True, timeout=10)
+                if _DANGER_PATTERNS.search(code):
+                    return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
+                c = subprocess.run(
+                    ['javac', path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    preexec_fn=_sandbox_preexec,
+                    env={"PATH": "/usr/bin:/usr/local/bin"},
+                )
                 if c.returncode != 0:
                     return jsonify({"success": True, "data": {"output": "", "error": c.stderr}})
                 cls = os.path.splitext(os.path.basename(path))[0]
-                r = subprocess.run(['java', '-cp', os.path.dirname(path), cls],
-                                   capture_output=True, text=True, timeout=10)
+                r = subprocess.run(
+                    ['java', '-cp', os.path.dirname(path), cls],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    preexec_fn=_sandbox_preexec,
+                    env={"PATH": "/usr/bin:/usr/local/bin"},
+                )
                 return jsonify({"success": True, "data": {"output": r.stdout, "error": r.stderr or None}})
             except subprocess.TimeoutExpired:
                 return jsonify({"success": False, "message": "Timed out"}), 408
@@ -3587,22 +2962,44 @@ def execute_code():
 #  HEAD TRACKING SOCKETIO
 # ─────────────────────────────────────────────────────────────────────────────
 
+_socket_users = {}
+
+
 @socketio.on('connect')
-def handle_connect():
+def handle_connect(auth):
+    user = authenticate_socket_auth(auth)
+    if not user:
+        return False
+    from flask import request as flask_request
+    _socket_users[flask_request.sid] = user
     emit('response', {'message': 'Connected to head tracking'})
+
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    from flask import request
+    from flask import request as flask_request
 
-    sid = getattr(request, "sid", None)
+    sid = getattr(flask_request, "sid", None)
     if sid:
+        _socket_users.pop(sid, None)
         with detector_lock:
             _detectors_by_sid.pop(sid, None)
     print('Client disconnected')
 
+
+def _require_socket_user():
+    from flask import request as flask_request
+    sid = getattr(flask_request, "sid", None)
+    if not sid or sid not in _socket_users:
+        emit("response", {"error": "Unauthorized"})
+        return None
+    return _socket_users[sid]
+
+
 @socketio.on('frame')
 def handle_frame(data):
+    if not _require_socket_user():
+        return
     try:
         img_data = data.get("image")
         calibrate = data.get("calibrate", False)
@@ -3624,6 +3021,8 @@ def handle_frame(data):
 
 @socketio.on('reset_calibration')
 def handle_reset_calibration():
+    if not _require_socket_user():
+        return
     try:
         detector_instance = get_head_tracking_detector()
         if detector_instance is None:
@@ -4167,9 +3566,16 @@ def legacy_upload_file():
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': 'No file uploaded'}), 400
     file = request.files['file']
-    folder = (request.form.get('folder') or 'general').strip('/')
+    folder = validated_legacy_upload_folder(request.user['id'], request.form.get('folder'))
+    if not folder:
+        return jsonify({'success': False, 'error': 'Invalid upload folder'}), 400
     filename = secure_filename(file.filename)
-    result = save_bytes(file.read(), folder, filename)
+    if not filename:
+        return jsonify({'success': False, 'error': 'Invalid filename'}), 400
+    try:
+        result = save_bytes(file.read(), folder, filename)
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
     return jsonify({'success': True, 'data': result})
 
 
@@ -4408,7 +3814,7 @@ def legacy_support_bot_data():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/api/refresh-token', methods=['POST', 'OPTIONS'])
-@verify_auth_token
+@verify_auth_token_allow_expired
 def refresh_token():
     """Issue a fresh JWT for an already-authenticated user."""
     if request.method == 'OPTIONS':
@@ -4420,7 +3826,16 @@ def refresh_token():
     if not user:
         return jsonify({'error': 'User not found'}), 404
     token = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
-    return jsonify({'token': token, 'user': serialize_user(user)})
+    return _issue_auth_response({"user": serialize_user(user)}, token)
+
+
+@app.route('/api/logout', methods=['POST', 'OPTIONS'])
+def logout():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    resp = make_response(jsonify({'message': 'Logged out'}), 200)
+    clear_auth_cookie(resp)
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4473,13 +3888,17 @@ def forgot_password():
                 'message': 'If an account exists, a reset link has been sent.',
                 'delivery': 'email',
             }), 200
-        else:
+        if _allow_manual_auth_links():
             print(f"[WARN] SMTP not configured. Reset link for {user['email']}: {reset_link}")
             return jsonify({
                 'message': 'SMTP is not configured, so use the reset link shown below.',
                 'delivery': 'manual',
                 'reset_link': reset_link,
             }), 200
+        return jsonify({
+            'message': 'If an account exists, a reset link has been sent.',
+            'delivery': 'email',
+        }), 200
     except Exception as e:
         print(f"[ERROR] forgot_password: {e}")
     return jsonify({'message': 'If an account exists, a reset link has been sent.'}), 200
@@ -4560,7 +3979,7 @@ def reset_password():
         (hash_password(new_password), record['user_id'])
     )
     new_token = create_token(str(record['user_id']), record['email'], record['full_name'], record['plan'])
-    return jsonify({'message': 'Password updated successfully.', 'token': new_token})
+    return _issue_auth_response({'message': 'Password updated successfully.'}, new_token)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4610,7 +4029,8 @@ def interview_history():
     offset = (page - 1) * limit
 
     total_row = query_one(
-        "SELECT COUNT(*) AS cnt FROM interviews WHERE user_id=%s AND status='ENDED'", (user_id,)
+        "SELECT COUNT(*) AS cnt FROM interviews WHERE user_id=%s AND status IN ('ENDED', 'completed')",
+        (user_id,),
     )
     total = int(total_row['cnt']) if total_row else 0
 
@@ -4622,7 +4042,7 @@ def interview_history():
         FROM interviews i
         LEFT JOIN job_descriptions jd ON jd.id = i.jd_id
         LEFT JOIN interview_feedback f ON f.interview_id = i.id
-        WHERE i.user_id=%s AND i.status='ENDED'
+        WHERE i.user_id=%s AND i.status IN ('ENDED', 'completed')
         ORDER BY i.scheduled_at DESC
         LIMIT %s OFFSET %s
         """,
@@ -4646,7 +4066,7 @@ def interview_history():
 @verify_auth_token
 def admin_purge_sessions():
     """Purge stale interview sessions older than N hours (admin only)."""
-    if not _can_view_admin_logs(query_one('SELECT * FROM users WHERE id=%s', (request.user['id'],))):
+    if not _is_admin_user(request.user):
         return jsonify({'error': 'Forbidden'}), 403
     hours = int((request.get_json() or {}).get('hours', 24))
     purge_old_sessions(hours)

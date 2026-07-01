@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io } from 'socket.io-client';
+import { getAccessToken } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const FRAME_INTERVAL_MS = 333;
@@ -132,6 +133,7 @@ export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => 
       return;
     }
 
+    const token = getAccessToken();
     const socket = io(getBackendOrigin() || window.location.origin, {
       transports: ['websocket', 'polling'],
       path: '/socket.io',
@@ -140,6 +142,8 @@ export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => 
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
+      withCredentials: true,
+      auth: token ? { token } : {},
     });
 
     socket.on('connect', () => {

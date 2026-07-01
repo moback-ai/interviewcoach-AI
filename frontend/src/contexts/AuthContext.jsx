@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react';
 import {
   clearStoredAuth,
-  getAccessToken,
+  fetchCurrentUser,
   getStoredUser,
   signIn,
   signOut,
@@ -20,22 +20,45 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Load user from localStorage on mount
   useEffect(() => {
-    const storedUser = getStoredUser();
-    const token = getAccessToken();
-    if (storedUser && !token) {
-      clearStoredAuth();
-      setUser(null);
-    } else if (storedUser && token) {
-      setUser(storedUser);
-    }
-    setLoading(false);
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      const cachedUser = getStoredUser();
+      if (cachedUser) {
+        setUser(cachedUser);
+      }
+
+      try {
+        const liveUser = await fetchCurrentUser();
+        if (cancelled) return;
+        if (liveUser) {
+          setUser(liveUser);
+        } else {
+          clearStoredAuth();
+          setUser(null);
+        }
+      } catch {
+        if (!cancelled && !cachedUser) {
+          clearStoredAuth();
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const signup = async (username, email, password, full_name = '') => {
     const data = await signUp({ username, email, password, fullName: full_name });
-    if (data.user && data.token) {
+    if (data.user) {
       setUser(data.user);
     } else {
       setUser(null);
@@ -67,8 +90,6 @@ export const AuthProvider = ({ children }) => {
     window.location.href = '/login';
   };
 
-  const getToken = () => getAccessToken();
-
   const updateProfile = async (payload) => {
     const nextUser = await updateCurrentUser(payload);
     setUser(nextUser);
@@ -84,7 +105,6 @@ export const AuthProvider = ({ children }) => {
     confirmEmail,
     resendVerificationEmail,
     logout,
-    getToken,
     updateProfile,
     apiBase: API_BASE,
   }), [user, loading]);
