@@ -46,15 +46,51 @@ NEW_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/bump-launch-template-image.py" \
   "$REGION" "$LT_ID" "$ECR_REGISTRY" "$IMAGE_TAG")
 echo "Created launch template version $NEW_LT_VERSION"
 
+PATCHED_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/patch-launch-template-docker-logs.py" \
+  "$REGION" "$LT_ID" 2>/dev/null || echo "$NEW_LT_VERSION")
+if [[ "$PATCHED_LT_VERSION" != "$NEW_LT_VERSION" ]]; then
+  echo "Patched launch template docker logging → version $PATCHED_LT_VERSION"
+fi
+
 aws autoscaling update-auto-scaling-group \
   --region "$REGION" \
   --auto-scaling-group-name "$ASG" \
   --launch-template "LaunchTemplateId=${LT_ID},Version=\$Latest"
 
+ACTIVE_REFRESH=$(aws autoscaling describe-instance-refreshes \
+  --region "$REGION" \
+  --auto-scaling-group-name "$ASG" \
+  --query 'InstanceRefreshes[?Status==`InProgress`].InstanceRefreshId | [0]' \
+  --output text 2>/dev/null || echo "None")
+if [[ -n "$ACTIVE_REFRESH" && "$ACTIVE_REFRESH" != "None" ]]; then
+  echo "Cancelling stuck instance refresh $ACTIVE_REFRESH (required before new rollout) ..."
+  aws autoscaling cancel-instance-refresh \
+    --region "$REGION" \
+    --auto-scaling-group-name "$ASG"
+  for _ in $(seq 1 40); do
+    BLOCKING=$(aws autoscaling describe-instance-refreshes \
+      --region "$REGION" \
+      --auto-scaling-group-name "$ASG" \
+      --query 'InstanceRefreshes[?Status==`InProgress` || Status==`Cancelling` || Status==`Pending`].InstanceRefreshId | [0]' \
+      --output text 2>/dev/null || echo "None")
+    if [[ -z "$BLOCKING" || "$BLOCKING" == "None" ]]; then
+      echo "Prior refresh cleared — continuing rollout"
+      break
+    fi
+    ST=$(aws autoscaling describe-instance-refreshes \
+      --region "$REGION" \
+      --auto-scaling-group-name "$ASG" \
+      --instance-refresh-ids "$BLOCKING" \
+      --query 'InstanceRefreshes[0].Status' --output text 2>/dev/null || echo "unknown")
+    echo "Waiting for refresh $BLOCKING to clear (status: $ST) ..."
+    sleep 15
+  done
+fi
+
 REFRESH_ID=$(aws autoscaling start-instance-refresh \
   --region "$REGION" \
   --auto-scaling-group-name "$ASG" \
-  --preferences "MinHealthyPercentage=50,InstanceWarmup=300" \
+  --preferences "MinHealthyPercentage=50,InstanceWarmup=120" \
   --query InstanceRefreshId --output text)
 echo "Instance refresh started: $REFRESH_ID"
 

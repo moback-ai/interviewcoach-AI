@@ -266,7 +266,6 @@ Resources:
                   options:
                     awslogs-region: ${AWS::Region}
                     awslogs-group: ${ApiLogGroup}
-                    awslogs-stream-prefix: api
                     awslogs-create-group: "true"
             COMPOSE
             aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${EcrRegistry}

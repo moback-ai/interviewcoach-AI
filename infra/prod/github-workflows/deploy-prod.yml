@@ -19,9 +19,9 @@ on:
         type: boolean
         default: true
       deploy_frontend:
-        description: Build frontend + sync S3
+        description: Build frontend + sync S3 (enable only when frontend changed)
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -44,10 +44,11 @@ jobs:
       - name: Only DevSecOps may deploy
         run: bash scripts/check-devsecops-actor.sh
 
-  deploy:
-    name: Roll out production
+  deploy-api:
+    name: Roll out API
     runs-on: ubuntu-latest
     needs: [gate]
+    if: inputs.deploy_api
     environment: production
     steps:
       - name: Checkout application repo
@@ -70,53 +71,53 @@ jobs:
           aws-region: ap-south-1
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
+      - name: Validate image tag
+        run: |
+          if [[ "${{ inputs.image_tag }}" == "${{ inputs.app_git_ref }}" ]]; then
+            echo "::warning::image_tag matches app_git_ref (${{ inputs.image_tag }}). Use the exact ECR tag from Build Docker Images (e.g. prod-YYYYMMDD-sha)."
+          fi
+
       - name: Verify API image in ECR
-        if: inputs.deploy_api
         working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: bash infra/prod/scripts/05a-verify-ecr-image.sh
 
       - name: Roll out API to ASG
-        if: inputs.deploy_api
         working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
 
       - name: Sync CloudFront API origin to ALB
-        if: inputs.deploy_api
         working-directory: app
         env:
           CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
         run: bash infra/prod/scripts/06b-cloudfront-api-origin-alb.sh
 
-      - name: Setup Node
-        if: inputs.deploy_frontend
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: app/frontend/package-lock.json
-
-      - name: Build frontend and sync S3
-        if: inputs.deploy_frontend
-        working-directory: app
-        env:
-          STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
-          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
-        run: bash infra/prod/scripts/08-code-frontend.sh
-
       - name: Post-deploy smoke tests
-        if: inputs.deploy_api
         env:
           APP_GIT_REF: ${{ inputs.app_git_ref }}
         run: |
           set -euo pipefail
-          code=$(curl -s -o /dev/null -w '%{http_code}' https://www.ugaanlabs.ai/api/health)
-          if [[ "$code" == "503" ]]; then
-            echo "API returned 503 — ASG may be off-hours (10:00–19:00 IST). Rollout succeeded; verify health during business hours."
-          else
+          health_ok=false
+          for attempt in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://www.ugaanlabs.ai/api/health || echo "000")
+            echo "health attempt $attempt: HTTP $code"
+            if [[ "$code" == "200" ]]; then
+              health_ok=true
+              break
+            fi
+            if [[ "$code" == "503" ]]; then
+              echo "API returned 503 — ASG may be off-hours (10:00–19:00 IST). Rollout complete; verify during business hours."
+              health_ok=skip
+              break
+            fi
+            sleep 30
+          done
+          if [[ "$health_ok" == "skip" ]]; then
+            :
+          elif [[ "$health_ok" == "true" ]]; then
             curl -fsS https://www.ugaanlabs.ai/api/health | python3 -c "
           import json,sys
           d=json.load(sys.stdin)
@@ -127,8 +128,39 @@ jobs:
           assert stt['chain']==['openrouter','amazon'], stt
           print('health OK:', d['services']['llm']['provider'], stt['chain'])
           "
+          else
+            echo "API health did not return 200 after retries (last: $code). Check ASG targets and CloudWatch /interviewcoach/prod/api"
+            exit 1
           fi
           code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
           test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
           echo "apex redirect OK"
           echo "Deployed app ref: $APP_GIT_REF  image: $IMAGE_TAG"
+
+  deploy-frontend:
+    name: Build frontend + S3
+    runs-on: ubuntu-latest
+    needs: [gate]
+    if: inputs.deploy_frontend
+    environment: production
+    steps:
+      - name: Checkout application repo
+        uses: actions/checkout@v4
+        with:
+          repository: moback-ai/interviewcoach-AI
+          ref: ${{ inputs.app_git_ref }}
+          path: app
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: Build frontend and sync S3
+        working-directory: app
+        env:
+          STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
+          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
+        run: bash infra/prod/scripts/08-code-frontend.sh
