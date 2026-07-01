@@ -33,7 +33,7 @@ This document captures what was requested across prior setup sessions, and what 
 | **Deploy after merge** to `develop` | DevSecOps runs **InterviewCoach · Deploy PROD** in `devsecops-platform` |
 | **Re-deploy** same SHA or hotfix | DevSecOps manual workflow in `devsecops-platform` |
 | **PR security check** — Gitleaks, Trivy, Semgrep on every PR | `Security` workflow |
-| Simple deploy documentation (not long checklists) | [DEPLOY.md](DEPLOY.md) |
+| Simple deploy documentation (not long checklists) | [DEPLOY.md](DEPLOY.md) · full ops: **devsecops-platform** `apps/interviewcoach/docs/` |
 | Workflows named consistently | [.github/workflows/README.md](../.github/workflows/README.md) |
 
 ## 4. Server performance & cleanup
@@ -72,7 +72,7 @@ This document captures what was requested across prior setup sessions, and what 
 |-------------|--------|
 | Root README for onboarding | `README.md` |
 | Prod architecture doc | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| PROD deploy runbook | [PROD_RUNBOOK.md](PROD_RUNBOOK.md) |
+| PROD deploy runbook | **devsecops-platform** `apps/interviewcoach/docs/PROD_RUNBOOK.md` |
 | Backend unit tests (auth, document validation) | `backend/tests/` (local, CI step added) |
 | Replace `alert()` with in-app modals | Done (Dashboard, Upload, Questions, History, Feedback) |
 | Split large `app.py` into blueprints | Not started (large refactor) |
@@ -92,4 +92,4 @@ flowchart LR
 
 Developers request deploy from Govardhan or Kishore after merge.
 
-See [DEPLOY.md](DEPLOY.md) for the short checklist.
+See [DEVSECOPS.md](DEVSECOPS.md) for developer release flow. Ops playbooks: **devsecops-platform**.

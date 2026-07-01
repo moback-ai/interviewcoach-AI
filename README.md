@@ -29,12 +29,14 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 
 **Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers release by merging a PR to `develop` and requesting deploy.
 
-- [docs/DEPLOY.md](docs/DEPLOY.md) — developer release flow  
-- [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — who deploys and how  
-- [docs/DEVSECOPS_GUIDE.md](docs/DEVSECOPS_GUIDE.md) — roles, architecture diagrams, CI/CD steps  
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — prod topology (CloudFront, Bedrock, S3)  
-- [docs/PROD_RUNBOOK.md](docs/PROD_RUNBOOK.md) — production deploy steps  
+- [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — PR flow, who merges, who deploys  
+- [docs/DEV_ACCESS.md](docs/DEV_ACCESS.md) — developer CloudWatch log access  
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — application stack  
+- [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) — Security CI  
+- [docs/DEVSECOPS_GUIDE.md](docs/DEVSECOPS_GUIDE.md) — pointer to ops docs in `devsecops-platform`  
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — team requirements map  
+
+**DevSecOps only** (private repo `moback-ai/devsecops-platform`): roles, architecture diagrams, deploy playbooks → `apps/interviewcoach/docs/`
 
 ## Project layout
 
@@ -43,8 +45,8 @@ backend/          Flask API, common/ (llm, speech, storage, redis)
 frontend/         Vite + React 19
 database/         Schema and SQL migrations
 docker/           Dockerfile.prod, compose files
-infra/prod/       CloudFormation, IAM, deploy scripts, prod.env
-docs/             Architecture, deploy runbooks, security
+infra/prod/       Reference copy — sync to devsecops-platform (do not run scripts here)
+docs/             Developer docs; ops docs in devsecops-platform
 scripts/          Dev, deploy, security scan helpers
 ```
 
