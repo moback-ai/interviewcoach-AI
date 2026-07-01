@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
+import re
 import sys
 
 import boto3
 
-OLD = "proxy_set_header X-Forwarded-Proto $scheme;"
-NEW = "proxy_set_header X-Forwarded-Proto https;"
+OLD = re.compile(r"^(\s*)proxy_set_header X-Forwarded-Proto \$scheme;\s*$", re.MULTILINE)
+NEW = r"\1proxy_set_header X-Forwarded-Proto https;"
 
 
 def main() -> None:
@@ -21,16 +22,21 @@ def main() -> None:
         Versions=["$Latest"],
     )["LaunchTemplateVersions"][0]
     user_data = base64.b64decode(latest["LaunchTemplateData"]["UserData"]).decode()
-    if NEW in user_data:
+    if "proxy_set_header X-Forwarded-Proto https;" in user_data:
         print(latest["VersionNumber"])
         return
-    if OLD not in user_data:
-        raise SystemExit("nginx X-Forwarded-Proto line not found in launch template UserData")
+    patched, count = OLD.subn(NEW, user_data, count=1)
+    if count != 1:
+        raise SystemExit("nginx X-Forwarded-Proto $scheme line not found in launch template UserData")
     data = dict(latest["LaunchTemplateData"])
-    data["UserData"] = base64.b64encode(user_data.replace(OLD, NEW, 1).encode()).decode()
+    data["UserData"] = base64.b64encode(patched.encode()).decode()
     new_version = ec2.create_launch_template_version(
         LaunchTemplateId=lt_id,
         SourceVersion=str(latest["VersionNumber"]),
         LaunchTemplateData=data,
     )["LaunchTemplateVersion"]["VersionNumber"]
     print(new_version)
+
+
+if __name__ == "__main__":
+    main()

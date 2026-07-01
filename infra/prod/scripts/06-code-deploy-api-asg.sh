@@ -54,9 +54,10 @@ if [[ "$PATCHED_LT_VERSION" != "$NEW_LT_VERSION" ]]; then
 fi
 
 NGINX_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/patch-launch-template-nginx-proto.py" \
-  "$REGION" "$LT_ID" 2>/dev/null || echo "$NEW_LT_VERSION")
+  "$REGION" "$LT_ID") || { echo "nginx proto patch failed"; exit 1; }
 if [[ "$NGINX_LT_VERSION" != "$NEW_LT_VERSION" ]]; then
-  echo "Patched launch template nginx X-Forwarded-Proto → version $NGINX_LT_VERSION"
+  echo "Patched launch template nginx X-Forwarded-Proto -> version ${NGINX_LT_VERSION}"
+  NEW_LT_VERSION="$NGINX_LT_VERSION"
 fi
 
 aws autoscaling update-auto-scaling-group \
