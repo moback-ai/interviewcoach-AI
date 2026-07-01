@@ -1,12 +1,27 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { FiClock } from 'react-icons/fi';
 import { apiGet } from '../../api';
+
+const POLL_MS = 60_000;
+
+const FALLBACK_STATUS = {
+  is_open: false,
+  title: 'Under maintenance',
+  start: '10:00',
+  end: '19:00',
+  timezone: 'Asia/Kolkata',
+  message:
+    'InterviewCoach is under maintenance from 7:00 PM until 10:00 AM IST. We are live daily from 10:00 AM to 7:00 PM — stay tuned and check back when we open.',
+};
 
 export default function ServiceHoursNotice() {
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+
+    const loadStatus = async () => {
       try {
         const res = await apiGet('/api/service-hours');
         if (!cancelled && res?.data) {
@@ -14,18 +29,17 @@ export default function ServiceHoursNotice() {
         }
       } catch {
         if (!cancelled) {
-          setStatus({
-            is_open: false,
-            start: '10:00',
-            end: '19:00',
-            timezone: 'Asia/Kolkata',
-            message: 'InterviewCoach is available 10:00 AM – 7:00 PM IST.',
-          });
+          setStatus(FALLBACK_STATUS);
         }
       }
-    })();
+    };
+
+    loadStatus();
+    const timer = window.setInterval(loadStatus, POLL_MS);
+
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -33,15 +47,26 @@ export default function ServiceHoursNotice() {
     return null;
   }
 
+  const title = status.title || 'Under maintenance';
+  const message = status.message
+    || `InterviewCoach is available ${status.start}–${status.end} (${status.timezone}). Please check back during service hours.`;
+
   return (
     <div
-      className="mx-4 mt-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100"
+      className="service-hours-banner"
       role="status"
+      aria-live="polite"
     >
-      <p className="font-medium">Outside service hours</p>
-      <p className="mt-1 opacity-90">
-        {status.message || `Available ${status.start}–${status.end} (${status.timezone}).`}
-      </p>
+      <div className="service-hours-banner__inner">
+        <FiClock className="service-hours-banner__icon" aria-hidden="true" />
+        <div className="service-hours-banner__copy">
+          <p className="service-hours-banner__title">{title}</p>
+          <p className="service-hours-banner__message">{message}</p>
+        </div>
+        <Link to="/faq#contact" className="service-hours-banner__link">
+          Reach out
+        </Link>
+      </div>
     </div>
   );
 }

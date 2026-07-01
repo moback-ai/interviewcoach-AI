@@ -77,3 +77,16 @@ def test_service_hours_status_shape():
     assert "start" in status
     assert "end" in status
     assert status["end"] == "19:00"
+
+
+def test_service_hours_closed_message():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    closed_at = datetime(2026, 7, 1, 22, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    status = service_hours_status(now=closed_at)
+    assert status["is_open"] is False
+    assert status["title"] == "Under maintenance"
+    assert "under maintenance" in status["message"].lower()
+    assert "10:00 AM" in status["message"]
+    assert "7:00 PM" in status["message"]
