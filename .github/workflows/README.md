@@ -1,5 +1,7 @@
 # Workflows (application repo)
 
+**DevSecOps guide:** [docs/DEVSECOPS_GUIDE.md](../docs/DEVSECOPS_GUIDE.md)
+
 | Workflow | When | Purpose |
 |----------|------|---------|
 | **Security** | PR / push to `develop` | Gitleaks, Trivy, Semgrep |
