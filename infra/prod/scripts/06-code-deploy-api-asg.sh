@@ -51,6 +51,28 @@ aws autoscaling update-auto-scaling-group \
   --auto-scaling-group-name "$ASG" \
   --launch-template "LaunchTemplateId=${LT_ID},Version=\$Latest"
 
+ACTIVE_REFRESH=$(aws autoscaling describe-instance-refreshes \
+  --region "$REGION" \
+  --auto-scaling-group-name "$ASG" \
+  --query 'InstanceRefreshes[?Status==`InProgress`].InstanceRefreshId | [0]' \
+  --output text 2>/dev/null || echo "None")
+if [[ -n "$ACTIVE_REFRESH" && "$ACTIVE_REFRESH" != "None" ]]; then
+  echo "Cancelling stuck instance refresh $ACTIVE_REFRESH (required before new rollout) ..."
+  aws autoscaling cancel-instance-refresh \
+    --region "$REGION" \
+    --auto-scaling-group-name "$ASG"
+  for _ in $(seq 1 20); do
+    ST=$(aws autoscaling describe-instance-refreshes \
+      --region "$REGION" \
+      --auto-scaling-group-name "$ASG" \
+      --instance-refresh-ids "$ACTIVE_REFRESH" \
+      --query 'InstanceRefreshes[0].Status' --output text 2>/dev/null || echo "Cancelled")
+    echo "Prior refresh status: $ST"
+    [[ "$ST" != "InProgress" ]] && break
+    sleep 15
+  done
+fi
+
 REFRESH_ID=$(aws autoscaling start-instance-refresh \
   --region "$REGION" \
   --auto-scaling-group-name "$ASG" \
