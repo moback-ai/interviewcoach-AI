@@ -1,25 +1,22 @@
 # COPY to moback-ai/devsecops-platform → .github/workflows/interviewcoach-deploy-prod.yml
 # Do NOT enable this workflow in interviewcoach-AI.
 #
-# Production deploy — rollout only (no Docker build). Build images separately first.
-name: InterviewCoach · Deploy Production
+# One workflow: build (if API) + deploy. Three inputs only.
+name: InterviewCoach · Release to Production
 
 on:
   workflow_dispatch:
     inputs:
-      app_git_ref:
-        description: interviewcoach-AI git ref (branch, tag, or SHA)
+      git_ref:
+        description: Branch or tag (interviewcoach-AI)
         required: true
         default: develop
-      image_tag:
-        description: ECR image tag (must already exist — from Build Docker Images workflow)
-        required: true
       deploy_api:
-        description: Roll out API image to ASG
+        description: Build API image + roll out to servers
         type: boolean
         default: true
       deploy_frontend:
-        description: Build frontend + sync S3 (enable only when frontend changed)
+        description: Build frontend + sync to S3
         type: boolean
         default: false
 
@@ -34,6 +31,8 @@ concurrency:
 env:
   DEVSECOPS_RUN: "1"
   AWS_REGION: ap-south-1
+  APP_REPO: moback-ai/interviewcoach-AI
+  AWS_ACCOUNT_ID: "328991713462"
 
 jobs:
   gate:
@@ -41,124 +40,107 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Only DevSecOps may deploy
-        run: bash scripts/check-devsecops-actor.sh
+      - run: bash scripts/check-devsecops-actor.sh
 
-  deploy-api:
-    name: Roll out API
+  build-api:
+    name: Build API image
     runs-on: ubuntu-latest
     needs: [gate]
     if: inputs.deploy_api
-    environment: production
+    outputs:
+      image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
-      - name: Checkout application repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: moback-ai/interviewcoach-AI
-          ref: ${{ inputs.app_git_ref }}
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ inputs.git_ref }}
           path: app
+          token: ${{ secrets.APP_REPO_READ_TOKEN }}
 
-      - name: Set image tag
-        working-directory: app
-        env:
-          INPUT_IMAGE_TAG: ${{ inputs.image_tag }}
+      - id: tag
         run: |
-          echo "IMAGE_TAG=$INPUT_IMAGE_TAG" >> "$GITHUB_ENV"
+          SHORT=$(git -C app rev-parse --short HEAD)
+          echo "image_tag=prod-$(date -u +%Y%m%d)-${SHORT}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=prod-$(date -u +%Y%m%d)-${SHORT}" >> "$GITHUB_ENV"
 
-      - name: Configure AWS
-        uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-region: ap-south-1
+          aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
-      - name: Validate image tag
+      - uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push API
+        env:
+          ECR: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
         run: |
-          if [[ "${{ inputs.image_tag }}" == "${{ inputs.app_git_ref }}" ]]; then
-            echo "::warning::image_tag matches app_git_ref (${{ inputs.image_tag }}). Use the exact ECR tag from Build Docker Images (e.g. prod-YYYYMMDD-sha)."
-          fi
+          docker buildx build \
+            --file app/docker/api/Dockerfile.prod \
+            --target runtime \
+            --tag "$ECR/interviewcoach-api:$IMAGE_TAG" \
+            --cache-from type=registry,ref="$ECR/interviewcoach-api:buildcache" \
+            --cache-to type=registry,ref="$ECR/interviewcoach-api:buildcache",mode=max \
+            --push \
+            app
+          echo "Pushed $ECR/interviewcoach-api:$IMAGE_TAG"
 
-      - name: Verify API image in ECR
+  deploy-api:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    needs: [gate, build-api]
+    if: inputs.deploy_api
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ inputs.git_ref }}
+          path: app
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+      - name: Roll out to ASG
         working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-        run: bash infra/prod/scripts/05a-verify-ecr-image.sh
-
-      - name: Roll out API to ASG
-        working-directory: app
-        env:
-          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ needs.build-api.outputs.image_tag }}
         run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
 
-      - name: Sync CloudFront API origin to ALB
+      - name: Smoke test
         working-directory: app
-        env:
-          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
-        run: bash infra/prod/scripts/06b-cloudfront-api-origin-alb.sh
-
-      - name: Post-deploy smoke tests
-        env:
-          APP_GIT_REF: ${{ inputs.app_git_ref }}
-        run: |
-          set -euo pipefail
-          health_ok=false
-          for attempt in $(seq 1 20); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://www.ugaanlabs.ai/api/health || echo "000")
-            echo "health attempt $attempt: HTTP $code"
-            if [[ "$code" == "200" ]]; then
-              health_ok=true
-              break
-            fi
-            if [[ "$code" == "503" ]]; then
-              echo "API returned 503 — ASG may be off-hours (10:00–19:00 IST). Rollout complete; verify during business hours."
-              health_ok=skip
-              break
-            fi
-            sleep 30
-          done
-          if [[ "$health_ok" == "skip" ]]; then
-            :
-          elif [[ "$health_ok" == "true" ]]; then
-            curl -fsS https://www.ugaanlabs.ai/api/health | python3 -c "
-          import json,sys
-          d=json.load(sys.stdin)
-          assert d.get('status')=='healthy', d
-          assert d['services']['llm']['provider']=='bedrock', d['services']['llm']
-          assert 'ollama' not in d['services'], d['services']
-          stt=d['services']['stt']
-          assert stt['chain']==['openrouter','amazon'], stt
-          print('health OK:', d['services']['llm']['provider'], stt['chain'])
-          "
-          else
-            echo "API health did not return 200 after retries (last: $code). Check ASG targets and CloudWatch /interviewcoach/prod/api"
-            exit 1
-          fi
-          code=$(curl -s -o /dev/null -w '%{http_code}' -I https://ugaanlabs.ai/signup)
-          test "$code" = "301" || (echo "expected apex→www 301, got $code" && exit 1)
-          echo "apex redirect OK"
-          echo "Deployed app ref: $APP_GIT_REF  image: $IMAGE_TAG"
+        run: bash infra/prod/scripts/07-smoke-test-prod.sh
 
   deploy-frontend:
-    name: Build frontend + S3
+    name: Deploy frontend
     runs-on: ubuntu-latest
     needs: [gate]
     if: inputs.deploy_frontend
     environment: production
     steps:
-      - name: Checkout application repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          repository: moback-ai/interviewcoach-AI
-          ref: ${{ inputs.app_git_ref }}
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ inputs.git_ref }}
           path: app
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: app/frontend/package-lock.json
 
-      - name: Build frontend and sync S3
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+      - name: Build and sync S3
         working-directory: app
         env:
           STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
