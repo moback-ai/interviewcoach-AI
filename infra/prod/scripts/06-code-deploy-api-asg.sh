@@ -46,6 +46,12 @@ NEW_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/bump-launch-template-image.py" \
   "$REGION" "$LT_ID" "$ECR_REGISTRY" "$IMAGE_TAG")
 echo "Created launch template version $NEW_LT_VERSION"
 
+PATCHED_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/patch-launch-template-docker-logs.py" \
+  "$REGION" "$LT_ID" 2>/dev/null || echo "$NEW_LT_VERSION")
+if [[ "$PATCHED_LT_VERSION" != "$NEW_LT_VERSION" ]]; then
+  echo "Patched launch template docker logging → version $PATCHED_LT_VERSION"
+fi
+
 aws autoscaling update-auto-scaling-group \
   --region "$REGION" \
   --auto-scaling-group-name "$ASG" \
