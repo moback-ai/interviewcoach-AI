@@ -54,7 +54,7 @@ aws autoscaling update-auto-scaling-group \
 REFRESH_ID=$(aws autoscaling start-instance-refresh \
   --region "$REGION" \
   --auto-scaling-group-name "$ASG" \
-  --preferences "MinHealthyPercentage=50,InstanceWarmup=300" \
+  --preferences "MinHealthyPercentage=50,InstanceWarmup=120" \
   --query InstanceRefreshId --output text)
 echo "Instance refresh started: $REFRESH_ID"
 
