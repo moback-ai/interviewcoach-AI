@@ -84,6 +84,13 @@ jobs:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
 
+      - name: Sync CloudFront API origin to ALB
+        if: inputs.deploy_api
+        working-directory: app
+        env:
+          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
+        run: bash infra/prod/scripts/06b-cloudfront-api-origin-alb.sh
+
       - name: Setup Node
         if: inputs.deploy_frontend
         uses: actions/setup-node@v4
