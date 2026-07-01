@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { getAccessToken } from '../../lib/authClient';
+import { FETCH_CREDENTIALS, getAccessToken } from '../../lib/authClient';
 import { getApiBaseUrl } from '../../utils/apiConfig';
 
 const AVATAR_CANVAS_SIZE = 96;
@@ -15,6 +15,7 @@ function buildMyAvatarUrl() {
 async function fetchMyAvatarBlob() {
   const token = getAccessToken();
   const response = await fetch(buildMyAvatarUrl(), {
+    ...FETCH_CREDENTIALS,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) {

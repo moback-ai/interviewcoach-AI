@@ -1,13 +1,15 @@
+import { normalizeProductionUrl } from './canonicalOrigin';
+
 const trimTrailingSlash = (value = '') => value.replace(/\/+$/, '');
 
 export const getApiBaseUrl = () => {
   const configured = trimTrailingSlash(import.meta.env.VITE_API_BASE_URL || '');
   if (configured) {
-    return configured;
+    return normalizeProductionUrl(configured);
   }
 
   if (typeof window !== 'undefined') {
-    return `${window.location.origin}/api`;
+    return normalizeProductionUrl(`${window.location.origin}/api`);
   }
 
   return '/api';
@@ -21,8 +23,8 @@ export const getBackendOrigin = () => {
 export const getStorageBaseUrl = () => {
   const configured = trimTrailingSlash(import.meta.env.VITE_STORAGE_URL || '');
   if (configured) {
-    return configured;
+    return normalizeProductionUrl(configured);
   }
 
-  return `${getBackendOrigin()}/storage`;
+  return normalizeProductionUrl(`${getBackendOrigin()}/storage`);
 };

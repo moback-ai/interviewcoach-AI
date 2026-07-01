@@ -19,6 +19,20 @@
       content="Practice smarter with voice-led mock interviews, tailored questions, and instant feedback built around your resume and target role."
     />
     <meta property="og:type" content="website" />
+    <link rel="canonical" href="https://www.ugaanlabs.ai/" />
+    <script>
+      (function () {
+        var h = location.hostname.toLowerCase();
+        var apex = 'ugaanlabs.ai';
+        var www = 'www.' + apex;
+        if (h === 'localhost' || h === '127.0.0.1') return;
+        if (h === apex || location.protocol === 'http:') {
+          location.replace(
+            'https://' + www + location.pathname + location.search + location.hash
+          );
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

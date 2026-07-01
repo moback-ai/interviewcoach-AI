@@ -1,4 +1,4 @@
-import { getAccessToken } from '../lib/authClient';
+import { getAccessToken, FETCH_CREDENTIALS } from '../lib/authClient';
 import { getApiBaseUrl } from './apiConfig';
 
 const FILES_PREFIX = '/api/files/';
@@ -77,6 +77,7 @@ export async function fetchAuthenticatedFile(urlOrPath, options = {}) {
   }
 
   const response = await fetch(requestUrl, {
+    ...FETCH_CREDENTIALS,
     ...options,
     headers,
   });

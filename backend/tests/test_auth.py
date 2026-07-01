@@ -1,3 +1,5 @@
+import time
+
 import jwt
 import pytest
 
@@ -9,7 +11,13 @@ runtime_config._CONFIG = {
     "DOMAIN": "http://localhost:5173",
 }
 
-from common.auth import check_password, create_token, hash_password
+from common.auth import (
+    check_password,
+    create_token,
+    decode_auth_token,
+    hash_password,
+)
+from common.service_hours import service_hours_status
 
 
 def test_hash_and_check_password_roundtrip():
@@ -41,3 +49,31 @@ def test_create_token_rejects_default_secret():
             create_token("1", "a@b.com")
     finally:
         runtime_config._CONFIG["JWT_SECRET"] = "test-jwt-secret-for-pytest-only-32chars"
+
+
+def test_decode_auth_token_allows_expired_when_requested():
+    jwt_secret = "test-jwt-secret-for-pytest-only-32chars"
+    expired_payload = {
+        "user_id": "9",
+        "email": "expired@example.com",
+        "full_name": "Expired",
+        "plan": "basic",
+        "exp": int(time.time()) - 60,
+    }
+    token = jwt.encode(expired_payload, jwt_secret, algorithm="HS256")
+
+    with pytest.raises(jwt.ExpiredSignatureError):
+        decode_auth_token(token, allow_expired=False)
+
+    user = decode_auth_token(token, allow_expired=True)
+    assert user["id"] == "9"
+    assert user["email"] == "expired@example.com"
+
+
+def test_service_hours_status_shape():
+    status = service_hours_status()
+    assert "is_open" in status
+    assert "timezone" in status
+    assert "start" in status
+    assert "end" in status
+    assert status["end"] == "19:00"

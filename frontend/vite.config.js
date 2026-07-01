@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => {
   const apiBaseUrl = env.VITE_API_BASE_URL || (isDev ? 'http://localhost:5000/api' : '/api')
   const legacyBaseUrl = apiBaseUrl.replace(/\/api\/?$/, '')
   const storageUrl = env.VITE_STORAGE_URL || (isDev ? `${legacyBaseUrl}/storage` : '/storage')
+  const apexDomain = env.VITE_APEX_DOMAIN || 'ugaanlabs.ai'
+  const canonicalHost = env.VITE_CANONICAL_HOST || `www.${apexDomain}`
 
   return {
     plugins: [react(), tailwindcss()],
@@ -51,6 +53,8 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBaseUrl),
       'import.meta.env.VITE_STORAGE_URL': JSON.stringify(storageUrl),
+      'import.meta.env.VITE_APEX_DOMAIN': JSON.stringify(apexDomain),
+      'import.meta.env.VITE_CANONICAL_HOST': JSON.stringify(canonicalHost),
     },
   }
 })

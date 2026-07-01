@@ -1,13 +1,17 @@
 Database deployment lives here.
 
-Use this folder for database-only changes, starting with:
+**Schema source of truth**
 
-- `database/schema.sql`
+| Path | Purpose |
+|------|---------|
+| `backend/schema.sql` | Full schema for new environments |
+| `database/migrations/*.sql` | Incremental migrations (apply in filename order) |
+| `database/schema.sql` | Pointer only — do not apply on prod |
 
 Workflow behavior:
 
-- change `frontend/**` -> frontend deploy
-- change `backend/**` -> backend deploy
-- change `database/**` -> database deploy
+- change `frontend/**` → frontend deploy
+- change `backend/**` → backend deploy
+- change `database/**` → database deploy
 
-If you update the schema, edit `database/schema.sql` so the database-only deploy picks it up.
+Apply migrations with your standard RDS migration process after merging to `develop`.

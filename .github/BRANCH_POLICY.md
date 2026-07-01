@@ -17,7 +17,9 @@
 
 Developers (ganesh, neeraj) open PRs; they do **not** merge.
 
-Enforced via `.github/CODEOWNERS` (required review from both DevSecOps).
+Enforced via `.github/CODEOWNERS` (required review from DevSecOps).
+
+**GitHub Actions (devsecops-platform):** build and deploy workflows gate on `check-devsecops-actor.sh`; deploy uses `production` environment reviewers.
 
 ## Deploy flow
 
