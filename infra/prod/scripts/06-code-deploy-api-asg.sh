@@ -61,14 +61,22 @@ if [[ -n "$ACTIVE_REFRESH" && "$ACTIVE_REFRESH" != "None" ]]; then
   aws autoscaling cancel-instance-refresh \
     --region "$REGION" \
     --auto-scaling-group-name "$ASG"
-  for _ in $(seq 1 20); do
+  for _ in $(seq 1 40); do
+    BLOCKING=$(aws autoscaling describe-instance-refreshes \
+      --region "$REGION" \
+      --auto-scaling-group-name "$ASG" \
+      --query 'InstanceRefreshes[?Status==`InProgress` || Status==`Cancelling` || Status==`Pending`].InstanceRefreshId | [0]' \
+      --output text 2>/dev/null || echo "None")
+    if [[ -z "$BLOCKING" || "$BLOCKING" == "None" ]]; then
+      echo "Prior refresh cleared — continuing rollout"
+      break
+    fi
     ST=$(aws autoscaling describe-instance-refreshes \
       --region "$REGION" \
       --auto-scaling-group-name "$ASG" \
-      --instance-refresh-ids "$ACTIVE_REFRESH" \
-      --query 'InstanceRefreshes[0].Status' --output text 2>/dev/null || echo "Cancelled")
-    echo "Prior refresh status: $ST"
-    [[ "$ST" != "InProgress" ]] && break
+      --instance-refresh-ids "$BLOCKING" \
+      --query 'InstanceRefreshes[0].Status' --output text 2>/dev/null || echo "unknown")
+    echo "Waiting for refresh $BLOCKING to clear (status: $ST) ..."
     sleep 15
   done
 fi
