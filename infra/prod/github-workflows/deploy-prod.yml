@@ -89,6 +89,12 @@ jobs:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
 
+      - name: Sync CloudFront API origin to ALB
+        working-directory: app
+        env:
+          CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
+        run: bash infra/prod/scripts/06b-cloudfront-api-origin-alb.sh
+
       - name: Post-deploy smoke tests
         env:
           APP_GIT_REF: ${{ inputs.app_git_ref }}
