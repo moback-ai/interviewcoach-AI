@@ -1,7 +1,8 @@
 # Branch policy
 
-**DevSecOps ops guide:** `moback-ai/devsecops-platform` → `apps/interviewcoach/docs/DEVSECOPS_GUIDE.md` (private)  
-**Developer summary:** [docs/DEVSECOPS.md](../docs/DEVSECOPS.md)
+**All ops documentation:** `moback-ai/devsecops-platform` → `apps/interviewcoach/docs/DEVSECOPS_GUIDE.md` (private)
+
+**Developers:** [docs/README.md](../docs/README.md)
 
 | Branch | Purpose |
 |--------|---------|
@@ -28,8 +29,6 @@ Enforced via `.github/CODEOWNERS` (required review from DevSecOps).
 
 1. **Build image once** — devsecops → **InterviewCoach · Build Docker Images**
 2. **Deploy rollout only** — devsecops → **InterviewCoach · Deploy Production** (existing ECR tag, no build)
-
-See [docs/DEVSECOPS.md](../docs/DEVSECOPS.md).
 
 ## ASG schedule (IST)
 

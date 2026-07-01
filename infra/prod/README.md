@@ -7,7 +7,7 @@ Or run from devsecops: `bash scripts/sync-interviewcoach-prod.sh`
 All production operations (deploy, secrets, SSH, AWS changes) run **only** from devsecops-platform.
 
 **Prod only.** No staging.  
-Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) (app stack) · Ops runbooks: **devsecops-platform** `apps/interviewcoach/docs/`
+Architecture: **devsecops-platform** `apps/interviewcoach/docs/ARCHITECTURE.md` · Ops runbooks: `apps/interviewcoach/docs/`
 
 ---
 

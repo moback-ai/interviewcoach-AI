@@ -14,4 +14,4 @@
 - [ ] **Build needed?** → **InterviewCoach · Build Docker Images** (once per release)
 - [ ] **Deploy needed?** → **InterviewCoach · Deploy Production** with the **same `image_tag`** (no build on deploy)
 
-See [docs/DEVSECOPS.md](../docs/DEVSECOPS.md).
+See [docs/README.md](../docs/README.md).
