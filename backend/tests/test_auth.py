@@ -4,10 +4,11 @@ import jwt
 import pytest
 
 import common.runtime_config as runtime_config
+from tests.test_constants import TEST_JWT_SECRET
 
 runtime_config._LOADED = True
 runtime_config._CONFIG = {
-    "JWT_SECRET": "test-jwt-secret-for-pytest-only-32chars",
+    "JWT_SECRET": TEST_JWT_SECRET,
     "DOMAIN": "http://localhost:5173",
 }
 
@@ -32,7 +33,7 @@ def test_create_token_encodes_expected_claims():
     token = create_token("user-42", "dev@example.com", full_name="Dev User", plan="pro")
     payload = jwt.decode(
         token,
-        "test-jwt-secret-for-pytest-only-32chars",
+        TEST_JWT_SECRET,
         algorithms=["HS256"],
     )
     assert payload["user_id"] == "user-42"
@@ -48,11 +49,10 @@ def test_create_token_rejects_default_secret():
         with pytest.raises(RuntimeError, match="JWT_SECRET"):
             create_token("1", "a@b.com")
     finally:
-        runtime_config._CONFIG["JWT_SECRET"] = "test-jwt-secret-for-pytest-only-32chars"
+        runtime_config._CONFIG["JWT_SECRET"] = TEST_JWT_SECRET
 
 
 def test_decode_auth_token_allows_expired_when_requested():
-    jwt_secret = "test-jwt-secret-for-pytest-only-32chars"
     expired_payload = {
         "user_id": "9",
         "email": "expired@example.com",
@@ -60,7 +60,7 @@ def test_decode_auth_token_allows_expired_when_requested():
         "plan": "basic",
         "exp": int(time.time()) - 60,
     }
-    token = jwt.encode(expired_payload, jwt_secret, algorithm="HS256")
+    token = jwt.encode(expired_payload, TEST_JWT_SECRET, algorithm="HS256")
 
     with pytest.raises(jwt.ExpiredSignatureError):
         decode_auth_token(token, allow_expired=False)
