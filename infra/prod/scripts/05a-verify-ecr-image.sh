@@ -12,6 +12,11 @@ ECR_REGISTRY="${ECR_REGISTRY:?Set ECR_REGISTRY}"
 IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
 REPO_NAME="${ECR_API_REPO:-interviewcoach-api}"
 
+if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+  echo "ERROR: Invalid IMAGE_TAG '$IMAGE_TAG' (use letters, digits, ., _, - only)." >&2
+  exit 1
+fi
+
 if aws ecr describe-images \
   --region "$REGION" \
   --repository-name "$REPO_NAME" \

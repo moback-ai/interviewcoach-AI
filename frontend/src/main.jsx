@@ -6,17 +6,20 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import App from './App';
 import './index.css';
 import { initAuthInterceptor } from './utils/authInterceptor';
+import { enforceCanonicalOrigin } from './utils/canonicalOrigin';
 
-initAuthInterceptor();
+if (!enforceCanonicalOrigin()) {
+  initAuthInterceptor();
 
-createRoot(document.getElementById('root')).render(
-  <ThemeProvider>
-    <BrowserRouter>
-      <AuthProvider>
-        <OperationProvider>
-          <App />
-        </OperationProvider>
-      </AuthProvider>
-    </BrowserRouter>
-  </ThemeProvider>
-);
+  createRoot(document.getElementById('root')).render(
+    <ThemeProvider>
+      <BrowserRouter>
+        <AuthProvider>
+          <OperationProvider>
+            <App />
+          </OperationProvider>
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
+  );
+}

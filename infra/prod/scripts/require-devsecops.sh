@@ -7,6 +7,10 @@
 if [[ "${DEVSECOPS_RUN:-}" == "1" \
    || "${GITHUB_REPOSITORY:-}" == "moback-ai/devsecops-platform" \
    || "${ALLOW_LOCAL_PROD_DEPLOY:-}" == "1" ]]; then
+  if [[ -n "${GITHUB_ACTIONS:-}" && "${GITHUB_REPOSITORY:-}" == "moback-ai/devsecops-platform" ]]; then
+    # shellcheck disable=SC1091
+    source "$(dirname "$0")/check-devsecops-actor.sh"
+  fi
   return 0 2>/dev/null || exit 0
 fi
 

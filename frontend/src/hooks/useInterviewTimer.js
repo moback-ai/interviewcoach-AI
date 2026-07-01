@@ -1,21 +1,22 @@
 import { useEffect, useRef } from 'react';
-import { getAccessToken } from '../lib/authClient';
+import { FETCH_CREDENTIALS, getAccessToken } from '../lib/authClient';
 import { getApiBaseUrl } from '../utils/apiConfig';
 import { pauseInterviewTimer, tickInterviewTimer } from '../api';
 
 const HEARTBEAT_MS = 45_000;
 
 function pauseInterviewTimerKeepalive(interviewId) {
-  const token = getAccessToken();
-  if (!token || !interviewId) {
+  if (!interviewId) {
     return;
   }
 
+  const token = getAccessToken();
   const base = getApiBaseUrl().replace(/\/$/, '');
   fetch(`${base}/interviews/${interviewId}/timer-pause`, {
     method: 'POST',
+    ...FETCH_CREDENTIALS,
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       'Content-Type': 'application/json',
     },
     body: '{}',

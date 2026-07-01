@@ -24,7 +24,6 @@ const FAQPage             = lazy(() => import('./pages/FAQPage'));
 const BackgroundStyleLab  = import.meta.env.DEV
   ? lazy(() => import('./pages/BackgroundStyleLab'))
   : null;
-const AdminLogsPage       = lazy(() => import('./pages/AdminLogsPage'));
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center min-h-screen">
@@ -58,7 +57,6 @@ function App() {
           <Route path="/payment-status" element={<PaymentSuccessPage />} />
           <Route path="/interview"     element={<InterviewPage />} />
           <Route path="/interview-feedback" element={<InterviewFeedbackPage />} />
-          <Route path="/admin/logs"    element={<AdminLogsPage />} />
         </Route>
       </Routes>
     </Suspense>

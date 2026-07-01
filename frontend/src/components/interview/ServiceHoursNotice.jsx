@@ -13,7 +13,15 @@ export default function ServiceHoursNotice() {
           setStatus(res.data);
         }
       } catch {
-        if (!cancelled) setStatus(null);
+        if (!cancelled) {
+          setStatus({
+            is_open: false,
+            start: '10:00',
+            end: '19:00',
+            timezone: 'Asia/Kolkata',
+            message: 'InterviewCoach is available 10:00 AM – 7:00 PM IST.',
+          });
+        }
       }
     })();
     return () => {

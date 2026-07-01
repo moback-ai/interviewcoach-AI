@@ -13,7 +13,13 @@ source "$(dirname "$0")/load-prod-env.sh"
 REGION="${AWS_REGION:-ap-south-1}"
 ASG="${ASG_NAME:-interviewcoach-prod-api-asg}"
 RDS_ID="${RDS_INSTANCE_ID:-interviewcoach-db}"
+COMPUTE_STACK="${COMPUTE_STACK_NAME:-interviewcoach-prod-compute}"
 SNS_TOPIC_ARN="${ALARM_SNS_TOPIC_ARN:-}"
+
+if [[ -z "$SNS_TOPIC_ARN" ]]; then
+  echo "ERROR: ALARM_SNS_TOPIC_ARN is required for prod alarms (run 11-aws-alarm-sns-topic.sh first)."
+  exit 1
+fi
 
 delete_alarm_if_exists() {
   local name="$1"
@@ -81,7 +87,28 @@ put_alarm "interviewcoach-prod-rds-storage-low" \
   --comparison-operator LessThanThreshold \
   --treat-missing-data notBreaching
 
+ALB_FULL_NAME=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$COMPUTE_STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerFullName'].OutputValue" --output text 2>/dev/null || true)
+TARGET_GROUP_FULL_NAME=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$COMPUTE_STACK" \
+  --query "Stacks[0].Outputs[?OutputKey=='TargetGroupFullName'].OutputValue" --output text 2>/dev/null || true)
+
+if [[ -n "$ALB_FULL_NAME" && "$ALB_FULL_NAME" != "None" && -n "$TARGET_GROUP_FULL_NAME" && "$TARGET_GROUP_FULL_NAME" != "None" ]]; then
+  put_alarm "interviewcoach-prod-alb-unhealthy-hosts" \
+    --alarm-description "Prod ALB target group has unhealthy hosts for 5 min" \
+    --namespace AWS/ApplicationELB \
+    --metric-name UnHealthyHostCount \
+    --dimensions "Name=LoadBalancer,Value=$ALB_FULL_NAME" "Name=TargetGroup,Value=$TARGET_GROUP_FULL_NAME" \
+    --statistic Maximum \
+    --period 60 \
+    --evaluation-periods 5 \
+    --threshold 1 \
+    --comparison-operator GreaterThanOrEqualToThreshold \
+    --treat-missing-data notBreaching
+else
+  echo "WARN: Skipping ALB unhealthy-host alarm (LoadBalancerFullName/TargetGroupFullName not in stack outputs)."
+fi
+
 echo ""
-echo "CloudWatch alarms configured (ASG + RDS)."
+echo "CloudWatch alarms configured (ASG + RDS + ALB when available)."
 echo "ASG scale alarms remain in the compute CloudFormation stack."
 echo "External uptime: monitor https://www.ugaanlabs.ai/api/health (10:00–19:00 IST)"

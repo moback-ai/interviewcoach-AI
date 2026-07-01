@@ -18,7 +18,7 @@ from common.runtime_config import optional_env
 
 logger = logging.getLogger(__name__)
 
-STARTED_INTERVIEW_STATUSES = ("STARTED", "ENDED", "completed", "ACTIVE")
+STARTED_INTERVIEW_STATUSES = ("STARTED", "ACTIVE")
 
 
 class InterviewStartError(Exception):
