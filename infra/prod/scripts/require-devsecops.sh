@@ -16,8 +16,8 @@ _devsecops_authorized() {
 
 if _devsecops_authorized; then
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    # shellcheck disable=SC1091
-    source "$(dirname "$0")/check-devsecops-actor.sh"
+    # Run as subprocess — sourcing check-devsecops-actor.sh would exit 0 and abort the caller.
+    bash "$(dirname "$0")/check-devsecops-actor.sh"
   fi
 else
   cat <<'EOF' >&2
