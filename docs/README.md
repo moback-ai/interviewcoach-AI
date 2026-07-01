@@ -35,8 +35,9 @@ Do **not** run `infra/prod/scripts/*` from this repo.
 
 | Document | Purpose |
 |----------|---------|
-| `DEVSECOPS_GUIDE.md` | Roles, Mermaid diagrams, playbooks |
-| `ARCHITECTURE.md` | AWS topology |
+| `DEVSECOPS_GUIDE.md` | Roles, CI/CD, playbooks |
+| `ARCHITECTURE.md` | AWS overview |
+| **`ARCHITECTURE_PORTS_AND_SECURITY.md`** | **Ports, security groups, network diagram** |
+| **`OBSERVABILITY.md`** | **CloudWatch; retired `/admin/logs` URLs** |
 | `CAPACITY_AND_BUDGET.md` | Cost and concurrency |
 | `DEPLOY.md` / `PROD_RUNBOOK.md` | Release and bootstrap |
-| `diagrams/` | Draw.io + diagram index |
