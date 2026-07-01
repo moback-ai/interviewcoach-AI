@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
 import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye } from 'react-icons/fi'; // Add FiLoader, FiRefreshCw, FiEye
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import LazySyntaxHighlightedCode from '../components/common/LazySyntaxHighlightedCode';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSearchParams } from 'react-router-dom';
@@ -705,7 +706,7 @@ export default function QuestionsPage() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16 flex justify-center">
+      <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16 flex justify-center">
         <div className="w-full max-w-6xl">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -1016,7 +1017,7 @@ export default function QuestionsPage() {
             )}
           </motion.div>
         </div>
-      </div>
+      </PageWavesShell>
       <NoticeModal
         isOpen={noticeModal.isOpen}
         onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}

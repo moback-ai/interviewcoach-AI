@@ -13,6 +13,7 @@ import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
 import { getSession } from '../lib/authClient';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
+import { devLog, devWarn } from '../utils/devLog';
 
 function UploadPage() {
   const navigate = useNavigate();
@@ -122,7 +123,7 @@ function UploadPage() {
             setCodingQuestions(0);
           }
         } else {
-          console.warn('[WARNING] Classification returned unsuccessful:', result.message);
+          devWarn('[WARNING] Classification returned unsuccessful:', result.message);
           setIsTechnical(false);
           setCodingQuestions(0); // Reset on error
         }
@@ -295,10 +296,10 @@ function UploadPage() {
     setIsOperationInProgress(true); // ✅ Pause idle timeout during question generation
 
     try {
-      console.log('[DEBUG] Starting complete workflow...');
+      devLog('[DEBUG] Starting complete workflow...');
 
       // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
-      console.log('[DEBUG] Step 1: Uploading resume file...');
+      devLog('[DEBUG] Step 1: Uploading resume file...');
       const { resumeId, resumeUrl } = await uploadResume(resume);
 
       // Track resume upload
@@ -310,7 +311,7 @@ function UploadPage() {
       });
 
       // Step 2: Save job description to database
-      console.log('[DEBUG] Step 2: Saving job description...');
+      devLog('[DEBUG] Step 2: Saving job description...');
       const { jdId } = await saveJobDescription();
 
       // Track job description save
@@ -323,7 +324,7 @@ function UploadPage() {
       });
 
       // Step 3: Generate questions using backend API
-      console.log('[DEBUG] Step 3: Generating questions...');
+      devLog('[DEBUG] Step 3: Generating questions...');
       const questionsResult = await generateQuestionsFromBackend(resumeUrl, jobTitle, jobDescription);
       
       if (!questionsResult.success) {
@@ -337,7 +338,7 @@ function UploadPage() {
         : '';
 
       // Step 4: Save questions to database via edge function
-      console.log('[DEBUG] Step 4: Saving questions to database...');
+      devLog('[DEBUG] Step 4: Saving questions to database...');
       const questionsSaveResult = await saveQuestionsToDatabase(
         resumeId, 
         jdId, 
@@ -369,10 +370,10 @@ function UploadPage() {
       });
 
       // Step 5: Show success message and redirect
-      console.log('[DEBUG] Step 5: Process completed successfully!');
-      console.log('[DEBUG] Resume ID:', resumeId);
-      console.log('[DEBUG] Job Description ID:', jdId);
-      console.log('[DEBUG] Questions saved:', questionsSaveResult.data.length);
+      devLog('[DEBUG] Step 5: Process completed successfully!');
+      devLog('[DEBUG] Resume ID:', resumeId);
+      devLog('[DEBUG] Job Description ID:', jdId);
+      devLog('[DEBUG] Questions saved:', questionsSaveResult.data.length);
       
       // Store the created IDs for navigation
       setLastCreatedIds({

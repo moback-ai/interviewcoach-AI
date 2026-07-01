@@ -133,7 +133,7 @@ All other settings (`DB_*`, `JWT_SECRET`, `OPENROUTER_API_KEY`, `LLM_PROVIDER`, 
 ```mermaid
 flowchart LR
   Dev[Developer PR\n→ develop]
-  Sec[Security CI\nlint · pytest · gitleaks]
+  Sec[Security CI\nGitleaks · Trivy · Semgrep]
   Merge[Admin merge]
   DS[DevSecOps\nmoback-ai/devsecops-platform]
   ECR[Build ECR image]

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FiCheckCircle, FiXCircle, FiLoader, FiClock, FiArrowLeft } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
@@ -128,7 +129,7 @@ export default function PaymentSuccess() {
   return (
     <>
       <Navbar />
-      <div className="min-h-screen bg-[var(--color-bg)] pt-20 flex items-center justify-center px-4 py-8">
+      <PageWavesShell contentClassName="pt-20 flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-md bg-[var(--color-card)] text-[var(--color-text-primary)] p-8 rounded-2xl shadow-lg border border-[var(--color-border)]">
           <div className="text-center mb-6">
             <h2 className="text-2xl font-bold text-[var(--color-primary)] mb-2">Payment Status</h2>
@@ -190,7 +191,7 @@ export default function PaymentSuccess() {
             )}
           </div>
         </div>
-      </div>
+      </PageWavesShell>
     </>
   );
 }

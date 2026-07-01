@@ -1,4 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
+import AuthSceneBackdrop from './AuthSceneBackdrop';
+
+const EASE_OUT = [0.22, 1, 0.36, 1];
 
 export default function AuthSceneShell({
   variant = 'night',
@@ -9,92 +12,36 @@ export default function AuthSceneShell({
   children,
   footer,
 }) {
-  const shellRef = useRef(null);
-  const motionFrameRef = useRef(null);
-  const prefersReducedMotionRef = useRef(false);
-
-  useEffect(() => {
-    prefersReducedMotionRef.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-    return () => {
-      if (motionFrameRef.current) {
-        window.cancelAnimationFrame(motionFrameRef.current);
-      }
-    };
-  }, []);
-
-  const applyBackgroundMotion = (offsetX, offsetY) => {
-    const shell = shellRef.current;
-    if (!shell) {
-      return;
-    }
-
-    shell.style.setProperty('--auth-scene-shift-x', `${offsetX * 24}px`);
-    shell.style.setProperty('--auth-scene-shift-y', `${offsetY * 20}px`);
-    shell.style.setProperty('--auth-scene-tilt', `${offsetX * 3.5}deg`);
-  };
-
-  const queueBackgroundMotion = (offsetX, offsetY) => {
-    if (prefersReducedMotionRef.current) {
-      return;
-    }
-
-    if (motionFrameRef.current) {
-      window.cancelAnimationFrame(motionFrameRef.current);
-    }
-
-    motionFrameRef.current = window.requestAnimationFrame(() => {
-      applyBackgroundMotion(offsetX, offsetY);
-      motionFrameRef.current = null;
-    });
-  };
-
-  const handlePointerMove = (event) => {
-    if (event.pointerType === 'touch' || prefersReducedMotionRef.current) {
-      return;
-    }
-
-    const shell = shellRef.current;
-    if (!shell) {
-      return;
-    }
-
-    const bounds = shell.getBoundingClientRect();
-    const relativeX = ((event.clientX - bounds.left) / bounds.width - 0.5) * 2;
-    const relativeY = ((event.clientY - bounds.top) / bounds.height - 0.5) * 2;
-    queueBackgroundMotion(relativeX, relativeY);
-  };
-
-  const handlePointerLeave = () => {
-    queueBackgroundMotion(0, 0);
-  };
+  const reduceMotion = useReducedMotion();
 
   return (
-    <div
-      ref={shellRef}
-      className={`auth-scene-shell auth-scene-${variant}`}
-      onPointerMove={handlePointerMove}
-      onPointerLeave={handlePointerLeave}
-    >
-      <div className="auth-scene-grid" aria-hidden="true" />
-      <div className="auth-scene-flare" aria-hidden="true" />
-      <div className="auth-scene-orb auth-scene-orb-a" aria-hidden="true" />
-      <div className="auth-scene-orb auth-scene-orb-b" aria-hidden="true" />
-      <div className="auth-scene-ray auth-scene-ray-a" aria-hidden="true" />
-      <div className="auth-scene-ray auth-scene-ray-b" aria-hidden="true" />
-      <div className="auth-scene-ring auth-scene-ring-a" aria-hidden="true" />
-      <div className="auth-scene-ring auth-scene-ring-b" aria-hidden="true" />
-      <div className="auth-scene-noise" aria-hidden="true" />
+    <div className={`auth-scene-shell auth-scene-${variant}`}>
+      <AuthSceneBackdrop variant={variant} />
 
-      <div className="auth-scene-panel-wrap">
-        <section className="auth-scene-card">
+      <motion.div
+        className="auth-scene-panel-wrap"
+        initial={reduceMotion ? false : { opacity: 0, y: 32, scale: 0.97 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.58, delay: reduceMotion ? 0 : 0.1, ease: EASE_OUT }}
+      >
+        <motion.section
+          className="auth-scene-card"
+          initial={reduceMotion ? false : { opacity: 0, y: 18 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.48, delay: reduceMotion ? 0 : 0.2, ease: EASE_OUT }}
+        >
           {(badge || icon || title || description) && (
             <header className="auth-scene-header">
               {(badge || icon) && (
-                <div className="auth-scene-badge-wrap">
+                <motion.div
+                  className="auth-scene-badge-wrap"
+                  initial={reduceMotion ? false : { opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.42, delay: reduceMotion ? 0 : 0.26, ease: EASE_OUT }}
+                >
                   {icon ? <span className="auth-scene-icon">{icon}</span> : null}
                   {badge ? <span className="auth-scene-badge">{badge}</span> : null}
-                </div>
+                </motion.div>
               )}
               {title ? <h1 className="auth-scene-title">{title}</h1> : null}
               {description ? <p className="auth-scene-copy">{description}</p> : null}
@@ -103,8 +50,8 @@ export default function AuthSceneShell({
 
           <div className="auth-scene-content">{children}</div>
           {footer ? <div className="auth-scene-footer">{footer}</div> : null}
-        </section>
-      </div>
+        </motion.section>
+      </motion.div>
     </div>
   );
 }

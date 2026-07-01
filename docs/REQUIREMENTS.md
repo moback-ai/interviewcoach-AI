@@ -32,7 +32,7 @@ This document captures what was requested across prior setup sessions, and what 
 | Failed deploy **rolls back** to last stable | devsecops-platform **InterviewCoach · Deploy PROD** |
 | **Deploy after merge** to `develop` | DevSecOps runs **InterviewCoach · Deploy PROD** in `devsecops-platform` |
 | **Re-deploy** same SHA or hotfix | DevSecOps manual workflow in `devsecops-platform` |
-| **PR quick check** — lint / pytest / gitleaks on changed files before merge | `Security` workflow `pr-quick` job |
+| **PR security check** — Gitleaks, Trivy, Semgrep on every PR | `Security` workflow |
 | Simple deploy documentation (not long checklists) | [DEPLOY.md](DEPLOY.md) |
 | Workflows named consistently | [.github/workflows/README.md](../.github/workflows/README.md) |
 
@@ -51,8 +51,7 @@ This document captures what was requested across prior setup sessions, and what 
 
 | Requirement | Status |
 |-------------|--------|
-| CI security scans | **Veracode** on Deploy · Production (needs API secrets) |
-| Optional Veracode | **Security · Veracode (manual)** |
+| CI security scans | **Gitleaks**, **Trivy**, **Semgrep** on every PR | [SECURITY_SCANNING.md](SECURITY_SCANNING.md) |
 | Playwright smoke: login page loads | `frontend/e2e/login.spec.js` |
 | Login bundle must not break after chunk splits | `scripts/verify-frontend-login-bundle.sh` |
 

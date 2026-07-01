@@ -2,7 +2,7 @@
 
 | Workflow | When | Purpose |
 |----------|------|---------|
-| **Security** | PR / push to `develop` | SAST, dependency scans |
+| **Security** | PR / push to `develop` | Gitleaks, Trivy, Semgrep |
 
 **There is no production deploy workflow in this repo.**
 

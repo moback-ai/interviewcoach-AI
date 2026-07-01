@@ -1,25 +1,17 @@
 # Security scanning
 
-One **Security scan** step runs every free checker in the background (`scripts/security-scan-all.sh`).  
-Detailed output stays in the job log; the UI shows a single pass/fail.
+Three free scanners run on every PR to `main` / `develop`:
 
-## When it runs
+| Scanner | What it checks |
+|---------|----------------|
+| **Gitleaks** | Secrets in git history |
+| **Trivy** | Dependency and filesystem CVEs (CRITICAL/HIGH) |
+| **Semgrep** | SAST (Python / JavaScript patterns) |
 
-| When | Profile | Includes |
-|------|---------|----------|
-| **Every PR** | `quick` | Gitleaks, ESLint, build, pytest, Trivy, Semgrep |
-| **Before deploy** | `quick` | Same (PR already scanned; no duplicate Playwright) |
-
-## Scanners (all free)
-
-Gitleaks · ESLint · build · pytest · Trivy · Semgrep
+Workflow: `.github/workflows/code-quality-security.yml`
 
 ## Local
 
 ```bash
-SECURITY_SCAN_PROFILE=quick bash scripts/security-scan-all.sh
+bash scripts/security-scan-all.sh
 ```
-
-## Veracode
-
-Paid only — not used. Optional later if your org buys a license.
