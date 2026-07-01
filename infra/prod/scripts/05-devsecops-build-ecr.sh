@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build PROD API image and push to ECR — devsecops-platform GitHub Actions only.
 # Skips build/push when the tag already exists in ECR (deploy-only). Set FORCE_REBUILD=1 to rebuild.
-# Set REBUILD_DEPS=1 to rebuild interviewcoach-api:deps-latest (when requirements.prod.txt changes).
+# Set REBUILD_DEPS=1 to force rebuild of the dependency layer (requirements.prod.txt changed).
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -15,7 +15,6 @@ ECR_REGISTRY="${ECR_REGISTRY:?Set ECR_REGISTRY in prod.env or env}"
 IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
 REPO_NAME="${ECR_API_REPO:-interviewcoach-api}"
 REPO="${ECR_REGISTRY}/${REPO_NAME}"
-DEPS_TAG="${DEPS_IMAGE_TAG:-deps-latest}"
 
 ecr_tag_exists() {
   local tag="$1"
@@ -33,19 +32,14 @@ fi
 
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-if [[ "${REBUILD_DEPS:-}" == "1" ]] || ! ecr_tag_exists "$DEPS_TAG"; then
-  echo "Building deps base ${REPO}:${DEPS_TAG} ..."
-  docker build -f "$ROOT/docker/api/Dockerfile.deps" -t "${REPO}:${DEPS_TAG}" "$ROOT"
-  docker push "${REPO}:${DEPS_TAG}"
-else
-  echo "Reusing deps base ${REPO}:${DEPS_TAG}"
+BUILD_ARGS=(--target runtime -f "$ROOT/docker/api/Dockerfile.prod" -t "${REPO}:${IMAGE_TAG}" "$ROOT")
+if [[ "${REBUILD_DEPS:-}" == "1" ]]; then
+  echo "REBUILD_DEPS=1 — forcing dependency layer rebuild"
+  BUILD_ARGS=(--no-cache-filter=deps "${BUILD_ARGS[@]}")
 fi
 
 echo "Building app image ${REPO}:${IMAGE_TAG} ..."
-docker build -f "$ROOT/docker/api/Dockerfile.prod" \
-  --build-arg "DEPS_IMAGE=${REPO}:${DEPS_TAG}" \
-  -t "${REPO}:${IMAGE_TAG}" \
-  "$ROOT"
+docker build "${BUILD_ARGS[@]}"
 docker push "${REPO}:${IMAGE_TAG}"
 
-echo "Pushed ${REPO}:${IMAGE_TAG} (deps: ${DEPS_TAG})"
+echo "Pushed ${REPO}:${IMAGE_TAG}"
