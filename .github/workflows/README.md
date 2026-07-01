@@ -1,6 +1,7 @@
 # Workflows (application repo)
 
-**DevSecOps guide:** [docs/DEVSECOPS_GUIDE.md](../docs/DEVSECOPS_GUIDE.md)
+**Ops docs (DevSecOps repo):** `moback-ai/devsecops-platform` → `apps/interviewcoach/docs/`  
+**Developer summary:** [docs/DEVSECOPS.md](../docs/DEVSECOPS.md)
 
 | Workflow | When | Purpose |
 |----------|------|---------|
