@@ -1,21 +1,9 @@
-# PROD API image — Bedrock + OpenRouter STT (no Ollama/Whisper sidecar).
-FROM python:3.12-slim-bookworm
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl \
-    && rm -rf /var/lib/apt/lists/*
+# PROD API image — app layer on top of deps base (Dockerfile.deps).
+# CI passes DEPS_IMAGE=.../interviewcoach-api:deps-latest
+ARG DEPS_IMAGE
+FROM ${DEPS_IMAGE}
 
 WORKDIR /app
-
-COPY backend/requirements.prod.txt ./requirements.txt
-# CPU-only PyTorch first — avoids nvidia-cuda-* wheels on c6i.xlarge (no GPU).
-RUN pip install --upgrade pip \
-    && pip install torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install -r requirements.txt
 
 COPY backend/ .
 
