@@ -1,5 +1,7 @@
 # Production deploy — DevSecOps only
 
+**Full guide (roles, diagrams, step-by-step):** [DEVSECOPS_GUIDE.md](DEVSECOPS_GUIDE.md)
+
 **Only these two people deploy to production:**
 
 | DevSecOps | GitHub |
@@ -51,6 +53,17 @@ See [DEV_ACCESS.md](DEV_ACCESS.md).
 ALLOW_LOCAL_PROD_DEPLOY=1 bash infra/prod/scripts/16-set-github-prod-secrets.sh
 ALLOW_LOCAL_PROD_DEPLOY=1 bash infra/prod/scripts/16b-set-github-prod-environment.sh
 ```
+
+---
+
+## Service hours (IST)
+
+| Time | API |
+|------|-----|
+| **10:00 – 19:00** | Live (ASG min 1, max 4) |
+| **19:00 – 10:00** | Off (ASG 0) — maintenance banner on frontend |
+
+Banner auto-hides when service opens. See [DEVSECOPS_GUIDE.md § Service hours](DEVSECOPS_GUIDE.md#service-hours-ist).
 
 ---
 

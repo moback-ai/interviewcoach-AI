@@ -31,6 +31,7 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 
 - [docs/DEPLOY.md](docs/DEPLOY.md) — developer release flow  
 - [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — who deploys and how  
+- [docs/DEVSECOPS_GUIDE.md](docs/DEVSECOPS_GUIDE.md) — roles, architecture diagrams, CI/CD steps  
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — prod topology (CloudFront, Bedrock, S3)  
 - [docs/PROD_RUNBOOK.md](docs/PROD_RUNBOOK.md) — production deploy steps  
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — team requirements map  

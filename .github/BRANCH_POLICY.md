@@ -1,5 +1,7 @@
 # Branch policy
 
+**Full DevSecOps guide:** [docs/DEVSECOPS_GUIDE.md](../docs/DEVSECOPS_GUIDE.md)
+
 | Branch | Purpose |
 |--------|---------|
 | `develop/<feature>` | Feature work → PR into `develop` |
