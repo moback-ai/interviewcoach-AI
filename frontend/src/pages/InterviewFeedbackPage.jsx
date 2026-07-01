@@ -8,7 +8,6 @@ import {
   Star,
   ArrowLeft,
   Download,
-  Share2,
   BookOpen,
   Target,
   MessageSquare,
@@ -16,12 +15,14 @@ import {
   Headphones
 } from 'lucide-react';
 import Navbar from '@/components/Navbar';
+import PageWavesShell from '@/components/common/PageWavesShell';
 import { trackEvents } from '../services/mixpanel';
 import { getSession } from '@/lib/authClient';
 import { getBackendOrigin } from '@/utils/apiConfig';
 import { downloadAuthenticatedFile } from '@/utils/protectedFiles';
 import { parseFeedbackPoints } from '@/utils/feedbackPoints';
 import NoticeModal from '@/components/common/NoticeModal';
+import { devLog } from '@/utils/devLog';
 
 // PDF generation functions
 const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, getRatingLabel, getInterviewDuration, getQuestionsAnswered, formatKeyStrengths, formatImprovementAreas) => {
@@ -490,10 +491,10 @@ function InterviewFeedbackPage() {
 
   const handleDownloadAudioTranscript = async (audioUrl) => {
     try {
-      console.log('🎵 Downloading audio transcript from:', audioUrl);
+      devLog('Downloading audio transcript from:', audioUrl);
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
       await downloadAuthenticatedFile(audioUrl, `interview_audio_transcript_${timestamp}.wav`);
-      console.log('✅ Audio transcript downloaded successfully');
+      devLog('Audio transcript downloaded successfully');
     } catch (error) {
       console.error('❌ Failed to download audio transcript:', error);
       setNoticeModal({
@@ -510,13 +511,13 @@ function InterviewFeedbackPage() {
     return (
       <>
         <Navbar />
-        <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] flex items-center justify-center">
+        <PageWavesShell contentClassName="pt-20 px-4 flex items-center justify-center">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[var(--color-primary)] border-t-transparent mx-auto mb-4"></div>
             <p className="text-[var(--color-text-secondary)] text-lg">Loading your interview feedback...</p>
             <p className="text-[var(--color-text-secondary)] text-sm mt-2 opacity-75">This should only take a moment</p>
           </div>
-        </div>
+        </PageWavesShell>
       </>
     );
   }
@@ -526,7 +527,7 @@ function InterviewFeedbackPage() {
     return (
       <>
         <Navbar />
-        <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16">
+        <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16">
           <div className="w-full max-w-6xl mx-auto">
             <div className="text-center">
               <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center mx-auto mb-4">
@@ -559,7 +560,7 @@ function InterviewFeedbackPage() {
               </div>
             </div>
           </div>
-        </div>
+        </PageWavesShell>
       </>
     );
   }
@@ -569,14 +570,12 @@ function InterviewFeedbackPage() {
     return (
       <>
         <Navbar />
-        <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16">
-          <div className="w-full max-w-6xl mx-auto">
-            <div className="text-center">
-              <div className="animate-spin w-8 h-8 border-4 border-[var(--color-primary)] border-t-transparent rounded-full mx-auto mb-4"></div>
-              <p className="text-[var(--color-text-secondary)]">Loading interview feedback...</p>
-            </div>
+        <PageWavesShell contentClassName="pt-20 px-4 flex items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin w-8 h-8 border-4 border-[var(--color-primary)] border-t-transparent rounded-full mx-auto mb-4"></div>
+            <p className="text-[var(--color-text-secondary)]">Loading interview feedback...</p>
           </div>
-        </div>
+        </PageWavesShell>
       </>
     );
   }
@@ -584,8 +583,7 @@ function InterviewFeedbackPage() {
   return (
     <>
       <Navbar />
-      
-      <div className="min-h-screen bg-[var(--color-bg)] text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16">
+      <PageWavesShell contentClassName="text-[var(--color-text-primary)] px-3 sm:px-4 py-6 sm:py-8 md:py-12 lg:py-16">
         <div className="w-full max-w-6xl mx-auto">
           {/* Centered Header Section */}
           <motion.div
@@ -942,7 +940,7 @@ function InterviewFeedbackPage() {
             </motion.div>
           </div>
         </div>
-      </div>
+      </PageWavesShell>
       <NoticeModal
         isOpen={noticeModal.isOpen}
         onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}

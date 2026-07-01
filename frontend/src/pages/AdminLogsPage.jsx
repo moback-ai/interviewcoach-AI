@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Navbar from '../components/Navbar';
+import PageWavesShell from '../components/common/PageWavesShell';
 import { useAuth } from '../contexts/AuthContext';
 import { getSession } from '../lib/authClient';
 
@@ -447,9 +448,10 @@ export default function AdminLogsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b1020] text-white">
+    <>
       <Navbar />
-      <div className="mx-auto max-w-7xl px-4 py-8">
+      <PageWavesShell contentClassName="text-white px-4 py-8">
+        <div className="mx-auto max-w-7xl w-full">
         <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-blue-300/70">Admin Logs</p>
@@ -677,7 +679,8 @@ export default function AdminLogsPage() {
             </div>
           </section>
         </div>
-      </div>
-    </div>
+        </div>
+      </PageWavesShell>
+    </>
   );
 }
