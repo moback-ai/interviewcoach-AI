@@ -18,11 +18,12 @@ REPO="${ECR_REGISTRY}/${REPO_NAME}"
 
 ecr_tag_exists() {
   local tag="$1"
-  aws ecr describe-images \
+  aws ecr batch-get-image \
     --region "$REGION" \
     --repository-name "$REPO_NAME" \
     --image-ids "imageTag=${tag}" \
-    >/dev/null 2>&1
+    --query 'images[0].imageId.imageTag' \
+    --output text 2>/dev/null | grep -Fxq "$tag"
 }
 
 if [[ "${FORCE_REBUILD:-}" != "1" ]] && ecr_tag_exists "$IMAGE_TAG"; then
