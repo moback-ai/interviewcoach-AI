@@ -44,6 +44,14 @@ def _is_internal_health_request(host: str, path: str) -> bool:
     return host.endswith(".amazonaws.com") or host.endswith(".elb.amazonaws.com")
 
 
+def effective_request_proto(headers, scheme: str) -> str:
+    for key in ("CloudFront-Forwarded-Proto", "X-Forwarded-Proto"):
+        raw = headers.get(key)
+        if raw:
+            return raw.split(",")[0].strip().lower()
+    return (scheme or "http").lower()
+
+
 def canonical_redirect_url(host: str, proto: str, path: str, query_string: bytes) -> str | None:
     host = (host or "").split(":")[0].lower()
     proto = (proto or "http").split(",")[0].strip().lower()

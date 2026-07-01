@@ -50,6 +50,13 @@ PATCHED_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/patch-launch-template-docker-log
   "$REGION" "$LT_ID" 2>/dev/null || echo "$NEW_LT_VERSION")
 if [[ "$PATCHED_LT_VERSION" != "$NEW_LT_VERSION" ]]; then
   echo "Patched launch template docker logging → version $PATCHED_LT_VERSION"
+  NEW_LT_VERSION="$PATCHED_LT_VERSION"
+fi
+
+NGINX_LT_VERSION=$(python3 "${SCRIPT_DIR}/lib/patch-launch-template-nginx-proto.py" \
+  "$REGION" "$LT_ID" 2>/dev/null || echo "$NEW_LT_VERSION")
+if [[ "$NGINX_LT_VERSION" != "$NEW_LT_VERSION" ]]; then
+  echo "Patched launch template nginx X-Forwarded-Proto → version $NGINX_LT_VERSION"
 fi
 
 aws autoscaling update-auto-scaling-group \
