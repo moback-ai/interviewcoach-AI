@@ -2,6 +2,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { lazy, Suspense, useEffect } from 'react';
 import ProtectedRoute from './ProtectedRoute';
 import IdleTimeoutModal from './IdleTimeoutModal';
+import ServiceHoursNotice from './interview/ServiceHoursNotice';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdleTimeout } from '../hooks/useIdleTimeout';
 import { useTheme } from '../hooks/useTheme';
@@ -35,10 +36,8 @@ function AuthenticatedShell() {
       }
     };
 
-    if (!isOnInterviewPage) {
-      verifySession();
-    }
-  }, [location.pathname, isOnInterviewPage]);
+    verifySession();
+  }, [location.pathname]);
 
   const handleIdleLogout = () => {
     logout({ expired: true });
@@ -47,6 +46,7 @@ function AuthenticatedShell() {
   return (
     <ProtectedRoute>
       <>
+        <ServiceHoursNotice />
         <Outlet />
         {!isOnInterviewPage && (
           <Suspense fallback={null}>

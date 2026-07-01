@@ -11,22 +11,49 @@ Repository: **`moback-ai/devsecops-platform`** (private)
 
 ---
 
-## Developers — you deploy via PR, not Actions
+## Developers (ganesh, neeraj)
 
-1. Open a **PR** to `develop` (not a direct push for releases)
-2. Pass **Security** CI
-3. Get review and **merge**
-4. **Ask Govardhan or Kishore to deploy** (comment on the PR or ping them)
+1. Open a **PR** to `develop` → pass Security CI
+2. **DevSecOps approves and merges** (developers do not merge)
+3. Ask DevSecOps for **build + deploy** if needed
 
-You **cannot**:
+### AWS access (CloudWatch only — no in-app log UI)
 
-- Run **Deploy · Production** (removed from this repo)
-- Access `devsecops-platform`, SSH keys, or production secrets
-- Trigger production deploy from GitHub Actions on this repo
+| Allowed | Blocked |
+|---------|---------|
+| CloudWatch Logs read on `/interviewcoach/prod/api` | Secrets Manager (all `interviewcoach/*` incl. SSH keys) |
+| Change own IAM password | EC2, RDS, S3, IAM, CFN, Bedrock, etc. |
+
+See [DEV_ACCESS.md](DEV_ACCESS.md).
 
 ---
 
-## DevSecOps
+## DevSecOps — release flow
 
-Deploy: `devsecops-platform` → **InterviewCoach · Deploy Production**  
-Access rules: `devsecops-platform/docs/TEAM_ACCESS.md`
+1. Sync `infra/prod/` → `devsecops-platform` (`scripts/sync-interviewcoach-prod.sh`)
+2. **Build once:** Actions → **InterviewCoach · Build Docker Images** → note `image_tag`
+3. **Deploy rollout:** Actions → **InterviewCoach · Deploy Production** → same `image_tag` (no API Docker build)
+4. IAM: `devsecops-platform/scripts/apply-iam-policies.sh --apply`
+
+### Safety controls
+
+| Control | What it does |
+|---------|----------------|
+| `check-devsecops-actor.sh` | Blocks non-DevSecOps from build/deploy workflows (primary gate) |
+| GitHub `production` environment | Second approval on Team/Enterprise; optional on Free (use actor gate) |
+| `05a-verify-ecr-image.sh` | Deploy fails if image tag missing in ECR |
+| `require-devsecops.sh` | Prod scripts cannot run from application repo |
+| Branch protection + CODEOWNERS | Only DevSecOps merges `develop` / `main` |
+
+### One-time GitHub setup
+
+```bash
+ALLOW_LOCAL_PROD_DEPLOY=1 bash infra/prod/scripts/16-set-github-prod-secrets.sh
+ALLOW_LOCAL_PROD_DEPLOY=1 bash infra/prod/scripts/16b-set-github-prod-environment.sh
+```
+
+---
+
+## Repo scripts
+
+`infra/prod/scripts/*` require DevSecOps (`require-devsecops.sh`) except `load-prod-env.sh`.

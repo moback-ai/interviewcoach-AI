@@ -1,4 +1,7 @@
-# Capacity and AWS budget (~$650/month)
+# Capacity and AWS budget (Hybrid prod)
+
+**Architecture:** ALB + ASG (`c6i.xlarge`, 1–4 nodes, business hours) + Bedrock + ElastiCache + RDS.  
+See [ARCHITECTURE.md](ARCHITECTURE.md). Legacy Plan B split-EC2 notes below are **retired**.
 
 **Full production checklist:** [PRODUCTION_CHECKLIST.md](PRODUCTION_CHECKLIST.md)
 

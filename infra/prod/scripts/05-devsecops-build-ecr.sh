@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Build PROD API image and push to ECR — GitHub Actions ONLY.
-# Local/Mac/EC2 builds are blocked. Use: .github/workflows/deploy-prod.yml
+# Build PROD API image and push to ECR — devsecops-platform GitHub Actions only.
+# Skips build/push when the tag already exists in ECR (deploy-only). Set FORCE_REBUILD=1 to rebuild.
 set -euo pipefail
 
-if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
-  echo "ERROR: Prod API images are built only on GitHub Actions."
-  echo "  Actions → Deploy PROD → Run workflow"
-  echo "  https://github.com/moback-ai/interviewcoach-AI/actions/workflows/deploy-prod.yml"
-  exit 1
-fi
-
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
 # shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 
@@ -17,7 +12,21 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 REGION="${AWS_REGION:-ap-south-1}"
 ECR_REGISTRY="${ECR_REGISTRY:?Set ECR_REGISTRY in prod.env or env}"
 IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
-REPO="${ECR_REGISTRY}/${ECR_API_REPO:-interviewcoach-api}"
+REPO_NAME="${ECR_API_REPO:-interviewcoach-api}"
+REPO="${ECR_REGISTRY}/${REPO_NAME}"
+
+image_exists_in_ecr() {
+  aws ecr describe-images \
+    --region "$REGION" \
+    --repository-name "$REPO_NAME" \
+    --image-ids "imageTag=${IMAGE_TAG}" \
+    >/dev/null 2>&1
+}
+
+if [[ "${FORCE_REBUILD:-}" != "1" ]] && image_exists_in_ecr; then
+  echo "Image ${REPO}:${IMAGE_TAG} already in ECR — skipping build (set FORCE_REBUILD=1 to rebuild)."
+  exit 0
+fi
 
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 

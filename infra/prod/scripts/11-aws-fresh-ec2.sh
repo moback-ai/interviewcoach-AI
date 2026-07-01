@@ -12,6 +12,9 @@ fi
 # shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 REGION="${AWS_REGION:-ap-south-1}"
 EC2_STACK_NAME="${EC2_STACK_NAME:-interviewcoach-prod-api}"
 TEMPLATE="${TEMPLATE:-$(dirname "$0")/../cloudformation/prod-ec2-stack.yaml}"

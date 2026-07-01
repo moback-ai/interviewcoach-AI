@@ -115,10 +115,36 @@ def _resolve_under_storage_root(relative_path: str) -> str | None:
     return resolved
 
 
+def validated_legacy_upload_folder(user_id: str, folder: str = "general") -> str | None:
+    """Scope legacy uploads to uploads/{user_id}/… under STORAGE_PATH."""
+    uid = _sanitize_path_segment(str(user_id))
+    if not uid:
+        return None
+    sub = (folder or "general").strip("/")
+    if sub in ("", "general"):
+        return normalize_relative_path(f"uploads/{uid}")
+    parts = [uid]
+    for segment in sub.split("/"):
+        clean = _sanitize_path_segment(segment)
+        if not clean:
+            return None
+        parts.append(clean)
+    return normalize_relative_path(f"uploads/{'/'.join(parts)}")
+
+
 def _ensure(folder: str) -> str:
-    path = os.path.join(_storage_path(), folder)
-    os.makedirs(path, exist_ok=True)
-    return path
+    clean = normalize_relative_path(folder)
+    if not clean:
+        raise ValueError(f"Invalid storage folder: {folder}")
+    joined = safe_join(_storage_path(), *clean.split("/"))
+    if not joined:
+        raise ValueError(f"Invalid storage folder: {folder}")
+    storage_root = _storage_root()
+    resolved = os.path.realpath(joined)
+    if not _path_within_root(storage_root, resolved):
+        raise ValueError(f"Storage folder escapes root: {folder}")
+    os.makedirs(resolved, exist_ok=True)
+    return resolved
 
 
 def protected_file_url(relative_path: str) -> str:
@@ -241,13 +267,19 @@ def _file_result(relative: str, stored_path: str, file_size: int) -> dict:
 
 def save_bytes(data: bytes, folder: str, filename: str) -> dict:
     """Save raw bytes to storage. Returns path info."""
+    clean_folder = normalize_relative_path(folder)
+    if not clean_folder:
+        raise ValueError(f"Invalid storage folder: {folder}")
+    safe_name = secure_filename(filename)
+    if not safe_name:
+        raise ValueError("Invalid filename")
     if use_s3_storage():
-        return save_bytes_s3(data, folder, filename)
-    dir_path = _ensure(folder)
-    file_path = os.path.join(dir_path, filename)
+        return save_bytes_s3(data, clean_folder, safe_name)
+    dir_path = _ensure(clean_folder)
+    file_path = os.path.join(dir_path, safe_name)
     with open(file_path, 'wb') as f:
         f.write(data)
-    relative = f"{folder}/{filename}"
+    relative = f"{clean_folder}/{safe_name}"
     return _file_result(relative, file_path, len(data))
 
 

@@ -3,6 +3,9 @@
 # Run ONLY after 7+ days stable. See docs/AWS_DECOMMISSION.md
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 SCRIPT_DIR="$(dirname "$0")"
 
 echo "=== Step 8: Decommission Plan B ==="

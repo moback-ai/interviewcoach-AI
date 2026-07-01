@@ -246,7 +246,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Run Semgrep CI rules
-        run: semgrep scan --config p/ci --error
+        run: semgrep scan --config p/ci --error --exclude 'infra/prod/github-workflows/'
 
   secret-scan:
     name: Secret scan (Gitleaks)

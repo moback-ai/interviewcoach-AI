@@ -8,7 +8,7 @@ from common.runtime_config import optional_env
 
 DEFAULT_TZ = "Asia/Kolkata"
 DEFAULT_START = "10:00"
-DEFAULT_END = "20:00"
+DEFAULT_END = "19:00"
 
 
 def _parse_hhmm(value: str, fallback: str) -> tuple[int, int]:
@@ -49,7 +49,7 @@ def service_hours_status(now=None):
         "end": f"{end_h:02d}:{end_m:02d}",
         "now_local": now_local.isoformat(),
         "message": (
-            "InterviewCoach is available 10:00 AM – 8:00 PM IST."
+            f"InterviewCoach is available {start_h:02d}:{start_m:02d}–{end_h:02d}:{end_m:02d} ({tz_name})."
             if not is_open
             else ""
         ),

@@ -3,6 +3,9 @@
 set -euo pipefail
 
 # shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
+# shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 
 REGION="${AWS_REGION:-ap-south-1}"
@@ -11,7 +14,20 @@ TEMPLATE="$(dirname "$0")/../cloudformation/prod-cloudfront.yaml"
 APEX_DOMAIN="${APEX_DOMAIN:-ugaanlabs.ai}"
 STATIC_BUCKET="${STATIC_BUCKET:-ic-static-prod}"
 STATIC_REGION="${S3_REGION:-ap-south-1}"
-API_ORIGIN="${API_ORIGIN_DOMAIN:?Set API_ORIGIN_DOMAIN}"
+COMPUTE_STACK="${COMPUTE_STACK_NAME:-interviewcoach-prod-compute}"
+
+if [[ -z "${API_ORIGIN_DOMAIN:-}" ]]; then
+  API_ORIGIN=$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$COMPUTE_STACK" \
+    --query "Stacks[0].Outputs[?OutputKey=='AlbDnsName'].OutputValue" --output text 2>/dev/null || true)
+  if [[ -z "$API_ORIGIN" || "$API_ORIGIN" == "None" ]]; then
+    echo "ERROR: Set API_ORIGIN_DOMAIN or deploy compute stack with AlbDnsName output."
+    exit 1
+  fi
+  echo "Resolved API origin from $COMPUTE_STACK: $API_ORIGIN"
+else
+  API_ORIGIN="$API_ORIGIN_DOMAIN"
+fi
+
 CERT_ARN="${ACM_CERT_ARN:?Set ACM_CERT_ARN to issued cert}"
 LIVE_DIST="${CF_DIST_ID:?Set CF_DIST_ID}"
 

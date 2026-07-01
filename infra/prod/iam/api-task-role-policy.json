@@ -78,7 +78,10 @@
         "logs:CreateLogStream",
         "logs:PutLogEvents"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:logs:ap-south-1:328991713462:log-group:/interviewcoach/prod/*",
+        "arn:aws:logs:ap-south-1:328991713462:log-group:/interviewcoach/prod/*:*"
+      ]
     }
   ]
 }

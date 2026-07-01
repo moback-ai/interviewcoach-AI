@@ -26,7 +26,7 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 | **1 AWS** | S3 buckets (CloudFormation) | `02-aws-cloudformation.sh` or `02b-rename-s3-stack.sh` |
 | **1 AWS** | Push secrets JSON → Secrets Manager | `03-aws-secrets-manager.sh` |
 | **1 AWS** | Attach IAM policy to API role | `04-aws-iam-attach.sh` |
-| **2 Build** | API + frontend on **GitHub Actions** | `.github/workflows/deploy-prod.yml` |
+| **2 Build** | API + frontend on **devsecops-platform** | `InterviewCoach · Deploy Production` |
 | **3 Code** | ASG rollout + S3 sync (same workflow) | `06-code-deploy-api-asg.sh` |
 | **3 Code** | Verify health | `curl https://www.ugaanlabs.ai/api/health` (10:00–19:00 IST) |
 | **3 Code** | Migrate storage → S3 | `07b-migrate-legacy-storage.sh` |
@@ -36,7 +36,7 @@ Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 | **3 Code** | Prod smoke test | (below) |
 | **Monitor** | CloudWatch / Bedrock / OpenRouter | ongoing |
 | **Schedule** | ASG business hours 10:00–19:00 IST | `15-aws-schedule-business-hours.sh` |
-| **CI** | GitHub `production` secrets | `16-set-github-prod-secrets.sh` |
+| **CI** | GitHub secrets on devsecops-platform | `16-set-github-prod-secrets.sh` (DevSecOps) |
 
 **After 7 stable days:** `10-cleanup-decommission.sh` + [AWS_DECOMMISSION.md](AWS_DECOMMISSION.md)
 

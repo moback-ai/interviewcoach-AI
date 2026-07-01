@@ -2,6 +2,9 @@
 # Phase 1 (AWS) — Enable Bedrock models in ap-south-1 (run once, Monday morning).
 set -euo pipefail
 
+# shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
 echo "=== Step 1: Bedrock model access ==="
 echo "Console: AWS → Bedrock → Model access → Enable:"
 echo "  - Amazon Nova Lite / Pro / Micro (APAC)"

@@ -7,13 +7,11 @@
 - [ ] Target branch is `develop`
 - [ ] Tested locally
 - [ ] Security workflow green
-- [ ] **CODEOWNERS:** @govardhanreddy66 or @KFKishore23 approved (required for merge)
+- [ ] **DevSecOps only:** @govardhanreddy66 or @KFKishore23 will **approve and merge** (developers do not merge)
 
-## Production deploy (DevSecOps only)
+## Production (DevSecOps only)
 
-- [ ] **Deploy needed after merge?** (yes / no)
-- If **yes**: ask **Govardhan or Kishore** to run **InterviewCoach · Deploy Production** from `moback-ai/devsecops-platform` after merge.
-
-**Developers cannot deploy to production.** No deploy workflows exist on this repo.
+- [ ] **Build needed?** → **InterviewCoach · Build Docker Images** (once per release)
+- [ ] **Deploy needed?** → **InterviewCoach · Deploy Production** with the **same `image_tag`** (no build on deploy)
 
 See [docs/DEVSECOPS.md](../docs/DEVSECOPS.md).

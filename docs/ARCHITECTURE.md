@@ -13,7 +13,7 @@ flowchart TB
   CF[CloudFront\nwww.ugaanlabs.ai]
   S3[S3 ic-static-prod\nReact SPA]
   ALB[ALB\ninterviewcoach-prod-alb]
-  ASG[ASG c6i.xlarge x2+\nDocker API]
+  ASG[ASG c6i.xlarge x1-4\nDocker API]
   RDS[(RDS PostgreSQL\nMulti-AZ + Proxy)]
   S3Files[S3 ic-user-files-prod]
   Bedrock[Amazon Bedrock]
@@ -88,14 +88,16 @@ S3 stack rename/import (legacy): `infra/prod/scripts/02b-rename-s3-stack.sh`
 | Resource | Role |
 |----------|------|
 | ALB `interviewcoach-prod-alb` | API load balancer (CloudFront origin) |
-| ASG `interviewcoach-prod-api-asg` | 2–4 × `c6i.xlarge`, Docker API + nginx |
+| ASG `interviewcoach-prod-api-asg` | **1–4** × `c6i.xlarge` (CPU autoscale; min 1 in business hours) |
 | ElastiCache `interviewcoach-prod-redis` | Redis 7 (Multi-AZ, 2 nodes) |
 | RDS Proxy `interviewcoach-prod-proxy` | Connection pooling to RDS |
 | ECR `interviewcoach-api` | Prod API container image |
 
 Legacy single EC2 stack (`interviewcoach-prod-api`) **decommissioned** — API runs on ASG only.
 
-**Business hours (IST):** API ASG scales **10:00–19:00** daily; off-hours `/api/*` returns 503. RDS, ElastiCache, ALB, CloudFront stay 24/7.
+**Business hours (IST):** API ASG **10:00–19:00** (min **1**, max **4** via CPU autoscale); **19:00** scale to **0**. RDS, ElastiCache, ALB, CloudFront stay 24/7.
+
+**CPU autoscale (during business hours):** average CPU **> 70%** for ~10 min → **+1** instance; **< 30%** → scale in (not below min **1**).
 
 Infra names and IDs: `infra/prod/prod.env` (no secrets — safe to commit).
 

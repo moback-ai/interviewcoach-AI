@@ -13,6 +13,9 @@
 set -euo pipefail
 
 # shellcheck disable=SC1091
+source "$(dirname "$0")/require-devsecops.sh"
+
+# shellcheck disable=SC1091
 source "$(dirname "$0")/load-prod-env.sh"
 
 API_USER="${NAMECHEAP_API_USER:-}"
