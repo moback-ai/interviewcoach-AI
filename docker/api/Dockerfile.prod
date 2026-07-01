@@ -12,7 +12,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY backend/requirements.prod.txt ./requirements.txt
+# CPU-only PyTorch first — avoids nvidia-cuda-* wheels on c6i.xlarge (no GPU).
 RUN pip install --upgrade pip \
+    && pip install torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r requirements.txt
 
 COPY backend/ .
