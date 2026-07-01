@@ -79,6 +79,7 @@ from common.storage import (
 )
 from common.canonical_url import (
     canonical_redirect_url,
+    effective_request_proto,
     enforce_https_www,
     is_local_dev,
     normalize_public_origin,
@@ -177,7 +178,7 @@ def _enforce_https_www():
         return None
     target = canonical_redirect_url(
         request.host,
-        request.headers.get("X-Forwarded-Proto", request.scheme),
+        effective_request_proto(request.headers, request.scheme),
         request.path,
         request.query_string,
     )

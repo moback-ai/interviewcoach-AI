@@ -11,6 +11,7 @@ from common.canonical_url import (
     apex_host,
     canonical_host,
     canonical_redirect_url,
+    effective_request_proto,
     normalize_public_origin,
 )
 
@@ -45,3 +46,9 @@ def test_skip_alb_health_host():
         "/api/health",
         b"",
     ) is None
+
+
+def test_effective_proto_cloudfront_header():
+    headers = {"CloudFront-Forwarded-Proto": "https", "X-Forwarded-Proto": "http"}
+    assert effective_request_proto(headers, "http") == "https"
+    assert canonical_redirect_url("www.ugaanlabs.ai", effective_request_proto(headers, "http"), "/api/health", b"") is None
