@@ -27,16 +27,13 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 | `develop/<feature>` | Feature work | Yes — after admin PR approval |
 | `main` | Monthly snapshot | **Never** deploys |
 
-**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers release by merging a PR to `develop` and requesting deploy.
+**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers open PRs to `develop`, pass Security CI, and request deploy.
 
-- [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — PR flow, who merges, who deploys  
-- [docs/DEV_ACCESS.md](docs/DEV_ACCESS.md) — developer CloudWatch log access  
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — application stack  
+- [docs/README.md](docs/README.md) — contributing, developer docs index  
 - [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) — Security CI  
-- [docs/DEVSECOPS_GUIDE.md](docs/DEVSECOPS_GUIDE.md) — pointer to ops docs in `devsecops-platform`  
-- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — team requirements map  
+- [docs/DEV_ACCESS.md](docs/DEV_ACCESS.md) — CloudWatch log access  
 
-**DevSecOps only** (private repo `moback-ai/devsecops-platform`): roles, architecture diagrams, deploy playbooks → `apps/interviewcoach/docs/`
+Ops docs (architecture, budget, DevSecOps, runbooks): **`devsecops-platform`** → `apps/interviewcoach/docs/` (private)
 
 ## Project layout
 
@@ -46,7 +43,7 @@ frontend/         Vite + React 19
 database/         Schema and SQL migrations
 docker/           Dockerfile.prod, compose files
 infra/prod/       Reference copy — sync to devsecops-platform (do not run scripts here)
-docs/             Developer docs; ops docs in devsecops-platform
+docs/             Developer docs only; ops docs in devsecops-platform
 scripts/          Dev, deploy, security scan helpers
 ```
 

@@ -1,7 +1,7 @@
 # Workflows (application repo)
 
-**Ops docs (DevSecOps repo):** `moback-ai/devsecops-platform` → `apps/interviewcoach/docs/`  
-**Developer summary:** [docs/DEVSECOPS.md](../docs/DEVSECOPS.md)
+**Ops docs:** `moback-ai/devsecops-platform` → `apps/interviewcoach/docs/`  
+**Developers:** [docs/README.md](../docs/README.md)
 
 | Workflow | When | Purpose |
 |----------|------|---------|
@@ -9,6 +9,6 @@
 
 **There is no production deploy workflow in this repo.**
 
-Production deploy is **DevSecOps only** from `moback-ai/devsecops-platform` — see [docs/DEVSECOPS.md](../docs/DEVSECOPS.md).
+Production deploy is **DevSecOps only** from `moback-ai/devsecops-platform`.
 
-Developers: open a PR → merge to `develop` → ask Govardhan or Kishore to deploy.
+Developers: open a PR → pass Security CI → ask Govardhan or Kishore to merge and deploy.
