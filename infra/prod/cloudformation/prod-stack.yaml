@@ -21,6 +21,8 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
   UserFilesBucket:
     Type: AWS::S3::Bucket

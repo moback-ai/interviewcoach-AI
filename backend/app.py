@@ -15,7 +15,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
 import mimetypes
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context, redirect, make_response
 from flask_cors import CORS
@@ -529,6 +529,8 @@ def _ensure_app_schemas_once():
 
 PUBLIC_DOC_ENDPOINTS = {
     "/api/health",
+    "/api/health/live",
+    "/api/health/ready",
     "/api/service-hours",
     "/api/signup",
     "/api/login",
@@ -546,6 +548,18 @@ API_DOC_OVERRIDES = {
         "get": {
             "summary": "Health check",
             "description": "Returns backend health for uptime checks and deployment validation.",
+        }
+    },
+    "/api/health/live": {
+        "get": {
+            "summary": "Liveness probe",
+            "description": "Returns 200 when the API process is running.",
+        }
+    },
+    "/api/health/ready": {
+        "get": {
+            "summary": "Readiness probe",
+            "description": "Returns 200 only when database, config, and providers are ready for traffic.",
         }
     },
     "/api/signup": {
@@ -1188,36 +1202,27 @@ def schedule_background_ai_warmup():
 #  HEALTH
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.route('/api/health/live', methods=['GET'])
+def health_live():
+    from common.health import live_payload
+
+    return jsonify(live_payload()), 200
+
+
+@app.route('/api/health/ready', methods=['GET'])
+def health_ready():
+    from common.health import ready_payload
+
+    payload = ready_payload()
+    return jsonify(payload), 200 if payload.get("ready") else 503
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
-    llm_diagnostics = get_llm_diagnostics()
-    stt_diagnostics = get_stt_diagnostics()
-    provider = llm_provider_name()
-    llm_status = {
-        "provider": provider,
-        "ready": llm_diagnostics.get("ready", False),
-        "reachable": llm_diagnostics.get("reachable", llm_diagnostics.get("ready", False)),
-        "model": llm_diagnostics.get("model"),
-        "model_available": llm_diagnostics.get("model_available", llm_diagnostics.get("ready", False)),
-        "error": llm_diagnostics.get("error", ""),
-    }
-    services = {
-        "llm": llm_status,
-        "stt": stt_diagnostics,
-    }
-    if provider == "ollama":
-        services["ollama"] = dict(llm_status)
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "version": "2.0.0",
-        "api_revision": "prod-v1",
-        "config": {
-            "source": config_source(),
-            "secret_id": optional_env("AWS_SECRETS_MANAGER_SECRET_ID") or os.getenv("AWS_SECRETS_MANAGER_SECRET_ID", ""),
-        },
-        "services": services,
-    })
+    from common.health import full_health_payload
+
+    payload = full_health_payload()
+    return jsonify(payload), 200
 
 
 @app.route('/api/service-hours', methods=['GET'])
@@ -2115,7 +2120,8 @@ def generate_questions():
             resp = http_requests.get(resume_url)
             resp.raise_for_status()
             resume_data = resp.content
-            ext = resume_url.split('.')[-1].lower() or 'pdf'
+            url_path = urlparse(resume_url).path
+            ext = url_path.rsplit('.', 1)[-1].lower() if '.' in url_path else 'pdf'
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
             tf.write(resume_data)

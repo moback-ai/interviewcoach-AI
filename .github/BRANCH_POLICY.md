@@ -27,8 +27,13 @@ Enforced via `.github/CODEOWNERS` (required review from DevSecOps).
 
 ## Deploy flow
 
-1. **Build image once** — devsecops → **InterviewCoach · Build Docker Images**
-2. **Deploy rollout only** — devsecops → **InterviewCoach · Deploy Production** (existing ECR tag, no build)
+1. **PR** — pass CI (lint, build, pytest) + Security in `interviewcoach-AI`
+2. **Merge** — DevSecOps merges to `develop`
+3. **Build image once** — devsecops → **InterviewCoach · Release to Production** (`deploy_api=true`)
+4. **Deploy rollout only** — same workflow with existing ECR tag, or `07b-rollback-api-asg.sh` for rollback
+
+Deploy gates: quality gate, business hours (10:00–19:00 IST), ECR CVE scan, smoke tests, auto-rollback on API failure.  
+Details: [docs/DEPLOY.md](../docs/DEPLOY.md)
 
 ## ASG schedule (IST)
 

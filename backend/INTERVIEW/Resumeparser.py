@@ -96,6 +96,9 @@ def extract_text_from_resume(file_path):
         elif file_ext in ['docx', 'doc']:
             # Use python-docx for Word documents
             return extract_text_from_docx(file_path)
+        elif file_ext == 'txt':
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as handle:
+                return handle.read().strip()
         else:
             # Fallback to textract for other file types
             return extract_text_from_textract(file_path)

@@ -87,7 +87,7 @@ trap - EXIT
 resume_asg_scheduled_actions
 
 if [[ -n "${ALB_DNS_NAME:-}" ]]; then
-  curl -fsS --max-time 10 "http://${ALB_DNS_NAME}/api/health" | head -c 200 || true
+  curl -fsS --max-time 10 "http://${ALB_DNS_NAME}/api/health/ready" | head -c 200 || true
   echo
 fi
 echo "API deploy done: ${IMAGE_TAG}"
