@@ -11,6 +11,7 @@ runtime_config._CONFIG = {
     "JWT_SECRET": "test-jwt-secret-for-pytest-only-32chars",
     "DOMAIN": "http://localhost:5173",
     "AUTH_RETURN_TOKEN_IN_BODY": "true",
+    "API_FAILURES_LOG_FILE": "/tmp/ic-test-api-failures.log",
 }
 
 

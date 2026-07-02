@@ -1,7 +1,7 @@
 # COPY to moback-ai/devsecops-platform → .github/workflows/interviewcoach-deploy-prod.yml
 # Do NOT enable this workflow in interviewcoach-AI.
 #
-# One workflow: build (if API) + deploy. Three inputs only.
+# Build (optional) + deploy with quality gate, business-hours guard, and rollback.
 name: InterviewCoach · Release to Production
 
 on:
@@ -19,6 +19,10 @@ on:
         description: Build frontend + sync to S3
         type: boolean
         default: false
+      allow_off_hours:
+        description: Allow deploy/smoke outside 10:00–19:00 IST (emergency only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,6 +37,7 @@ env:
   AWS_REGION: ap-south-1
   APP_REPO: moback-ai/interviewcoach-AI
   AWS_ACCOUNT_ID: "328991713462"
+  ALLOW_OFF_HOURS_DEPLOY: ${{ inputs.allow_off_hours && '1' || '0' }}
 
 jobs:
   gate:
@@ -42,11 +47,68 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/check-devsecops-actor.sh
 
+  detect-changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    needs: [gate]
+    outputs:
+      frontend: ${{ steps.paths.outputs.frontend }}
+      backend: ${{ steps.paths.outputs.backend }}
+      database: ${{ steps.paths.outputs.database }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ inputs.git_ref }}
+          path: app
+          token: ${{ secrets.APP_REPO_READ_TOKEN }}
+          fetch-depth: 0
+
+      - id: paths
+        working-directory: app
+        run: |
+          set -euo pipefail
+          BASE="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          mapfile -t files < <(git diff --name-only "${BASE}" HEAD || true)
+          frontend=false
+          backend=false
+          database=false
+          for file in "${files[@]}"; do
+            [[ "$file" == frontend/* ]] && frontend=true
+            [[ "$file" == backend/* || "$file" == docker/api/* ]] && backend=true
+            [[ "$file" == database/* ]] && database=true
+          done
+          {
+            echo "frontend=${frontend}"
+            echo "backend=${backend}"
+            echo "database=${database}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Changed paths:"
+          printf '  %s\n' "${files[@]:-"(none)"}"
+
+  quality-gate:
+    name: Quality gate
+    runs-on: ubuntu-latest
+    needs: [gate]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ inputs.git_ref }}
+          path: app
+          token: ${{ secrets.APP_REPO_READ_TOKEN }}
+
+      - name: Run pre-deploy quality gate
+        uses: ./app/.github/actions/pre-deploy-quality-gate
+        with:
+          git_ref: ${{ inputs.git_ref }}
+
   build-api:
     name: Build API image
     runs-on: ubuntu-latest
-    needs: [gate]
+    needs: [gate, quality-gate]
     if: inputs.deploy_api
+    environment: production
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
@@ -87,10 +149,22 @@ jobs:
             app
           echo "Pushed $ECR/interviewcoach-api:$IMAGE_TAG"
 
+      - name: Scan API image (CRITICAL CVE gate)
+        env:
+          ECR: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/trivy.tar.gz \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          tar -xzf /tmp/trivy.tar.gz -C "$HOME/.local/bin" trivy
+          trivy image --severity CRITICAL --exit-code 1 \
+            "$ECR/interviewcoach-api:$IMAGE_TAG"
+
   deploy-api:
     name: Deploy API
     runs-on: ubuntu-latest
-    needs: [gate, build-api]
+    needs: [gate, quality-gate, build-api, detect-changes]
     if: inputs.deploy_api
     environment: production
     steps:
@@ -99,13 +173,35 @@ jobs:
           repository: ${{ env.APP_REPO }}
           ref: ${{ inputs.git_ref }}
           path: app
+          token: ${{ secrets.APP_REPO_READ_TOKEN }}
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
+      - name: Business hours guard
+        working-directory: app
+        run: bash infra/prod/scripts/lib/deploy-business-hours.sh
+
+      - name: Database migration notice
+        if: needs.detect-changes.outputs.database == 'true'
+        run: |
+          echo "::warning::database/** changed. Apply pending SQL migrations before or during this deploy."
+          echo "See app/database/README.md and docs/DEPLOY.md."
+
+      - name: Capture current API image tag
+        id: previous
+        working-directory: app
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+        run: |
+          TAG=$(bash infra/prod/scripts/lib/get-current-api-image-tag.sh)
+          echo "image_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Previous API image tag: ${TAG}"
+
       - name: Roll out to ASG
+        id: rollout
         working-directory: app
         env:
           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
@@ -113,13 +209,35 @@ jobs:
         run: bash infra/prod/scripts/06-code-deploy-api-asg.sh
 
       - name: Smoke test
+        id: smoke
         working-directory: app
         run: bash infra/prod/scripts/07-smoke-test-prod.sh
+
+      - name: Rollback API on smoke failure
+        if: failure() && steps.smoke.outcome == 'failure'
+        working-directory: app
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ steps.previous.outputs.image_tag }}
+        run: |
+          echo "::warning::Smoke failed. Rolling back to ${IMAGE_TAG}"
+          bash infra/prod/scripts/07b-rollback-api-asg.sh
+
+      - name: Deploy summary
+        if: always()
+        run: |
+          {
+            echo "## API deploy"
+            echo "- Ref: \`${{ inputs.git_ref }}\`"
+            echo "- New image: \`${{ needs.build-api.outputs.image_tag }}\`"
+            echo "- Previous image: \`${{ steps.previous.outputs.image_tag }}\`"
+            echo "- Database changes detected: \`${{ needs.detect-changes.outputs.database }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   deploy-frontend:
     name: Deploy frontend
     runs-on: ubuntu-latest
-    needs: [gate]
+    needs: [gate, quality-gate, detect-changes]
     if: inputs.deploy_frontend
     environment: production
     steps:
@@ -128,6 +246,7 @@ jobs:
           repository: ${{ env.APP_REPO }}
           ref: ${{ inputs.git_ref }}
           path: app
+          token: ${{ secrets.APP_REPO_READ_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -140,9 +259,17 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
 
+      - name: Business hours guard
+        working-directory: app
+        run: bash infra/prod/scripts/lib/deploy-business-hours.sh
+
       - name: Build and sync S3
         working-directory: app
         env:
           STATIC_BUCKET: ${{ secrets.STATIC_S3_BUCKET }}
           CF_DIST_ID: ${{ secrets.CLOUDFRONT_DIST_ID }}
         run: bash infra/prod/scripts/08-code-frontend.sh
+
+      - name: Frontend smoke
+        working-directory: app
+        run: bash infra/prod/scripts/07-smoke-test-prod.sh

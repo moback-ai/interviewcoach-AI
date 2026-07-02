@@ -39,7 +39,8 @@ def normalize_public_origin() -> str:
 
 
 def _is_internal_health_request(host: str, path: str) -> bool:
-    if not path.rstrip("/").endswith("/api/health"):
+    normalized = path.rstrip("/")
+    if normalized not in {"/api/health", "/api/health/live", "/api/health/ready"}:
         return False
     return host.endswith(".amazonaws.com") or host.endswith(".elb.amazonaws.com")
 
