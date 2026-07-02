@@ -106,11 +106,11 @@ import json
 with open("/tmp/ic-smoke-gen.json") as f:
     data = json.load(f)
 assert data.get("success"), data
-questions = data.get("questions") or []
+questions = data.get("questions") or (data.get("data") or {}).get("questions") or []
 assert len(questions) >= 1, data
-print(f"OK: generated {len(questions)} question(s)")
+print(f"OK: generated {len(questions)} question(s) in success response")
 for q in questions[:3]:
-    print(" -", (q.get("question") or q.get("text") or str(q))[:120])
+    print(" -", (q.get("question_text") or q.get("question") or q.get("text") or str(q))[:120])
 PY
     exit 0
   fi
