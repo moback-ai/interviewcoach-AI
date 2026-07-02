@@ -23,12 +23,16 @@ DIST_TMP=$(mktemp)
 trap 'rm -f "$DIST_TMP"' EXIT
 aws cloudfront get-distribution-config --id "$CF_DIST_ID" --query DistributionConfig --output json > "$DIST_TMP"
 python3 - "$DIST_TMP" "$ALB_DNS" <<'PY'
-import json, sys
+import json, os, sys
 path, alb = sys.argv[1:3]
 cfg = json.load(open(path))
 for origin in cfg.get("Origins", {}).get("Items", []):
     if origin.get("Id") == "ApiOrigin":
         origin["DomainName"] = alb
+        coc = origin.get("CustomOriginConfig")
+        if coc:
+            coc["OriginReadTimeout"] = int(os.environ.get("CF_API_ORIGIN_READ_TIMEOUT", "120"))
+            coc["OriginKeepaliveTimeout"] = int(os.environ.get("CF_API_ORIGIN_KEEPALIVE_TIMEOUT", "60"))
         break
 else:
     raise SystemExit("ApiOrigin not found in CloudFront config")
