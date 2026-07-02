@@ -110,6 +110,12 @@ export const getAuthHeaders = (headers = {}) => {
   };
 };
 
+/** Fetch init with session cookie + optional Bearer token (use for legacy raw fetch calls). */
+export const authFetchInit = (headers = {}) => ({
+  ...FETCH_CREDENTIALS,
+  headers: getAuthHeaders(headers),
+});
+
 export const refreshCurrentUser = fetchCurrentUser;
 
 export const signUp = async ({ username, email, password, fullName = '' }) => {

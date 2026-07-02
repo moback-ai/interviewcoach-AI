@@ -12,7 +12,7 @@ import { apiPost } from '../api';
 import { trackEvents } from '../services/mixpanel';
 import PerformanceGraph from '../components/PerformanceGraph';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getSession } from '../lib/authClient';
+import { authFetchInit, getSession } from '../lib/authClient';
 import { downloadAuthenticatedFile } from '../utils/protectedFiles';
 import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { getBackendOrigin } from '../utils/apiConfig';
@@ -95,10 +95,7 @@ function DashboardPage() {
       const backendOrigin = getBackendOrigin();
       const response = await fetch(`${backendOrigin}/functions/v1/dashboard`, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        }
+        ...authFetchInit({ 'Content-Type': 'application/json' }),
       });
 
       const result = await parseApiJson(response, 'Failed to fetch dashboard data');
@@ -360,10 +357,7 @@ function DashboardPage() {
       // First, get the current highest question set number for this specific resume_id + jd_id combination
       const getCurrentQuestionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeId}&jd_id=${jdId}`, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        }
+        ...authFetchInit({ 'Content-Type': 'application/json' }),
       });
 
       const currentQuestionSetsResult = await parseApiJson(getCurrentQuestionSetsResponse, 'Failed to get current question sets');
@@ -382,10 +376,7 @@ function DashboardPage() {
       // Now save the new questions with the incremented question set number
       const response = await fetch(`${backendOrigin}/functions/v1/questions`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
-        },
+        ...authFetchInit({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           resume_id: resumeId,
           jd_id: jdId,
