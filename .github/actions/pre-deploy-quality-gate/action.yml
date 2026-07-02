@@ -60,12 +60,12 @@ runs:
 
     - name: Gate · Setup Python
       uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: backend/requirements-ci.txt
+      with:
+        python-version: "3.12"
+        cache: pip
+        cache-dependency-path: backend/requirements-ci.txt
 
-      - name: Gate · Backend tests
+    - name: Gate · Backend tests
       shell: bash
       run: |
         set -euo pipefail
