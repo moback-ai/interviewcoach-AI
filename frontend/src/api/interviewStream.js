@@ -85,12 +85,16 @@ export async function apiPostInterviewStream(endpoint, body, { onEvent, signal }
     buffer = chunks.pop() || '';
 
     for (const chunk of chunks) {
+      const eventLine = chunk.split('\n').find((line) => line.startsWith('event: '));
       const dataLine = chunk.split('\n').find((line) => line.startsWith('data: '));
       if (!dataLine) continue;
       try {
         const payload = JSON.parse(dataLine.slice(6));
-        lastPayload = payload;
-        onEvent?.(payload);
+        const eventName = eventLine ? eventLine.slice(7).trim() : 'message';
+        if (eventName === 'complete') {
+          lastPayload = payload;
+        }
+        onEvent?.(eventName, payload);
       } catch {
         // ignore malformed SSE chunks
       }

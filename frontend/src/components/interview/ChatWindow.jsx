@@ -375,7 +375,29 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       }
       
       let response = null;
-      const liveStreamId = 'interview-live-stream';
+      const liveStreamId = `stream-${Date.now()}`;
+      let sawStreamTokens = false;
+
+      const upsertLiveStreamMessage = (prev, patch) => {
+        const cleaned = prev.filter((msg) => !msg.isThinking);
+        const idx = cleaned.findIndex((msg) => msg.id === liveStreamId);
+        if (idx === -1) {
+          return [
+            ...cleaned,
+            {
+              speaker: 'interviewer',
+              id: liveStreamId,
+              timestamp: new Date().toLocaleTimeString(),
+              message: '',
+              ...patch,
+            },
+          ];
+        }
+        const next = [...cleaned];
+        next[idx] = { ...next[idx], ...patch };
+        return next;
+      };
+
       try {
         response = await apiPostInterviewStream(
           '/generate-response-stream',
@@ -387,34 +409,25 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                 return;
               }
               if (eventName === 'queued') {
-                setConversation((prev) => {
-                  const base = prev.filter((msg) => !msg.isThinking && msg.id !== liveStreamId);
-                  return [
-                    ...base,
-                    {
-                      speaker: 'interviewer',
-                      message: payload.message || 'Waiting for interview AI…',
-                      isThinking: true,
-                      id: liveStreamId,
-                    },
-                  ];
-                });
+                setConversation((prev) =>
+                  upsertLiveStreamMessage(prev, {
+                    message: payload.message || 'Waiting for interview AI…',
+                  }),
+                );
                 return;
               }
               if (eventName === 'token' && payload.text) {
+                sawStreamTokens = true;
                 setConversation((prev) => {
-                  const base = prev.filter((msg) => !msg.isThinking && msg.id !== liveStreamId);
                   const existing = prev.find((msg) => msg.id === liveStreamId);
-                  const accumulated = `${existing?.message || ''}${payload.text}`;
-                  return [
-                    ...base,
-                    {
-                      speaker: 'interviewer',
-                      message: accumulated,
-                      isThinking: true,
-                      id: liveStreamId,
-                    },
-                  ];
+                  const prior = existing?.message || '';
+                  const waitingPlaceholder =
+                    prior === 'Waiting for interview AI…' ||
+                    prior === 'Waiting for interview AI...';
+                  const baseMessage = waitingPlaceholder ? '' : prior;
+                  return upsertLiveStreamMessage(prev, {
+                    message: `${baseMessage}${payload.text}`,
+                  });
                 });
               }
             },
@@ -493,8 +506,10 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           }
         }
         
-        setConversation(prev => prev.filter(msg => !msg.isThinking));
-        await addMessageToConversation('interviewer', textResponse);
+        if (!sawStreamTokens) {
+          setConversation((prev) => prev.filter((msg) => !msg.isThinking && msg.id !== liveStreamId));
+          await addMessageToConversation('interviewer', textResponse);
+        }
 
         if (audio_url) {
           try {
@@ -664,18 +679,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
               await addMessageToConversation('candidate', transcription);
               devLog('✅ Candidate message added');
               setIsLoading(false); // Stop loading immediately after user message appears
-              
-              // Add thinking indicator before backend call
-              const thinkingMessage = {
-                id: `thinking-${Date.now()}`,
-                speaker: 'interviewer',
-                message: 'Thinking...',
-                timestamp: new Date().toLocaleTimeString(),
-                isThinking: true
-              };
-              setConversation(prev => [...prev, thinkingMessage]);
-              
-              // Call Interview Manager API to get the next question/response
+
               setIsResponseInProgress(true); // ✅ NEW: Start response process
               await callInterviewManager(transcription);
               
@@ -1025,16 +1029,6 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       
       setIsLoading(false); // Stop loading immediately after user message appears
 
-      // Add thinking indicator before backend call
-      const thinkingMessage = {
-          id: `thinking-${Date.now()}`,
-          speaker: 'interviewer',
-          message: 'Thinking...',
-          timestamp: new Date().toLocaleTimeString(),
-          isThinking: true
-      };
-      setConversation(prev => [...prev, thinkingMessage]);
-
       // ✅ ENSURE: Call Interview Manager API to get the next question/response
       setIsResponseInProgress(true);
       
@@ -1158,10 +1152,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         className="flex-1 overflow-y-auto space-y-3 sm:space-y-4 mb-3 pr-1 sm:pr-2 min-h-0"
       >
         <AnimatePresence>
-          {conversation.map((message) => (
+          {conversation.map((message, index) => (
             <motion.div
-              key={message.id}
-              initial={{ opacity: 0, y: 20 }}
+              key={message.id ?? `msg-${index}`}
+              initial={
+                typeof message.id === 'string' && message.id.startsWith('stream-')
+                  ? false
+                  : { opacity: 0, y: 20 }
+              }
               animate={{ 
                 opacity: 1,
                 y: message.isThinking ? [-3, 3] : 0

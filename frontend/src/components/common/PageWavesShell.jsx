@@ -1,5 +1,4 @@
 import StyleBackdrop from './StyleBackdrop';
-import MouseWaveLayer from './MouseWaveLayer';
 import { APP_BACKGROUND_STYLE_ID } from '../../lib/backgroundStyles';
 
 const PRESET_TO_STYLE_ID = {
@@ -30,7 +29,6 @@ export default function PageWavesShell({
         deferWaves={deferWaves}
         className="page-waves-shell__backdrop style-backdrop--page"
       />
-      <MouseWaveLayer className="page-waves-shell__mouse-waves" />
       <div className={bodyClassName}>{children}</div>
     </div>
   );

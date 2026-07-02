@@ -29,8 +29,55 @@ def ollama_chat(*, model, messages):
     return llm_chat(model=model, messages=messages)
 
 
-def ollama_chat_stream(*, model, messages):
-    yield from llm_chat_stream(model=model, messages=messages)
+def sanitize_interviewer_display_text(text: str, *, streaming: bool = False) -> str:
+    content = (text or "").strip()
+    content = content.replace("[[job_explained]]", "").strip()
+    if len(content) >= 2 and content[0] == content[-1] and content[0] in "\"'":
+        content = content[1:-1].strip()
+    elif streaming and content and content[0] in "\"'":
+        content = content[1:].strip()
+    return content
+
+
+def _run_chat(*, model, messages, on_token=None):
+    if on_token:
+        raw_parts = []
+        display_emitted = ""
+        for chunk in llm_chat_stream(model=model, messages=messages):
+            if not chunk:
+                continue
+            raw_parts.append(chunk)
+            display = sanitize_interviewer_display_text("".join(raw_parts), streaming=True)
+            delta = display[len(display_emitted):]
+            if delta:
+                on_token(delta)
+                display_emitted = display
+        raw_full = "".join(raw_parts)
+        return {
+            "message": {"content": display_emitted},
+            "raw_content": raw_full,
+        }
+    res = ollama_chat(model=model, messages=messages)
+    raw_text = res["message"]["content"]
+    return {
+        "message": {"content": sanitize_interviewer_display_text(raw_text)},
+        "raw_content": raw_text,
+    }
+
+
+def normalize_assessment_label(raw: str, allowed: set[str], default: str) -> str:
+    text = (raw or "").strip().lower().strip("\"'")
+    text = text.rstrip(".,!?;:")
+    if text in allowed:
+        return text
+    tokens = re.sub(r"[^a-z0-9_]+", " ", text).split()
+    for label in allowed:
+        if label in tokens:
+            return label
+        label_words = label.replace("_", " ").split()
+        if len(label_words) > 1 and all(word in tokens for word in label_words):
+            return label
+    return default
 
 
 def log(func_name):
@@ -92,7 +139,7 @@ def _is_substantive_response(text):
 # ===== BEGINING OF - INTRO & EXPLAINING JOB DESCRIPTION IF NECESSARY FUNCTIONS USED =====
 
 
-def generate_contextual_intro_reply(job_title, job_description, conversation_history, user_input):
+def generate_contextual_intro_reply(job_title, job_description, conversation_history, user_input, on_token=None):
     log("generate_contextual_intro_reply")
 
     prompt = f"""
@@ -124,12 +171,10 @@ def generate_contextual_intro_reply(job_title, job_description, conversation_his
     messages.append({"role": "user", "content": user_input})
 
     try:
-        response = ollama_chat(model="llama3", messages=messages)
-        content = response["message"]["content"].strip()
-        job_flag = False
-        if "[[job_explained]]" in content:
-            job_flag = True
-            content = content.replace("[[job_explained]]", "").strip()
+        response = _run_chat(model="llama3", messages=messages, on_token=on_token)
+        raw = response.get("raw_content", "")
+        job_flag = "[[job_explained]]" in raw
+        content = response["message"]["content"]
 
         return {"message": content, "job_explained": job_flag}
 
@@ -149,67 +194,6 @@ def generate_contextual_intro_reply(job_title, job_description, conversation_his
         if _is_substantive_response(user_input):
             return {"message": "Thanks for sharing that.", "job_explained": False}
         return {"message": "Could you tell me a bit about yourself?", "job_explained": False}
-
-
-def _parse_intro_turn_payload(raw_text):
-    text = (raw_text or "").strip()
-    job_flag = "[[job_explained]]" in text
-    text = text.replace("[[job_explained]]", "").strip()
-    intro_status = "wait"
-    try:
-        if "{" in text and "}" in text:
-            blob = text[text.index("{") : text.rindex("}") + 1]
-            parsed = json.loads(blob)
-            reply = (parsed.get("message") or parsed.get("reply") or "").strip()
-            status = (parsed.get("intro_status") or parsed.get("status") or "wait").strip().lower()
-            if reply:
-                text = reply
-            if status in {"continue", "wait", "retry"}:
-                intro_status = status
-            job_flag = bool(parsed.get("job_explained")) or job_flag
-    except Exception:
-        pass
-    return {"message": text or "Could you tell me a bit about yourself?", "job_explained": job_flag, "intro_status": intro_status}
-
-
-def generate_intro_turn(job_title, job_description, conversation_history, user_input, job_qna_done=False):
-    """Single Ollama call for intro reply + progress (faster than two separate calls)."""
-    log("generate_intro_turn")
-    status_hint = "continue" if job_qna_done else "decide"
-    prompt = f"""
-You are an AI interviewer for the role of: {job_title}.
-
-Job description:
-{job_description}
-
-Reply to the candidate in 1-2 natural sentences (no markdown). If they asked about the role, explain it briefly in your own words and add [[job_explained]] at the end of the reply (hidden tag).
-
-Also decide intro progress. job_qna_done={str(job_qna_done).lower()}.
-
-Return ONLY valid JSON:
-{{"message": "your reply", "job_explained": true/false, "intro_status": "continue"|"wait"|"retry"}}
-
-intro_status rules:
-- "continue" if they introduced themselves (name/background/experience) or job Q&A is done
-- "wait" if they are mid-intro
-- "retry" if off-topic or non-answer
-Current hint: {status_hint}
-"""
-    messages = [{"role": "system", "content": prompt}]
-    messages.extend(conversation_history)
-    messages.append({"role": "user", "content": user_input})
-    try:
-        response = ollama_chat(model="llama3", messages=messages)
-        return _parse_intro_turn_payload(response["message"]["content"])
-    except Exception as exc:
-        print(f"[ERROR] generate_intro_turn failed: {exc}")
-        fallback = generate_contextual_intro_reply(job_title, job_description, conversation_history, user_input)
-        intro_status = "continue" if job_qna_done else assess_intro_progress(conversation_history)
-        return {
-            "message": fallback["message"],
-            "job_explained": fallback.get("job_explained", False),
-            "intro_status": intro_status,
-        }
 
 
 def assess_intro_progress(conversation_history):
@@ -236,7 +220,22 @@ def assess_intro_progress(conversation_history):
         model="llama3",
         messages=[{"role": "system", "content": prompt}]
         )
-        return response["message"]["content"].strip().lower()
+        raw = response["message"]["content"].strip()
+        allowed = {"continue", "wait", "retry"}
+        normalized = normalize_assessment_label(raw, allowed, "")
+        if normalized in allowed:
+            return normalized
+        user_messages = [
+            (item.get("content") or "")
+            for item in conversation_history
+            if item.get("role") == "user"
+        ]
+        meaningful_intro = any(_is_substantive_response(message) for message in user_messages)
+        if meaningful_intro:
+            return "continue"
+        if user_messages and _is_non_answer(user_messages[-1]):
+            return "retry"
+        return "wait"
 
     except Exception as e:
         print(f"[ERROR] assess_intro_progress failed: {e}")
@@ -291,13 +290,15 @@ def assess_icebreaker_response(user_response, question):
         messages=[{"role": "system", "content": prompt}]
         )
         raw = response['message']['content']
-        return raw.strip().lower().replace('"', '').replace("'", "")
+        allowed = {"valid", "retry"}
+        default = "valid" if _is_substantive_response(user_response) else "retry"
+        return normalize_assessment_label(raw, allowed, default)
     except Exception as e:
         print(f"[ERROR] Icebreaker assessment failed: {e}")
         return "valid" if _is_substantive_response(user_response) else "retry"
 
 
-def generate_icebreaker_question(job_title):
+def generate_icebreaker_question(job_title, on_token=None):
     log("generate_icebreaker_question")
     prompt = f"""
             You are an AI interviewer about to begin a conversation with a candidate for the role of {job_title}.
@@ -306,8 +307,8 @@ def generate_icebreaker_question(job_title):
             Only respond with the question.
             """
     try:
-        response = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        return response['message']['content'].strip()
+        response = _run_chat(model="llama3", messages=[{"role": "system", "content": prompt}], on_token=on_token)
+        return response["message"]["content"]
 
     except Exception as e:
         print(f"[ERROR] Icebreaker generation failed: {e}")
@@ -340,15 +341,16 @@ def assess_followup_response(question, user_response):
             {"role": "assistant", "content": user_response}
         ]
         response = ollama_chat(model="llama3", messages=messages)
-        result = response["message"]["content"].strip().lower()
-        return result if result in ["strong", "weak"] else "strong"
+        result = response["message"]["content"].strip()
+        allowed = {"strong", "weak"}
+        return normalize_assessment_label(result, allowed, "strong")
     except Exception as e:
         print(f"[ERROR] assess_followup_response failed: {e}")
         return "strong"
 
 
 
-def generate_dynamic_question(job_title, job_description, conversation_history):
+def generate_dynamic_question(job_title, job_description, conversation_history, on_token=None):
     log("generate_dynamic_question")
     messages = [
         {
@@ -372,8 +374,8 @@ def generate_dynamic_question(job_title, job_description, conversation_history):
     ]
 
     try:
-        response = ollama_chat(model="llama3", messages=messages)
-        return response['message']['content'].strip()
+        response = _run_chat(model="llama3", messages=messages, on_token=on_token)
+        return response["message"]["content"]
 
     except Exception as e:
         print(f"[ERROR] generate_dynamic_question failed: {e}")
@@ -403,13 +405,16 @@ def evaluate_resume_response(question, response):
     """
     try:
         res = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        return res["message"]["content"].strip().lower()
+        raw = res["message"]["content"].strip()
+        allowed = {"strong", "weak", "confused", "off_topic"}
+        default = "weak" if not _is_substantive_response(response) else "strong"
+        return normalize_assessment_label(raw, allowed, default)
 
     except Exception as e:
         print(f"[ERROR] evaluate_resume_response failed: {e}")
         return "weak" if not _is_substantive_response(response) else "strong"
 
-def generate_followup_question(original_question, weak_response):
+def generate_followup_question(original_question, weak_response, on_token=None):
     log("generate_followup_question")
     prompt = f"""
     You're an AI interviewer. The candidate gave a vague response.
@@ -421,12 +426,8 @@ def generate_followup_question(original_question, weak_response):
     Only return the follow-up question.
     """
     try:
-        res = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        content = res["message"]["content"].strip()
-        # Remove quotes from beginning and end if present
-        if content.startswith('"') and content.endswith('"'):
-            content = content[1:-1]
-        return content
+        res = _run_chat(model="llama3", messages=[{"role": "system", "content": prompt}], on_token=on_token)
+        return res["message"]["content"]
 
     except:
         return "Could you elaborate a bit more on that?"
@@ -455,13 +456,16 @@ def evaluate_custom_response(question, response):
     """
     try:
         result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        return result["message"]["content"].strip().lower()
+        raw = result["message"]["content"].strip()
+        allowed = {"clear", "weak", "confused", "no_answer", "off_topic"}
+        default = "clear" if _is_substantive_response(response) else "confused"
+        return normalize_assessment_label(raw, allowed, default)
 
     except Exception as e:
         print(f"[ERROR] evaluate_custom_response failed: {e}")
         return "clear" if _is_substantive_response(response) else "confused"
 
-def generate_custom_followup(question, last_response):
+def generate_custom_followup(question, last_response, on_token=None):
     log("generate_custom_followup")
     prompt = f"""
     You are an AI interviewer.
@@ -477,17 +481,13 @@ def generate_custom_followup(question, last_response):
     Just return the follow-up question only.
     """
     try:
-        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        content = result["message"]["content"].strip()
-        # Remove quotes from beginning and end if present
-        if content.startswith('"') and content.endswith('"'):
-            content = content[1:-1]
-        return content
+        result = _run_chat(model="llama3", messages=[{"role": "system", "content": prompt}], on_token=on_token)
+        return result["message"]["content"]
 
     except Exception:
         return "Could you clarify your thinking or give an example?"
 
-def generate_model_answer(question):
+def generate_model_answer(question, on_token=None):
     log("generate_model_answer")
     prompt = f"""
         You are an AI interviewer.
@@ -504,12 +504,8 @@ def generate_model_answer(question):
         Only return the answer — no explanation or extra text.
         """
     try:
-        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        content = result["message"]["content"].strip()
-        # Remove quotes from beginning and end if present
-        if content.startswith('"') and content.endswith('"'):
-            content = content[1:-1]
-        return content
+        result = _run_chat(model="llama3", messages=[{"role": "system", "content": prompt}], on_token=on_token)
+        return result["message"]["content"]
 
     except Exception as e:
         print(f"[ERROR] generate_model_answer failed: {e}")
@@ -545,7 +541,7 @@ def assess_candidate_has_question(user_input):
         print(f"[ERROR] assess_candidate_has_question failed: {e}")
         return "no"
 
-def generate_candidate_qna_response(user_question, conversation_history, evaluation_log, job_title, last_chance=False):
+def generate_candidate_qna_response(user_question, conversation_history, evaluation_log, job_title, last_chance=False, on_token=None):
     log("generate_candidate_qna_response")
     prompt = f"""
     You are an AI interviewer wrapping up an interview for the role of **{job_title}**.
@@ -606,8 +602,8 @@ def generate_candidate_qna_response(user_question, conversation_history, evaluat
 
 
     try:
-        result = ollama_chat(model="llama3", messages=[{"role": "system", "content": prompt}])
-        return result["message"]["content"].strip()
+        result = _run_chat(model="llama3", messages=[{"role": "system", "content": prompt}], on_token=on_token)
+        return result["message"]["content"]
 
     except Exception as e:
         print(f"[ERROR] generate_candidate_qna_response failed: {e}")
