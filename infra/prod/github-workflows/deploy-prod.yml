@@ -47,6 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [gate]
     if: inputs.deploy_api
+    environment: production
     outputs:
       image_tag: ${{ steps.tag.outputs.image_tag }}
     steps:
@@ -99,6 +100,7 @@ jobs:
           repository: ${{ env.APP_REPO }}
           ref: ${{ inputs.git_ref }}
           path: app
+          token: ${{ secrets.APP_REPO_READ_TOKEN }}
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
