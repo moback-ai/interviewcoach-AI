@@ -27,9 +27,10 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 | `develop/<feature>` | Feature work | Yes — after admin PR approval |
 | `main` | Monthly snapshot | **Never** deploys |
 
-**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers open PRs to `develop`, pass Security CI, and request deploy.
+**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers open PRs to `develop`, pass CI + Security, and request deploy.
 
 - [docs/README.md](docs/README.md) — contributing, developer docs index  
+- [docs/DEPLOY.md](docs/DEPLOY.md) — release flow, health checks, rollback  
 - [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) — Security CI  
 - [docs/DEV_ACCESS.md](docs/DEV_ACCESS.md) — CloudWatch log access  
 
@@ -60,7 +61,7 @@ cd frontend && npm run test:e2e
 cd backend && python -m pytest tests/ -q
 ```
 
-Security scans run on PRs. See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
+Security scans and unit tests run on PRs. See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) and [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Security
 
