@@ -15,7 +15,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import re
 import mimetypes
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from flask import Flask, request, jsonify, send_from_directory, abort, render_template_string, Response, stream_with_context, redirect, make_response
 from flask_cors import CORS
@@ -2115,7 +2115,8 @@ def generate_questions():
             resp = http_requests.get(resume_url)
             resp.raise_for_status()
             resume_data = resp.content
-            ext = resume_url.split('.')[-1].lower() or 'pdf'
+            url_path = urlparse(resume_url).path
+            ext = url_path.rsplit('.', 1)[-1].lower() if '.' in url_path else 'pdf'
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
             tf.write(resume_data)

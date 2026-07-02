@@ -110,6 +110,8 @@ Resources:
               HTTPPort: 80
               HTTPSPort: 443
               OriginProtocolPolicy: http-only
+              OriginReadTimeout: 120
+              OriginKeepaliveTimeout: 60
         DefaultCacheBehavior:
           TargetOriginId: S3Static
           ViewerProtocolPolicy: redirect-to-https

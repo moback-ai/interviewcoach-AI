@@ -152,6 +152,9 @@ Resources:
       Scheme: internet-facing
       Type: application
       IpAddressType: ipv4
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "300"
       Subnets: !Ref PublicSubnetIds
       SecurityGroups:
         - !Ref AlbSecurityGroup
