@@ -20,6 +20,10 @@ runs:
       run: |
         set -euo pipefail
         git fetch origin develop
+        git fetch origin develop 2>/dev/null || {
+       echo "origin/develop not found — skipping conflict check."
+       exit 0
+      }
         if ! git rev-parse --verify origin/develop >/dev/null 2>&1; then
           echo "origin/develop not found — skipping conflict check."
           exit 0
