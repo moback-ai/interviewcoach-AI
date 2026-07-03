@@ -9,9 +9,6 @@ from Interview_functions import (
     log,
     assess_intro_progress,
     generate_contextual_intro_reply,
-    generate_intro_turn,
-    generate_icebreaker_question,
-    assess_icebreaker_response,
     generate_icebreaker_question,
     assess_icebreaker_response,
     assess_followup_response,
@@ -22,7 +19,8 @@ from Interview_functions import (
     generate_custom_followup,
     generate_model_answer,
     assess_candidate_has_question,
-    generate_candidate_qna_response
+    generate_candidate_qna_response,
+    sanitize_interviewer_display_text,
     # ✅ REMOVED: generate_key_strengths_and_improvements - no longer needed
 )
 
@@ -188,8 +186,19 @@ class InterviewManager:
         self.current_coding_requirement = False
         return False
 
-    def _build_resume_followup(self, user_input):
-        followup = generate_followup_question(self.current_resume_question, user_input)
+    def _emit_stream_text(self, on_token, text, chunk_size=24):
+        if not on_token or not text:
+            return
+        clean = sanitize_interviewer_display_text(text)
+        for i in range(0, len(clean), chunk_size):
+            on_token(clean[i:i + chunk_size])
+
+    def _build_resume_followup(self, user_input, on_token=None):
+        followup = generate_followup_question(
+            self.current_resume_question,
+            user_input,
+            on_token=on_token,
+        )
         if self._is_resume_followup_repeated(followup):
             for candidate in [
                 "Could you add one concrete example from your experience?",
@@ -239,28 +248,20 @@ class InterviewManager:
                 "timeout_detected": True  # ✅ Flag for frontend to handle
             }
 
-        try:
-            from unified_turn import receive_input_unified, unified_turns_enabled
-
-            if unified_turns_enabled():
-                return receive_input_unified(self, user_input, on_token=on_token)
-        except Exception as unified_exc:
-            print(f"[WARN] Unified interview turn failed, using legacy handlers: {unified_exc}")
-
         if not self.intro_done:
-            return self.handle_intro_stage(user_input)
+            return self.handle_intro_stage(user_input, on_token=on_token)
 
         if not self.icebreaker_done:
-            return self.handle_icebreaker_stage(user_input)
+            return self.handle_icebreaker_stage(user_input, on_token=on_token)
 
         if not self.intro_followup_done:
-            return self.handle_intro_followup_stage(user_input)
+            return self.handle_intro_followup_stage(user_input, on_token=on_token)
         if self.stage == "resume_discussion":
-            return self.handle_resume_discussion_stage(user_input)
+            return self.handle_resume_discussion_stage(user_input, on_token=on_token)
         if self.stage == "custom_questions":
-            return self.handle_custom_questions_stage(user_input)
+            return self.handle_custom_questions_stage(user_input, on_token=on_token)
         if self.stage == "candidate_questions":
-            return self.handle_candidate_questions_stage(user_input)
+            return self.handle_candidate_questions_stage(user_input, on_token=on_token)
         return {
             "stage": "done",
             "message": "All stages complete. Please press the END Interview Button to end the interview.",
@@ -270,31 +271,34 @@ class InterviewManager:
 
 # ===== BEGINING OF - INTRO STAGE  =====
 
-    def handle_intro_stage(self, user_input):
+    def handle_intro_stage(self, user_input, on_token=None):
         from Interview_functions import log
         log("handle_intro_stage")
 
         self.conversation_history.append({"role": "user", "content": user_input})
 
-        result = generate_intro_turn(
+        result = generate_contextual_intro_reply(
             self.job_title,
             self.job_description,
             self.conversation_history,
             user_input,
-            job_qna_done=self.job_qna_done,
         )
         reply = result["message"]
         self.conversation_history.append({"role": "assistant", "content": reply})
 
-        if result.get("job_explained"):
+        if result["job_explained"]:
             self.job_description_shown = True
             self.intro_retry_count = 0
             print("[DEBUG] Job explanation confirmed by LLM. Resetting retry count and setting job_description_shown = True")
 
-        intro_status = (result.get("intro_status") or "wait").strip().lower()
-        if intro_status == "continue":
-            self.job_qna_done = True
-        print(f"[DEBUG] generate_intro_turn intro_status → {intro_status}")
+        if self.job_description_shown and not self.job_qna_done:
+            job_done_check = assess_intro_progress(self.conversation_history)
+            if job_done_check == "continue":
+                self.job_qna_done = True
+                print("[DEBUG] Job Q&A finished. Marking job_qna_done = True")
+
+        intro_status = assess_intro_progress(self.conversation_history)
+        print(f"[DEBUG] assess_intro_progress → {intro_status}")
 
         if intro_status == "continue":
             self.intro_done = True
@@ -302,7 +306,7 @@ class InterviewManager:
             self.stage = "icebreaker"
 
             # Immediately ask the icebreaker
-            question = generate_icebreaker_question(self.job_title)
+            question = generate_icebreaker_question(self.job_title, on_token=on_token)
             self.current_icebreaker = question
             self.icebreaker_question_asked = True
             self.conversation_history.append({"role": "assistant", "content": question})
@@ -320,7 +324,10 @@ class InterviewManager:
             self.intro_done = True
             self.stage = "icebreaker"
             print("[DEBUG] Intro max retries hit. Now transitioning to icebreaker.")
-            return self.handle_icebreaker_stage("")  # 👈 Trigger icebreaker immediately
+            return self.handle_icebreaker_stage("", on_token=on_token)  # 👈 Trigger icebreaker immediately
+
+        if on_token and reply:
+            self._emit_stream_text(on_token, reply)
 
         return {
             "stage": "introduction",
@@ -329,12 +336,12 @@ class InterviewManager:
 
 # ===== BEGINING OF - ICE BREAKER STAGE  =====
 
-    def handle_icebreaker_stage(self, user_input):
+    def handle_icebreaker_stage(self, user_input, on_token=None):
         
         log("handle_icebreaker_stage")
 
         if not self.icebreaker_question_asked:
-            question = generate_icebreaker_question(self.job_title)
+            question = generate_icebreaker_question(self.job_title, on_token=on_token)
             self.current_icebreaker = question
             self.conversation_history.append({"role": "assistant", "content": question})
             self.icebreaker_question_asked = True
@@ -348,7 +355,12 @@ class InterviewManager:
             self.icebreaker_done = True
             self.stage = "intro_followup"
             
-            followup_q = generate_dynamic_question(self.job_title, self.job_description, self.conversation_history)
+            followup_q = generate_dynamic_question(
+                self.job_title,
+                self.job_description,
+                self.conversation_history,
+                on_token=on_token,
+            )
             self.current_followup_question = followup_q
             self.conversation_history.append({"role": "assistant", "content": followup_q})
 
@@ -365,7 +377,12 @@ class InterviewManager:
             self.stage = "intro_followup"
             
             # Immediately trigger follow-up question
-            followup_q = generate_dynamic_question(self.job_title, self.job_description, self.conversation_history)
+            followup_q = generate_dynamic_question(
+                self.job_title,
+                self.job_description,
+                self.conversation_history,
+                on_token=on_token,
+            )
             self.current_followup_question = followup_q
             self.conversation_history.append({"role": "assistant", "content": followup_q})
 
@@ -375,21 +392,26 @@ class InterviewManager:
             }
 
 
-        question = generate_icebreaker_question(self.job_title)
+        question = generate_icebreaker_question(self.job_title, on_token=on_token)
         self.current_icebreaker = question
         self.conversation_history.append({"role": "assistant", "content": question})
         return {"stage": "icebreaker", "message": question}
 
 # ===== BEGGINING OF - INTRO FOLLOW-UP STAGE  =====
 
-    def handle_intro_followup_stage(self, user_input):
+    def handle_intro_followup_stage(self, user_input, on_token=None):
         log("handle_intro_followup_stage")
 
         if not self.intro_followup_done and self.followup_retry_count < self.max_followup_retries:
 
             # If no input from candidate, ask a follow-up question based on history
             if not user_input.strip():
-                question = generate_dynamic_question(self.job_title, self.job_description, self.conversation_history)
+                question = generate_dynamic_question(
+                    self.job_title,
+                    self.job_description,
+                    self.conversation_history,
+                    on_token=on_token,
+                )
                 self.current_followup_question = question
                 self.conversation_history.append({"role": "assistant", "content": question})
                 return {"stage": "intro_followup", "message": question}
@@ -446,7 +468,12 @@ class InterviewManager:
                 }
 
             # Retry with a new question
-            question = generate_dynamic_question(self.job_title, self.job_description, self.conversation_history)
+            question = generate_dynamic_question(
+                self.job_title,
+                self.job_description,
+                self.conversation_history,
+                on_token=on_token,
+            )
             self.current_followup_question = question
             self.conversation_history.append({"role": "assistant", "content": question})
             return {"stage": "intro_followup", "message": question}
@@ -457,7 +484,7 @@ class InterviewManager:
     
 # ===== BEGGINING OF - RESUME QUESTIONS DISCUSSION STAGE  =====
 
-    def handle_resume_discussion_stage(self, user_input):
+    def handle_resume_discussion_stage(self, user_input, on_token=None):
         log("handle_resume_discussion_stage")
 
         # 1. No active question? Ask the next one.
@@ -577,13 +604,13 @@ class InterviewManager:
 
 
         # 4. Ask follow-up
-        followup = self._build_resume_followup(user_input)
+        followup = self._build_resume_followup(user_input, on_token=on_token)
         self.conversation_history.append({"role": "assistant", "content": followup})
         return {"stage": "resume_discussion", "message": followup, "requires_code": self.current_coding_requirement}
     
 # ===== BEGGINING OF - CUSTOM QUESTIONS DISCUSSION STAGE  =====
 
-    def handle_custom_questions_stage(self, user_input):
+    def handle_custom_questions_stage(self, user_input, on_token=None):
         log("handle_custom_questions_stage")
 
         # Step 1: Ask a new custom question if not in progress
@@ -667,7 +694,7 @@ class InterviewManager:
         # Step 4: If limit hit, either show model answer or move on
         if self.custom_followup_retry_count >= self.max_custom_followup_retries:
             if all(ev in ["weak", "confused", "no_answer", "off_topic"] for ev in self.custom_followup_evaluations):
-                model_answer = generate_model_answer(self.current_custom_question)
+                model_answer = generate_model_answer(self.current_custom_question, on_token=on_token)
                 reply = f"No worries — let me explain.\n\n{model_answer}"
             else:
                 reply = "Thanks for your effort — let’s continue."
@@ -676,7 +703,7 @@ class InterviewManager:
             return {"stage": "custom_questions", "message": reply}
 
         # Step 5: Ask follow-up question
-        followup = generate_custom_followup(self.current_custom_question, user_input)
+        followup = generate_custom_followup(self.current_custom_question, user_input, on_token=on_token)
         if (followup or "").strip().lower() == (self.current_custom_question or "").strip().lower():
             followup = "Could you expand on that with a more specific example or outcome?"
         self.conversation_history.append({"role": "assistant", "content": followup})
@@ -684,7 +711,7 @@ class InterviewManager:
 
 # ===== BEGGINING OF - END OF INTERVIEW CANDIDATE QUESTION DISCUSSION STAGE  =====
 
-    def handle_candidate_questions_stage(self, user_input):
+    def handle_candidate_questions_stage(self, user_input, on_token=None):
         log("handle_candidate_questions_stage")
 
         # Step 1: If blank input → trigger prompt
@@ -704,7 +731,8 @@ class InterviewManager:
                     conversation_history=self.conversation_history,
                     evaluation_log=self.evaluation_log,
                     job_title=self.job_title,
-                    last_chance=True
+                    last_chance=True,
+                    on_token=on_token,
                 )
                 self.conversation_history.append({"role": "assistant", "content": reply})
                 self.candidate_qna_done = True
@@ -740,7 +768,8 @@ class InterviewManager:
             conversation_history=self.conversation_history,
             evaluation_log=self.evaluation_log,
             job_title=self.job_title,
-            last_chance=last_chance
+            last_chance=last_chance,
+            on_token=on_token,
         )
         self.conversation_history.append({"role": "assistant", "content": reply})
         self.candidate_question_count += 1

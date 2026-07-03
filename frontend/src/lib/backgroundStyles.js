@@ -86,7 +86,7 @@ export const BACKGROUND_STYLES = [
 
 export const DEFAULT_BACKGROUND_STYLE_ID = 'soft-cloud';
 
-/** Protected app pages — soft interactive waves + mouse ripples. */
+/** Protected app pages — soft interactive waves. */
 export const APP_BACKGROUND_STYLE_ID = 'soft-cloud';
 
 export function getBackgroundStyleById(styleId) {
