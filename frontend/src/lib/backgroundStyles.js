@@ -84,12 +84,9 @@ export const BACKGROUND_STYLES = [
   },
 ];
 
-export const DEFAULT_BACKGROUND_STYLE_ID = 'ocean-waves';
+export const DEFAULT_BACKGROUND_STYLE_ID = 'soft-cloud';
 
-/** Auth/login/signup — ocean-waves (Vanta auth preset + pointer interaction). */
-export const AUTH_BACKGROUND_STYLE_ID = 'ocean-waves';
-
-/** Protected app pages — soft interactive waves + mouse ripples. */
+/** Protected app pages — soft interactive waves. */
 export const APP_BACKGROUND_STYLE_ID = 'soft-cloud';
 
 export function getBackgroundStyleById(styleId) {

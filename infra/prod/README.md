@@ -6,8 +6,8 @@ Copy this folder to **`moback-ai/devsecops-platform`** → `apps/interviewcoach/
 Or run from devsecops: `bash scripts/sync-interviewcoach-prod.sh`  
 All production operations (deploy, secrets, SSH, AWS changes) run **only** from devsecops-platform.
 
-**Prod only.** No staging.  
-Architecture: [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) · Runbook: [docs/PROD_RUNBOOK.md](../../docs/PROD_RUNBOOK.md) · Access: [docs/DEVSECOPS.md](../../docs/DEVSECOPS.md)
+**Prod only.** No staging yet — see [docs/DEPLOY.md](../../docs/DEPLOY.md) for release gates and rollback.  
+Architecture: **devsecops-platform** `apps/interviewcoach/docs/ARCHITECTURE.md` · Ops runbooks: `apps/interviewcoach/docs/`
 
 ---
 
@@ -77,6 +77,11 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `05-build-on-ec2.sh` | **Disabled** |
 | `06-code-deploy-api-asg.sh` | Roll out ECR image to ASG (devsecops Actions) |
 | `06-code-deploy-api.sh` | Wrapper → `06-code-deploy-api-asg.sh` |
+| `07-smoke-test-prod.sh` | Post-deploy readiness + frontend smoke |
+| `07b-rollback-api-asg.sh` | Roll back API to previous ECR tag |
+| `18-enable-s3-versioning.sh` | Enable S3 versioning on static bucket (one-time) |
+| `lib/deploy-business-hours.sh` | Block deploy outside 10:00–19:00 IST |
+| `lib/get-current-api-image-tag.sh` | Read current API image tag from launch template |
 | `07-code-migrate-storage.sh` | Sync API `/apps/storage` → S3 |
 | `07b-migrate-legacy-storage.sh` | Legacy Plan B S3 buckets + EC2 → `ic-user-files-prod` |
 | `08-code-frontend.sh` | Build React → S3 (devsecops Actions) |

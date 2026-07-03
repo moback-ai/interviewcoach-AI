@@ -6,10 +6,11 @@ import pytest
 from flask import Flask
 
 import common.runtime_config as runtime_config
+from tests.test_constants import TEST_JWT_SECRET
 
 runtime_config._LOADED = True
 runtime_config._CONFIG = {
-    "JWT_SECRET": "test-jwt-secret-for-pytest-only-32chars",
+    "JWT_SECRET": TEST_JWT_SECRET,
     "DOMAIN": "http://localhost:5173",
     "AUTH_RETURN_TOKEN_IN_BODY": "false",
 }
@@ -88,7 +89,6 @@ def test_resolve_request_user_cookie_preferred_over_bearer(app):
 
 
 def test_resolve_request_user_allow_expired(app):
-    jwt_secret = "test-jwt-secret-for-pytest-only-32chars"
     expired_payload = {
         "user_id": "11",
         "email": "expired@example.com",
@@ -96,7 +96,7 @@ def test_resolve_request_user_allow_expired(app):
         "plan": "basic",
         "exp": int(time.time()) - 120,
     }
-    token = jwt.encode(expired_payload, jwt_secret, algorithm="HS256")
+    token = jwt.encode(expired_payload, TEST_JWT_SECRET, algorithm="HS256")
     with app.test_request_context("/", headers={"Cookie": f"{AUTH_COOKIE_NAME}={token}"}):
         assert resolve_request_user(allow_expired=False) is None
         user = resolve_request_user(allow_expired=True)

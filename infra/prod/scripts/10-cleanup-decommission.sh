@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Step 8 — Decommission Plan B (AI EC2, transcribe sidecar, old secrets keys).
-# Run ONLY after 7+ days stable. See docs/AWS_DECOMMISSION.md
+# Run ONLY after 7+ days stable. See devsecops-platform apps/interviewcoach/docs/AWS_DECOMMISSION.md
 set -euo pipefail
 
 # shellcheck disable=SC1091

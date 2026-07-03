@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# One-step security scan (logs internal; summary only).
-# quick = PR (~2-3 min) | full = + Playwright smoke
+# Local / CI security scan — Gitleaks, Trivy, Semgrep only.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PROFILE="${SECURITY_SCAN_PROFILE:-quick}"
 LOG_DIR="$(mktemp -d)"
 FAILED=()
 
@@ -45,23 +43,6 @@ scan_gitleaks() {
   gitleaks detect --source . --config .gitleaks.toml
 }
 
-scan_frontend() {
-  cd "$ROOT/frontend"
-  npm ci --legacy-peer-deps --silent
-  npm run lint -- --max-warnings 0
-  echo "VITE_API_BASE_URL=/api" > .env
-  echo "VITE_STORAGE_URL=/storage" >> .env
-  npm run build
-  bash "$ROOT/scripts/verify-frontend-login-bundle.sh" dist
-  cd "$ROOT"
-}
-
-scan_backend() {
-  python3 -m pip install --quiet --upgrade pip
-  pip install --quiet -r backend/requirements.txt pytest
-  python3 -m pytest backend/tests/ -q
-}
-
 scan_trivy() {
   trivy fs . \
     --severity CRITICAL,HIGH \
@@ -72,36 +53,15 @@ scan_trivy() {
 }
 
 scan_semgrep() {
-  semgrep scan --config p/ci --error
-}
-
-scan_playwright() {
-  cd "$ROOT/frontend"
-  npx playwright install chromium --with-deps >/dev/null
-  npm run preview -- --host 127.0.0.1 --port 4173 &
-  local pid=$!
-  for _ in $(seq 1 45); do
-    curl -fsS http://127.0.0.1:4173/login >/dev/null && break
-    sleep 2
-  done
-  CI=true PLAYWRIGHT_BASE_URL=http://127.0.0.1:4173 npm run test:e2e
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  cd "$ROOT"
+  semgrep scan --config p/ci --error --exclude 'infra/prod/github-workflows/'
 }
 
 install_tools
-log "Security scan ($PROFILE)"
+log "Security scan (Gitleaks · Trivy · Semgrep)"
 
 run_check "Gitleaks" scan_gitleaks
-run_check "Frontend" scan_frontend
-run_check "Backend" scan_backend
 run_check "Trivy" scan_trivy
 run_check "Semgrep" scan_semgrep
-
-if [ "$PROFILE" = "full" ]; then
-  run_check "Playwright" scan_playwright
-fi
 
 if [ "${#FAILED[@]}" -gt 0 ]; then
   log ""

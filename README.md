@@ -27,13 +27,14 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 | `develop/<feature>` | Feature work | Yes — after admin PR approval |
 | `main` | Monthly snapshot | **Never** deploys |
 
-**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers release by merging a PR to `develop` and requesting deploy.
+**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers open PRs to `develop`, pass CI + Security, and request deploy.
 
-- [docs/DEPLOY.md](docs/DEPLOY.md) — developer release flow  
-- [docs/DEVSECOPS.md](docs/DEVSECOPS.md) — who deploys and how  
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — prod topology (CloudFront, Bedrock, S3)  
-- [docs/PROD_RUNBOOK.md](docs/PROD_RUNBOOK.md) — production deploy steps  
-- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — team requirements map  
+- [docs/README.md](docs/README.md) — contributing, developer docs index  
+- [docs/DEPLOY.md](docs/DEPLOY.md) — release flow, health checks, rollback  
+- [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) — Security CI  
+- [docs/DEV_ACCESS.md](docs/DEV_ACCESS.md) — CloudWatch log access  
+
+Ops docs (architecture, budget, DevSecOps, runbooks): **`devsecops-platform`** → `apps/interviewcoach/docs/` (private)
 
 ## Project layout
 
@@ -42,8 +43,8 @@ backend/          Flask API, common/ (llm, speech, storage, redis)
 frontend/         Vite + React 19
 database/         Schema and SQL migrations
 docker/           Dockerfile.prod, compose files
-infra/prod/       CloudFormation, IAM, deploy scripts, prod.env
-docs/             Architecture, deploy runbooks, security
+infra/prod/       Reference copy — sync to devsecops-platform (do not run scripts here)
+docs/             Developer docs only; ops docs in devsecops-platform
 scripts/          Dev, deploy, security scan helpers
 ```
 
@@ -60,7 +61,7 @@ cd frontend && npm run test:e2e
 cd backend && python -m pytest tests/ -q
 ```
 
-Security scans run on PRs. See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md).
+Security scans and unit tests run on PRs. See [docs/SECURITY_SCANNING.md](docs/SECURITY_SCANNING.md) and [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Security
 

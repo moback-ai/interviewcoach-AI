@@ -1,4 +1,4 @@
-# ML / AI transitive packages: no patched PyPI release yet (tracked in pyproject.toml pip-audit ignores).
+# ML / AI transitive packages: no patched PyPI release yet (accepted risk until torch/transformers/ollama fix).
 # Re-run Trivy after upgrading torch, transformers, or ollama when fixes ship.
 
 CVE-2024-11396

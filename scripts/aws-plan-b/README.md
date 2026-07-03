@@ -2,4 +2,4 @@
 
 Do not run these scripts. Kept for historical reference only.
 
-Current prod: see `docs/ARCHITECTURE.md` and `infra/prod/`.
+Current prod: **devsecops-platform** `apps/interviewcoach/docs/ARCHITECTURE.md`. `infra/prod/` here is a reference copy only.

@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Print AWS decommission checklist (prod only). Does not change AWS.
+# Full doc: devsecops-platform → apps/interviewcoach/docs/AWS_DECOMMISSION.md
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOC="${ROOT}/docs/AWS_DECOMMISSION.md"
-
 echo "=== InterviewCoach PROD — AWS removal checklist ==="
-echo "Full doc: docs/AWS_DECOMMISSION.md"
+echo "Full doc: moback-ai/devsecops-platform → apps/interviewcoach/docs/AWS_DECOMMISSION.md"
 echo ""
 echo "TERMINATE (after 7 days stable):"
 echo "  [ ] AI EC2 (Ollama + Whisper)"
@@ -27,7 +25,3 @@ echo "  OPENROUTER_API_KEY  BEDROCK_CHAT_MODEL  S3_BUCKET  REDIS_URL"
 echo ""
 echo "SECURITY GROUPS — REMOVE rules:"
 echo "  API → AI:11434  API → AI:5001"
-echo ""
-if [[ -f "$DOC" ]]; then
-  echo "Open ${DOC} for complete steps."
-fi

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build PROD API image and push to ECR — devsecops-platform GitHub Actions only.
 # Skips build/push when the tag already exists in ECR (deploy-only). Set FORCE_REBUILD=1 to rebuild.
+# Set REBUILD_DEPS=1 to force rebuild of the dependency layer (requirements.prod.txt changed).
 set -euo pipefail
 
 # shellcheck disable=SC1091
@@ -15,22 +16,31 @@ IMAGE_TAG="${IMAGE_TAG:?Set IMAGE_TAG}"
 REPO_NAME="${ECR_API_REPO:-interviewcoach-api}"
 REPO="${ECR_REGISTRY}/${REPO_NAME}"
 
-image_exists_in_ecr() {
-  aws ecr describe-images \
+ecr_tag_exists() {
+  local tag="$1"
+  aws ecr batch-get-image \
     --region "$REGION" \
     --repository-name "$REPO_NAME" \
-    --image-ids "imageTag=${IMAGE_TAG}" \
-    >/dev/null 2>&1
+    --image-ids "imageTag=${tag}" \
+    --query 'images[0].imageId.imageTag' \
+    --output text 2>/dev/null | grep -Fxq "$tag"
 }
 
-if [[ "${FORCE_REBUILD:-}" != "1" ]] && image_exists_in_ecr; then
+if [[ "${FORCE_REBUILD:-}" != "1" ]] && ecr_tag_exists "$IMAGE_TAG"; then
   echo "Image ${REPO}:${IMAGE_TAG} already in ECR — skipping build (set FORCE_REBUILD=1 to rebuild)."
   exit 0
 fi
 
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
-docker build -f "$ROOT/docker/api/Dockerfile.prod" -t "${REPO}:${IMAGE_TAG}" "$ROOT"
+BUILD_ARGS=(--target runtime -f "$ROOT/docker/api/Dockerfile.prod" -t "${REPO}:${IMAGE_TAG}" "$ROOT")
+if [[ "${REBUILD_DEPS:-}" == "1" ]]; then
+  echo "REBUILD_DEPS=1 — forcing dependency layer rebuild"
+  BUILD_ARGS=(--no-cache-filter=deps "${BUILD_ARGS[@]}")
+fi
+
+echo "Building app image ${REPO}:${IMAGE_TAG} ..."
+docker build "${BUILD_ARGS[@]}"
 docker push "${REPO}:${IMAGE_TAG}"
 
 echo "Pushed ${REPO}:${IMAGE_TAG}"

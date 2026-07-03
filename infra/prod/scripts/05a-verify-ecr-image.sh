@@ -17,10 +17,13 @@ if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
   exit 1
 fi
 
-if aws ecr describe-images \
+# batch-get-image — deploy role has ecr:BatchGetImage (DescribeImages is not granted).
+if tag=$(aws ecr batch-get-image \
   --region "$REGION" \
   --repository-name "$REPO_NAME" \
-  --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+  --image-ids "imageTag=${IMAGE_TAG}" \
+  --query 'images[0].imageId.imageTag' \
+  --output text 2>/dev/null) && [[ "$tag" == "$IMAGE_TAG" ]]; then
   echo "ECR image ready: ${ECR_REGISTRY}/${REPO_NAME}:${IMAGE_TAG}"
   exit 0
 fi

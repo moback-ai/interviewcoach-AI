@@ -1,5 +1,6 @@
 import { Routes, Route } from 'react-router-dom';
 import { lazy, Suspense } from 'react';
+import ServiceHoursNotice from './components/interview/ServiceHoursNotice';
 import './index.css';
 
 // Lazy load pages — keeps home route initial bundle small
@@ -33,8 +34,10 @@ const LoadingSpinner = () => (
 
 function App() {
   return (
-    <Suspense fallback={<LoadingSpinner />}>
-      <Routes>
+    <>
+      <ServiceHoursNotice />
+      <Suspense fallback={<LoadingSpinner />}>
+        <Routes>
         {/* Public routes */}
         <Route path="/"              element={<Landing />} />
         <Route path="/signup"        element={<Signup />} />
@@ -60,6 +63,7 @@ function App() {
         </Route>
       </Routes>
     </Suspense>
+    </>
   );
 }
 

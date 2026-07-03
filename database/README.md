@@ -15,3 +15,5 @@ Workflow behavior:
 - change `database/**` → database deploy
 
 Apply migrations with your standard RDS migration process after merging to `develop`.
+
+Deploy workflow warns when `database/**` changes. See [docs/DEPLOY.md](../docs/DEPLOY.md).
