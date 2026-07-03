@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       git_ref:
-        description: Branch or tag (interviewcoach-AI)
+        description: Release branch or tag on interviewcoach-AI (manual — release-<month>-<year>, e.g. release-july-2026)
         required: true
-        default: develop
+        type: string
       deploy_api:
         description: Build API image + roll out to servers
         type: boolean
@@ -46,6 +46,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/check-devsecops-actor.sh
+
+      - name: Validate release ref name
+        env:
+          GIT_REF: ${{ inputs.git_ref }}
+        run: |
+          set -euo pipefail
+          REF="${GIT_REF// /}"
+          if [[ -z "$REF" ]]; then
+            echo "::error::Enter a release branch or tag: release-<month>-<year> (e.g. release-july-2026)."
+            exit 1
+          fi
+          shopt -s nocasematch
+          if [[ ! "$REF" =~ ^release-(january|february|march|april|may|june|july|august|september|october|november|december|0[1-9]|1[0-2])-[0-9]{4}$ ]]; then
+            echo "::error::git_ref must be release-<month>-<year> (e.g. release-july-2026 or release-07-2026), not '${GIT_REF}'."
+            exit 1
+          fi
+          echo "Release ref: ${REF}"
 
   detect-changes:
     name: Detect changed paths
