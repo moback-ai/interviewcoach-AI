@@ -16,7 +16,7 @@ AWS Console → **CloudWatch** → **Log groups** → **`/interviewcoach/prod/ap
 
 ---
 
-## Retired URLs (Plan B — do not use)
+## Retired URLs (legacy EC2 stack — do not use)
 
 | Retired | Use instead |
 |---------|-------------|
