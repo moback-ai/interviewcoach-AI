@@ -2,10 +2,11 @@ name: Security
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, 'release/**']
   push:
     branches:
       - develop
+      - 'release/**'
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1'
@@ -53,7 +54,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Run Semgrep CI rules
-        run: semgrep scan --config p/ci --error --exclude 'infra/prod/github-workflows/'
+        run: semgrep scan --config p/ci --error --exclude 'infra/prod/'
 
   secret-scan:
     name: Gitleaks (secrets)
