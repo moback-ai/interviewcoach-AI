@@ -44,9 +44,9 @@ backend/          Flask API, common/ (llm, speech, storage, redis)
 frontend/         Vite + React 19
 database/         Schema and SQL migrations
 docker/           Dockerfile.prod, compose files
-infra/prod/       Reference copy — sync to devsecops-platform (do not run scripts here)
-docs/             Developer docs only; ops docs in devsecops-platform
-scripts/          Dev, deploy, security scan helpers
+infra/            Pointer only — prod infra is in devsecops-platform
+docs/             Developer docs only
+scripts/          Local dev and security scan helpers
 ```
 
 ## Tests

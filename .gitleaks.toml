@@ -10,5 +10,4 @@ paths = [
   '''backend/Piper/''',
   '''frontend/dist/''',
   '''package-lock\.json$''',
-  '''infra/prod/prod\.env$''',
 ]

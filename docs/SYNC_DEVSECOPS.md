@@ -1,33 +1,19 @@
-# Sync to DevSecOps platform
+# Repository split (application vs DevSecOps)
 
-After **infra script or CloudFormation** changes in `infra/prod/`, sync to **`moback-ai/devsecops-platform`**.
+**All production infrastructure lives in `moback-ai/devsecops-platform` only.**
 
-**Do not** add deploy/build workflows to this repo — they live only in devsecops-platform.
+This application repo contains **source code** and **developer tooling** — not AWS deploy scripts or workflows.
 
-## Required sync
+| This repo (`interviewcoach-AI`) | DevSecOps repo |
+|--------------------------------|----------------|
+| `backend/`, `frontend/`, `database/`, `docker/` | `apps/interviewcoach/aws/prod/` (scripts, CFN, nginx) |
+| CI + Security workflows | Build, Deploy, Rollback workflows |
+| Developer docs (`docs/`) | Ops docs (`apps/interviewcoach/docs/`) |
 
-| From (this repo) | To (devsecops-platform) |
-|------------------|---------------------------|
-| `infra/prod/scripts/**` | `apps/interviewcoach/aws/prod/scripts/` |
-| `infra/prod/cloudformation/**` | `apps/interviewcoach/aws/prod/cloudformation/` |
-| `infra/prod/nginx/**` | `apps/interviewcoach/aws/prod/nginx/` |
-| `infra/prod/prod.env` | `apps/interviewcoach/aws/prod/prod.env` |
+## When you need an infra change
 
-From devsecops-platform:
+1. Open a ticket or ask **Govardhan** / **Kishore**
+2. DevSecOps edits `devsecops-platform/apps/interviewcoach/aws/prod/` and runs workflows from that repo
+3. Application changes still go through PR → `release/<month>-<year>` here
 
-```bash
-bash scripts/sync-interviewcoach-prod.sh
-```
-
-Workflow templates are maintained in **devsecops-platform** only:
-
-- `.github/workflows/interviewcoach-build-prod.yml`
-- `.github/workflows/interviewcoach-deploy-prod.yml`
-- Reference copies under `apps/interviewcoach/aws/prod/github-workflows/` (devsecops repo)
-
-## Verify after sync
-
-- [ ] PR CI + Security pass in `interviewcoach-AI`
-- [ ] DevSecOps runs **Build Production** + **Deploy Production** from devsecops-platform
-
-See [DEPLOY.md](DEPLOY.md).
+See [DEPLOY.md](DEPLOY.md) and [infra/README.md](../infra/README.md).

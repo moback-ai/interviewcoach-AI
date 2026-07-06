@@ -17,7 +17,7 @@ Ask **Govardhan** or **Kishore** for access.
 4. Request **DevSecOps** review and merge (developers do not merge)
 5. Ask DevSecOps for **Build Production** + **Deploy Production** when ready
 
-Do **not** run `infra/prod/scripts/*` from this repo.
+Infrastructure and AWS scripts are **not** in this repo — see [infra/README.md](../infra/README.md).
 
 ---
 
@@ -26,7 +26,7 @@ Do **not** run `infra/prod/scripts/*` from this repo.
 | Document | Purpose |
 |----------|---------|
 | [DEPLOY.md](DEPLOY.md) | Release flow, health checks, rollback, business hours |
-| [SYNC_DEVSECOPS.md](SYNC_DEVSECOPS.md) | Copy deploy changes to devsecops-platform |
+| [SYNC_DEVSECOPS.md](SYNC_DEVSECOPS.md) | What lives in each repo (app vs DevSecOps) |
 | [SECURITY_SCANNING.md](SECURITY_SCANNING.md) | Security CI on PRs |
 | [DEV_ACCESS.md](DEV_ACCESS.md) | CloudWatch log access (developers) |
 | [SECRETS_ONLY.md](SECRETS_ONLY.md) | How prod config loads (local dev vs Secrets Manager) |
