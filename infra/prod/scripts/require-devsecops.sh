@@ -24,7 +24,7 @@ else
 ERROR: Production scripts are DevSecOps-only.
 
   Do not run infra/prod/scripts from interviewcoach-AI.
-  Dev teams: merge PR to develop, then ask DevSecOps to deploy.
+  Dev teams: open PR into release/<month>-<year>, pass CI + Security, then ask DevSecOps to build and deploy.
 
   DevSecOps: moback-ai/devsecops-platform
     Actions → InterviewCoach · Deploy Production
