@@ -15,10 +15,10 @@ Architecture: **devsecops-platform** `apps/interviewcoach/docs/ARCHITECTURE.md` 
 
 | Role | Repository | Actions |
 |------|------------|---------|
-| **Developers** | `moback-ai/interviewcoach-AI` | PR → `develop`, Security CI; **CloudWatch logs read-only** ([DEV_ACCESS.md](../../docs/DEV_ACCESS.md)) |
-| **DevSecOps** | `moback-ai/devsecops-platform` | Deploy, secrets, SSH, AWS infra scripts |
+| **Developers** | `moback-ai/interviewcoach-AI` | PR → `release/<month>-<year>`, CI + Security only; **CloudWatch logs read-only** |
+| **DevSecOps** | `moback-ai/devsecops-platform` | Build, deploy, rollback, monthly release, maintenance, AWS scripts |
 
-Deploy workflow template: `github-workflows/deploy-prod.yml` → copy to devsecops-platform `.github/workflows/`
+**No GitHub Actions for build/deploy/infra in the application repo.**
 
 ---
 
@@ -58,7 +58,6 @@ Details: [docs/SECRETS_ONLY.md](../../docs/SECRETS_ONLY.md)
 | `cloudformation/prod-stack.yaml` | S3 buckets (static + user files, Retain) |
 | `cloudformation/prod-stack-import.yaml` | Import existing buckets into renamed stack |
 | `cloudformation/prod-cloudfront.yaml` | CloudFront: S3 static + ALB API origin |
-| `github-workflows/deploy-prod.yml` | **Copy to devsecops-platform** — not used in this repo |
 | `cloudformation/prod-compute-stack.yaml` | ALB + ASG + ElastiCache |
 
 ### Scripts (DevSecOps only)

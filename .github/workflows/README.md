@@ -1,17 +1,14 @@
-# Workflows (application repo)
+# Workflows (application repo — developers)
 
-**Ops docs:** `moback-ai/devsecops-platform` → `apps/interviewcoach/docs/`  
-**Developers:** [docs/README.md](../docs/README.md)
+**Only CI and Security run here.** No build, deploy, merge, delete, or infra workflows.
 
 | Workflow | When | Purpose |
 |----------|------|---------|
-| **CI** | PR / push to `develop` | Frontend lint + build, backend pytest |
-| **Security** | PR / push to `develop` | Gitleaks, Trivy, Semgrep |
+| **CI** | PR / push to `release/**` | Frontend lint + build, backend pytest |
+| **Security** | PR / push to `release/**` | Gitleaks, Trivy, Semgrep |
 
-**There is no production deploy workflow in this repo.**
+**All production operations** (build, deploy, rollback, monthly release, maintenance, AWS scripts) are **DevSecOps only** in `moback-ai/devsecops-platform`.
 
-Production deploy is **DevSecOps only** from `moback-ai/devsecops-platform`.
+Developers: open a PR into **`release/<month>-<year>`** → pass CI + Security → ask Govardhan or Kishore to merge and deploy.
 
-Developers: open a PR → pass **CI** and **Security** → ask Govardhan or Kishore to merge and deploy.
-
-Deploy flow and rollback: [docs/DEPLOY.md](../docs/DEPLOY.md)
+Ops docs: devsecops-platform → `apps/interviewcoach/docs/`
