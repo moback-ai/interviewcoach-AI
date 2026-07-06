@@ -14,6 +14,8 @@ jobs:
       - name: DevSecOps-only deploy
         run: |
           echo "This workflow is retired."
-          echo "Deploy from: moback-ai/devsecops-platform → InterviewCoach · Deploy PROD"
-          echo "Ask Govardhan or Kishore after your PR is merged to develop."
+          echo "Deploy from: moback-ai/devsecops-platform"
+          echo "  → InterviewCoach · Build Production"
+          echo "  → InterviewCoach · Deploy Production"
+          echo "Ask Govardhan or Kishore after your PR is merged to release/<month>-<year>."
           exit 1

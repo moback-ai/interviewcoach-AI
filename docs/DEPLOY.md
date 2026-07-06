@@ -10,15 +10,16 @@ Ops runbooks and architecture diagrams live in **devsecops-platform** → `apps/
 ## Release flow
 
 ```text
-PR → CI (lint + tests) + Security (Gitleaks, Trivy, Semgrep)
-  → DevSecOps merge to develop
-  → DevSecOps: InterviewCoach · Release to Production
-      1. Quality gate (lint, build, pytest)
-      2. Build API image → ECR (optional)
-      3. Deploy API / frontend (path-based)
-      4. Smoke tests
-      5. Auto-rollback on API smoke failure
+PR → release/<month>-<year> (CI + Security)
+  → DevSecOps merge into release branch
+  → devsecops-platform: InterviewCoach · Build Production (release branch only)
+  → devsecops-platform: InterviewCoach · Deploy Production (latest build, auto tag)
+      1. Rolling API deploy + smoke tests
+      2. Frontend publish from staged S3 artifact
+      3. Auto-rollback on failure
 ```
+
+At month-end, release is **auto-merged into `develop`**. Build/deploy never use `develop` or `main`.
 
 | Step | Where it runs | Blocks deploy? |
 |------|---------------|----------------|

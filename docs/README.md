@@ -11,11 +11,11 @@ Ask **Govardhan** or **Kishore** for access.
 
 ## Contributing
 
-1. Branch from `develop`: `develop/<feature>`
-2. Open a **PR** into `develop`
+1. Branch from the current **`release/<month>-<year>`** (e.g. `release/july-2026`)
+2. Open a **PR** into that **release branch** only (not `develop` or `main`)
 3. Pass **CI** (lint, build, pytest) and **Security** (Gitleaks, Trivy, Semgrep) — see [SECURITY_SCANNING.md](SECURITY_SCANNING.md)
 4. Request **DevSecOps** review and merge (developers do not merge)
-5. Ask DevSecOps for production **build + deploy** when needed
+5. Ask DevSecOps for **Build Production** + **Deploy Production** when ready
 
 Do **not** run `infra/prod/scripts/*` from this repo.
 

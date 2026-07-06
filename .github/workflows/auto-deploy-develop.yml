@@ -1,11 +1,12 @@
 # Production deploy is DevSecOps-only — moback-ai/devsecops-platform
 # This workflow intentionally does not deploy from the application repo.
-name: Deploy · Auto (develop)
+name: Deploy · Auto (release / develop)
 
 on:
   push:
     branches:
       - develop
+      - release/**
 
 permissions:
   contents: read
@@ -17,6 +18,8 @@ jobs:
     steps:
       - name: No deploy from application repo
         run: |
-          echo "Push to develop recorded. Security CI runs separately."
-          echo "Production deploy: moback-ai/devsecops-platform → InterviewCoach · Deploy PROD"
-          echo "Ask Govardhan or Kishore after merged PR approval."
+          echo "Push recorded. Security CI runs separately."
+          echo "Production: moback-ai/devsecops-platform"
+          echo "  → InterviewCoach · Build Production (release branch only)"
+          echo "  → InterviewCoach · Deploy Production"
+          echo "Ask Govardhan or Kishore after your PR is merged to release/<month>-<year>."
