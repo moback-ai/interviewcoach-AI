@@ -79,7 +79,7 @@ Redeploy the previous ECR tag without rebuilding:
 IMAGE_TAG=prod-YYYYMMDD-<sha> bash infra/prod/scripts/07b-rollback-api-asg.sh
 ```
 
-Or run **InterviewCoach · Release to Production** with `deploy_api=true` and an older `git_ref`, skipping build if the image already exists in ECR.
+Or run **InterviewCoach · Rollback API** in devsecops-platform with the previous ECR tag.
 
 The deploy workflow captures the previous image tag and **auto-rolls back** if post-deploy smoke fails.
 
@@ -117,11 +117,10 @@ cd frontend && npm run test:e2e
 
 `infra/prod/` is a **reference copy**. After changes here:
 
-1. Sync to `moback-ai/devsecops-platform` → `apps/interviewcoach/aws/prod/`
-2. Copy `infra/prod/github-workflows/deploy-prod.yml` → devsecops `.github/workflows/interviewcoach-deploy-prod.yml`
-3. Run one-time ops scripts from devsecops only (`18-enable-s3-versioning.sh`, CloudFormation updates)
+1. Sync to `moback-ai/devsecops-platform` → `apps/interviewcoach/aws/prod/` via `bash scripts/sync-interviewcoach-prod.sh` (run from devsecops-platform)
+2. Run one-time ops scripts from devsecops only (`18-enable-s3-versioning.sh`, CloudFormation updates)
 
-Do **not** run `infra/prod/scripts/*` from this application repo.
+Do **not** run `infra/prod/scripts/*` from this application repo. Build/deploy workflows live only in devsecops-platform.
 
 ---
 

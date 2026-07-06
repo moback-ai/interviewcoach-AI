@@ -19,10 +19,11 @@ From devsecops-platform:
 bash scripts/sync-interviewcoach-prod.sh
 ```
 
-Workflow templates (`Build Production`, `Deploy Production`, etc.) are maintained in **devsecops-platform** only:
+Workflow templates are maintained in **devsecops-platform** only:
 
-- `.github/workflows/interviewcoach-*.yml`
-- `apps/interviewcoach/aws/prod/github-workflows/` (reference copies)
+- `.github/workflows/interviewcoach-build-prod.yml`
+- `.github/workflows/interviewcoach-deploy-prod.yml`
+- Reference copies under `apps/interviewcoach/aws/prod/github-workflows/` (devsecops repo)
 
 ## Verify after sync
 

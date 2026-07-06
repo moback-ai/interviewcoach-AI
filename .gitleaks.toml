@@ -11,7 +11,4 @@ paths = [
   '''frontend/dist/''',
   '''package-lock\.json$''',
   '''infra/prod/prod\.env$''',
-  '''scripts/aws-plan-b/config\.env$''',
-  '''scripts/aws-plan-b/outputs\.env$''',
-  '''docs/diagrams/.*\.drawio$''',
 ]

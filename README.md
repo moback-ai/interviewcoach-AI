@@ -23,11 +23,12 @@ Copy env templates: `backend/.env.example`, `frontend/.env.example`.
 
 | Branch | Role | Deploy |
 |--------|------|--------|
-| `develop` | Integration (default) | Yes — via DevSecOps after merged PR |
-| `develop/<feature>` | Feature work | Yes — after admin PR approval |
-| `main` | Monthly snapshot | **Never** deploys |
+| `release/<month>-<year>` | **Active month** — open PRs here | Yes — DevSecOps build + deploy after merge |
+| Feature branches | Branch from current release | Yes — after DevSecOps merge into release |
+| `develop` | Integration | **Auto-merged from release at month-end** — not a deploy source |
+| `main` | Production mirror | **DevSecOps merge only** — never deploys |
 
-**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers open PRs to `develop`, pass CI + Security, and request deploy.
+**Production deploy is DevSecOps only** (Govardhan or Kishore) from `moback-ai/devsecops-platform`. Developers open PRs into the **release branch**, pass CI + Security, and request deploy.
 
 - [docs/README.md](docs/README.md) — contributing, developer docs index  
 - [docs/DEPLOY.md](docs/DEPLOY.md) — release flow, health checks, rollback  

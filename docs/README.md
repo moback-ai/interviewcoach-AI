@@ -37,9 +37,9 @@ Do **not** run `infra/prod/scripts/*` from this repo.
 
 | Document | Purpose |
 |----------|---------|
+| `DEVSECOPS_HANDOFF.md` | **Start here** — current prod handoff |
+| `SCRIPTS_GUIDE.md` | How prod scripts run |
 | `DEVSECOPS_GUIDE.md` | Roles, CI/CD, playbooks |
-| `ARCHITECTURE.md` | AWS overview |
-| **`ARCHITECTURE_PORTS_AND_SECURITY.md`** | **Ports, security groups, network diagram** |
-| **`OBSERVABILITY.md`** | **CloudWatch; retired `/admin/logs` URLs** |
-| `CAPACITY_AND_BUDGET.md` | Cost and concurrency |
+| `ARCHITECTURE_PORTS_AND_SECURITY.md` | Ports, security groups, network |
+| `OBSERVABILITY.md` | CloudWatch; retired `/admin/logs` URLs |
 | `DEPLOY.md` / `PROD_RUNBOOK.md` | Release and bootstrap |
