@@ -4,14 +4,16 @@
 
 ## Checklist
 
-- [ ] Target branch is `develop`
+- [ ] Target branch is **`release/<month>-<year>`** (not `develop` or `main`)
 - [ ] Tested locally
-- [ ] Security workflow green
-- [ ] **DevSecOps only:** @govardhanreddy66 or @KFKishore23 will **approve and merge** (developers do not merge)
+- [ ] CI + Security workflows green
+- [ ] **DevSecOps only:** @govardhanreddy66 or @KFKishore23 will **approve and merge**
 
-## Production (DevSecOps only)
+## Production (DevSecOps only — not in this repo)
 
-- [ ] **Build needed?** → **InterviewCoach · Build Docker Images** (once per release)
-- [ ] **Deploy needed?** → **InterviewCoach · Deploy Production** with the **same `image_tag`** (no build on deploy)
+DevSecOps runs in **`moback-ai/devsecops-platform`**:
+
+1. **InterviewCoach · Build Production**
+2. **InterviewCoach · Deploy Production**
 
 See [docs/README.md](../docs/README.md).

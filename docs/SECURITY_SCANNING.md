@@ -1,6 +1,6 @@
 # Security scanning
 
-Three free scanners run on every PR to `main` / `develop`:
+Three free scanners run on every PR to `release/**`:
 
 | Scanner | What it checks |
 |---------|----------------|
