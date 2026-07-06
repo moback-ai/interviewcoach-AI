@@ -53,7 +53,7 @@ scan_trivy() {
 }
 
 scan_semgrep() {
-  semgrep scan --config p/ci --error --exclude 'infra/prod/github-workflows/'
+  semgrep scan --config p/ci --error
 }
 
 install_tools

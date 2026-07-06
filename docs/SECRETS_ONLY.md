@@ -28,11 +28,11 @@ Copy and fill:
 backend/secrets.prod.example.json
 ```
 
-Push to AWS (Phase 1, Monday):
+Push to AWS (DevSecOps only — `devsecops-platform`):
 
 ```bash
-SECRETS_FILE=backend/secrets.prod.example.json \
-  bash infra/prod/scripts/03-aws-secrets-manager.sh
+# From devsecops-platform checkout:
+bash apps/interviewcoach/aws/prod/scripts/03-aws-secrets-manager.sh
 ```
 
 The script validates required keys and creates the secret if it does not exist.
