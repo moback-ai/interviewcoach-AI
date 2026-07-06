@@ -38,7 +38,7 @@ Infrastructure and AWS scripts are **not** in this repo — see [infra/README.md
 | Document | Purpose |
 |----------|---------|
 | `DEVSECOPS_HANDOFF.md` | **Start here** — current prod handoff |
-| `SCRIPTS_GUIDE.md` | How prod scripts run |
+| `SCRIPTS_GUIDE.md` | **Full script catalog and deploy flow** |
 | `DEVSECOPS_GUIDE.md` | Roles, CI/CD, playbooks |
 | `ARCHITECTURE_PORTS_AND_SECURITY.md` | Ports, security groups, network |
 | `OBSERVABILITY.md` | CloudWatch; retired `/admin/logs` URLs |
