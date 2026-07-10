@@ -1562,12 +1562,41 @@ def parse_job_description_file(file_path, model="llama3"):
 #---------------------------------------------------------------------------------------------------------------------------------------------
 
 
+def _html_to_structured_text(html: str) -> str:
+    """Convert HTML to plain text while preserving headings, lists, and paragraph breaks."""
+    if not html:
+        return ""
+
+    cleaned = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r'<br\s*/?>', '\n', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r'</?(?:p|div|section|article|header|footer|main|blockquote|h[1-6]|tr)\b[^>]*>',
+        '\n',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r'<li[^>]*>', '\n- ', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'</li>', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'</?(?:ul|ol|table|tbody|thead)\b[^>]*>', '\n', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+    cleaned = html_unescape(cleaned)
+
+    lines: list[str] = []
+    for line in cleaned.splitlines():
+        normalized = re.sub(r'[ \t]+', ' ', line).strip()
+        if normalized:
+            lines.append(normalized)
+        elif lines and lines[-1] != '':
+            lines.append('')
+
+    text = '\n'.join(lines)
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
+
+
 def _extract_visible_text_from_html(html: str, max_chars: int = 20000) -> str:
     """Lightweight HTML → text converter without external dependencies."""
-    html = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<[^>]+>', ' ', html)
-    text = html_unescape(text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = _html_to_structured_text(html)
     if not text:
         return ""
     if max_chars:
@@ -1577,13 +1606,18 @@ def _extract_visible_text_from_html(html: str, max_chars: int = 20000) -> str:
 
 def _coarse_plain_text_from_html(html: str, max_chars: int = 28000) -> str:
     """Strip tags to plain text when visible-text extraction yields little."""
-    stripped = re.sub(r'<[^>]+>', ' ', html or '')
-    collapsed = html_unescape(re.sub(r'\s+', ' ', stripped)).strip()
-    return collapsed[:max_chars]
+    text = _html_to_structured_text(html or '')
+    if max_chars:
+        text = text[:max_chars]
+    return text
 
 
 _MAX_JD_URL_PAGE_CHARS = 28000
 _LLM_JOB_URL_RETRIES = 3
+JD_URL_MANUAL_PASTE_MESSAGE = (
+     "We couldn't fetch the job description from this link. "
+     "Please paste it manually in the 'Paste Description' tab."
+)
 
 
 def _parse_llm_job_extraction_response(raw: str):
@@ -1609,13 +1643,13 @@ Page text:
 
 Identify the primary job posting on this page. Return one JSON object with exactly these keys:
 - "job_title": string — the role name as shown on the posting; "" if unknown.
-- "job_description": string — the full job description: summary, responsibilities, requirements, qualifications, and benefits that belong to this role. Use plain text, no markdown; "" if not present.
+- "job_description": string — the full job description: summary, responsibilities, requirements, qualifications, and benefits that belong to this role. Preserve structure with section headings on their own lines (e.g. Responsibilities, Requirements), each bullet on its own line starting with "- ", and blank lines between sections. Plain text only (no markdown code fences or **bold**); "" if not present.
 - "requires_manual_paste": boolean — true only if there is no usable job description (login wall, empty shell, mostly JavaScript boilerplate, or wrong page).
-- "warning_message": string — short note for the user when requires_manual_paste is true; otherwise "".
 
 Rules:
 - Use only what appears in the page text; do not invent duties or skills.
 - Omit navigation, cookie banners, footers, "similar jobs", and generic apply/sign-in chrome from the description.
+- Keep the posting's readable layout: headings, bullet lists, and paragraph breaks using newlines.
 - Output only valid JSON. No markdown code fences, no commentary before or after.
 
 JSON:"""
@@ -1631,18 +1665,14 @@ JSON:"""
             title = parsed.get("job_title")
             desc = parsed.get("job_description")
             manual = parsed.get("requires_manual_paste")
-            warn = parsed.get("warning_message")
             if not isinstance(title, str):
                 title = str(title) if title is not None else ""
             if not isinstance(desc, str):
                 desc = str(desc) if desc is not None else ""
-            if not isinstance(warn, str):
-                warn = str(warn) if warn is not None else ""
             return {
                 "job_title": title.strip(),
                 "job_description": desc.strip(),
                 "requires_manual_paste": bool(manual),
-                "warning_message": warn.strip(),
             }
         except Exception as e:
             last_error = e
@@ -1732,21 +1762,15 @@ def extract_job_from_url(url: str, model: str = "llama3"):
 
     llm_result = _llm_extract_job_from_page_content(page_plain, url.strip(), resolved_model)
 
-    default_warn = (
-        "This job board loads the description dynamically and it could not be fetched automatically. "
-        "Please copy the job description from the posting and paste it in the 'Paste Description' tab."
-    )
-    warning_message = llm_result.get("warning_message") or ""
-    requires_manual_paste = llm_result.get("requires_manual_paste")
-    if requires_manual_paste and not warning_message.strip():
-        warning_message = default_warn
+    requires_manual_paste = bool(llm_result.get("requires_manual_paste"))
+    warning_message = JD_URL_MANUAL_PASTE_MESSAGE if requires_manual_paste else ""
 
     return {
         "job_title": llm_result.get("job_title", "").strip(),
         "job_description": llm_result.get("job_description", "").strip(),
         "job_responsibilities": "",
-        "requires_manual_paste": bool(requires_manual_paste),
-        "warning_message": warning_message.strip(),
+        "requires_manual_paste": requires_manual_paste,
+        "warning_message": warning_message,
     }
 
 

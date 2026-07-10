@@ -18,6 +18,12 @@ import { devLog, devWarn } from '../utils/devLog';
 const JD_FETCH_ERROR_MESSAGE =
   "We couldn't fetch this job description from the link. Please paste it manually or upload the JD file.";
 
+const JD_MANUAL_PASTE_MESSAGE =
+  "We couldn't fetch the job description from this link. " +
+  "Please paste it manually in the 'Paste Description' tab.";
+
+const MAX_SELECTED_SKILLS = 10;
+
 const SUGGESTED_SKILLS_POOL = [
   'Java', 'JavaScript', 'Python', 'React', 'Node.js', 'SQL', 'Git', 'Agile', 'REST APIs',
   'Microservices', 'AWS', 'Docker', 'Kubernetes', 'MySQL', 'MongoDB', 'TypeScript',
@@ -337,7 +343,6 @@ function UploadPage() {
       const result = await response.json();
       if (result.success && result.data) {
         const requiresManualPaste = Boolean(result.data.requires_manual_paste);
-        const warningMessage = result.data.warning_message || '';
 
         setJobTitle(result.data.job_title || '');
         setIsTechnical(result.data.is_technical || false);
@@ -346,7 +351,7 @@ function UploadPage() {
           setNoticeModal({
             isOpen: true,
             title: "Can't auto-fetch job description",
-            message: warningMessage || 'Please paste the job description manually.',
+            message: JD_MANUAL_PASTE_MESSAGE,
             variant: 'info',
           });
           setJobDescInputMode('paste');
@@ -939,6 +944,12 @@ function UploadPage() {
     const trimmed = (skill || '').trim();
     if (!trimmed) return;
 
+    if (selectedSkills.length >= MAX_SELECTED_SKILLS) {
+      setSkillsError(`You can add up to ${MAX_SELECTED_SKILLS} skills only.`);
+      setSkillsDropdownOpen(false);
+      return;
+    }
+
     const normalizedNew = trimmed.toLowerCase();
     const isDuplicate = selectedSkills.some(
       (existing) => existing.toLowerCase() === normalizedNew
@@ -1051,7 +1062,9 @@ function UploadPage() {
 
                   {selectedSkills.length > 0 && (
                     <div className="space-y-2">
-                      <p className="text-xs font-medium text-[var(--color-text-secondary)]">Selected skills</p>
+                      <p className="text-xs font-medium text-[var(--color-text-secondary)]">
+                        Selected skills ({selectedSkills.length}/{MAX_SELECTED_SKILLS})
+                      </p>
                       <div className="flex flex-wrap gap-2">
                         {selectedSkills.map((skill) => (
                           <span
@@ -1082,11 +1095,16 @@ function UploadPage() {
                         type="text"
                         value={skillsInputValue}
                         onChange={(e) => {
+                          if (selectedSkills.length >= MAX_SELECTED_SKILLS) return;
                           setSkillsInputValue(e.target.value);
                           setSkillsError('');
                           setSkillsDropdownOpen(true);
                         }}
-                        onFocus={() => setSkillsDropdownOpen(true)}
+                        onFocus={() => {
+                          if (selectedSkills.length < MAX_SELECTED_SKILLS) {
+                            setSkillsDropdownOpen(true);
+                          }
+                        }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             e.preventDefault();
@@ -1099,8 +1117,12 @@ function UploadPage() {
                           }
                           if (e.key === 'Escape') setSkillsDropdownOpen(false);
                         }}
-                        placeholder="Search for a skill (e.g. Java, Project Management)"
-                        disabled={loading}
+                        placeholder={
+                          selectedSkills.length >= MAX_SELECTED_SKILLS
+                            ? `Maximum ${MAX_SELECTED_SKILLS} skills reached`
+                            : 'Search for a skill (e.g. Java, Project Management)'
+                        }
+                        disabled={loading || selectedSkills.length >= MAX_SELECTED_SKILLS}
                         className={`w-full px-4 py-3 pr-10 border rounded-xl transition ${
                           skillsError
                             ? 'border-red-500 dark:border-red-500 focus:ring-2 focus:ring-red-500'
@@ -1117,7 +1139,7 @@ function UploadPage() {
                           <FiX className="w-4 h-4" />
                         </button>
                       )}
-                      {skillsDropdownOpen && (
+                      {skillsDropdownOpen && selectedSkills.length < MAX_SELECTED_SKILLS && (
                         <div className="absolute z-20 left-0 right-0 mt-1 py-1 bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-lg max-h-60 overflow-auto">
                           {skillsSuggestions.length > 0 ? (
                             skillsSuggestions.map((skill) => (

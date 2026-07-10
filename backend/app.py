@@ -2260,6 +2260,11 @@ def generate_questions():
                     "success": False,
                     "message": "Please provide at least one skill in skills_text (comma-separated)",
                 }), 400
+            if len(skills_list) > 10:
+                return jsonify({
+                    "success": False,
+                    "message": "Please provide at most 10 skills.",
+                }), 400
             print(f"[DEBUG] Skills-based profile: {len(skills_list)} skills")
 
         question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
