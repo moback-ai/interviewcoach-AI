@@ -6,9 +6,12 @@
 
 | Branch | Purpose |
 |--------|---------|
-| `develop/<feature>` | Feature work → PR into `develop` |
-| `develop` | Integration — **merge DevSecOps only** |
-| `main` | Production mirror — **merge DevSecOps only** from `develop` |
+| `release/<month>-<year>` | **Active month** — open PRs here (e.g. `release/july-2026`) |
+| Feature branches | Branch from current release → PR into release only |
+| `develop` | Integration — **auto-merged from release at month-end** |
+| `main` | Production mirror — **DevSecOps merge only** |
+
+Do **not** open PRs to `develop` or `main`.
 
 ## Who approves and merges PRs
 
@@ -19,21 +22,20 @@
 | Govardhan | `@govardhanreddy66` |
 | Kishore | `@KFKishore23` |
 
-Developers (ganesh, neeraj) open PRs; they do **not** merge.
+Developers (ganesh, neeraj) open PRs into the **release branch**; they do **not** merge.
 
 Enforced via `.github/CODEOWNERS` (required review from DevSecOps).
 
-**GitHub Actions (devsecops-platform):** build and deploy workflows gate on `check-devsecops-actor.sh`; deploy uses `production` environment reviewers.
-
 ## Deploy flow
 
-1. **PR** — pass CI (lint, build, pytest) + Security in `interviewcoach-AI`
-2. **Merge** — DevSecOps merges to `develop`
-3. **Build image once** — devsecops → **InterviewCoach · Release to Production** (`deploy_api=true`)
-4. **Deploy rollout only** — same workflow with existing ECR tag, or `07b-rollback-api-asg.sh` for rollback
+1. **PR** — pass CI + Security in `interviewcoach-AI` (target: `release/<month>-<year>`)
+2. **Merge** — DevSecOps merges into the release branch
+3. **Build** — devsecops-platform → **InterviewCoach · Build Production** (uses release branch only)
+4. **Deploy** — **InterviewCoach · Deploy Production** (auto tag from latest build)
 
-Deploy gates: quality gate, business hours (10:00–19:00 IST), ECR CVE scan, smoke tests, auto-rollback on API failure.  
-Details: [docs/DEPLOY.md](../docs/DEPLOY.md)
+Build and deploy **never** use `develop` or `main` for app code.
+
+Details: devsecops-platform → `apps/interviewcoach/docs/DEPLOY.md`
 
 ## ASG schedule (IST)
 

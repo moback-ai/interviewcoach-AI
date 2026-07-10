@@ -1,30 +1,19 @@
-# Sync to DevSecOps platform
+# Repository split (application vs DevSecOps)
 
-After deployment-related changes in `interviewcoach-AI`, copy them to **`moback-ai/devsecops-platform`**.
+**All production infrastructure lives in `moback-ai/devsecops-platform` only.**
 
-## Required sync (this release)
+This application repo contains **source code** and **developer tooling** — not AWS deploy scripts or workflows.
 
-| From (this repo) | To (devsecops-platform) |
-|------------------|---------------------------|
-| `infra/prod/github-workflows/deploy-prod.yml` | `.github/workflows/interviewcoach-deploy-prod.yml` |
-| `infra/prod/scripts/**` | `apps/interviewcoach/aws/prod/scripts/` |
-| `infra/prod/cloudformation/prod-compute-stack.yaml` | `apps/interviewcoach/aws/prod/cloudformation/` |
-| `infra/prod/cloudformation/prod-stack.yaml` | `apps/interviewcoach/aws/prod/cloudformation/` |
-| `.github/actions/pre-deploy-quality-gate/` | `.github/actions/interviewcoach-pre-deploy-quality-gate/` (or equivalent path) |
+| This repo (`interviewcoach-AI`) | DevSecOps repo |
+|--------------------------------|----------------|
+| `backend/`, `frontend/`, `database/`, `docker/` | `apps/interviewcoach/aws/prod/` (scripts, CFN, nginx) |
+| CI + Security workflows | Build, Deploy, Rollback workflows |
+| Developer docs (`docs/`) | Ops docs (`apps/interviewcoach/docs/`) |
 
-Or run from devsecops: `bash scripts/sync-interviewcoach-prod.sh`
+## When you need an infra change
 
-## One-time AWS ops (DevSecOps only)
+1. Open a ticket or ask **Govardhan** / **Kishore**
+2. DevSecOps edits `devsecops-platform/apps/interviewcoach/aws/prod/` and runs workflows from that repo
+3. Application changes still go through PR → `release/<month>-<year>` here
 
-1. **ALB health path** — update target group to `/api/health/ready` (or redeploy compute stack)
-2. **S3 versioning** — `bash infra/prod/scripts/18-enable-s3-versioning.sh`
-3. **Replace deploy workflow** — enable updated `interviewcoach-deploy-prod.yml` in devsecops
-
-## Verify after sync
-
-- [ ] PR CI passes in `interviewcoach-AI` (CI + Security)
-- [ ] DevSecOps deploy workflow has quality gate + business hours + rollback steps
-- [ ] Smoke test uses `/api/health/ready` (not legacy 503 bypass)
-- [ ] ALB routes only to ready instances
-
-See [DEPLOY.md](DEPLOY.md) for the full release flow.
+See [DEPLOY.md](DEPLOY.md) and [infra/README.md](../infra/README.md).
