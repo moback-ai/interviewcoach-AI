@@ -2028,6 +2028,34 @@ def parse_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     if 'file' not in request.files:
+        data = request.get_json(silent=True) or {}
+        job_title = (data.get('job_title') or '').strip()
+        job_description = (data.get('job_description') or '').strip()
+        if job_title and job_description:
+            is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
+            if not is_valid_jd:
+                return jsonify({"success": False, "message": jd_validation_error}), 400
+            is_technical = classify_job_description_is_technical(job_title, job_description)
+            try:
+                is_technical = _run_callable_with_timeout(
+                    lambda: _classify_if_technical_role(
+                        job_title, job_description, model=get_ollama_model_name()
+                    ),
+                    30,
+                    label="Technical role classification",
+                )
+            except Exception as classify_error:
+                print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
+            return jsonify({
+                "success": True,
+                "message": "Job description accepted",
+                "data": {
+                    "job_title": job_title,
+                    "job_description": job_description,
+                    "is_technical": is_technical,
+                    "parser": "manual",
+                },
+            })
         return jsonify({"success": False, "message": "No file uploaded"}), 400
     file = request.files['file']
     ext = file.filename.rsplit('.', 1)[-1].lower()
@@ -2059,6 +2087,96 @@ def parse_job_description():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/extract-job-from-url', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def extract_job_from_url_api():
+    """Fetch a job posting URL and extract job title + description."""
+    safe_error_message = (
+        "We couldn't fetch this job description from the link. "
+        "Please paste it manually or upload the JD file."
+    )
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+
+    try:
+        data = request.get_json() or {}
+        url = (data.get('url') or '').strip()
+
+        if not url:
+            return jsonify({
+                "success": False,
+                "message": safe_error_message
+            }), 400
+
+        print(f"[DEBUG] Extracting job from URL: {url}")
+
+        from INTERVIEW.Resumeparser import extract_job_from_url
+
+        try:
+            result = extract_job_from_url(url, model=get_ollama_model_name())
+        except Exception as e:
+            print(f"[ERROR] URL extraction failed: {e}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "message": safe_error_message
+            }), 500
+
+        job_title = (result.get('job_title') or '').strip()
+        job_description = (result.get('job_description') or '').strip()
+        job_responsibilities = (result.get('job_responsibilities') or '').strip()
+        requires_manual_paste = bool(result.get("requires_manual_paste"))
+        warning_message = (result.get("warning_message") or "").strip()
+
+        if not job_title and not job_description and not job_responsibilities:
+            return jsonify({
+                "success": False,
+                "message": safe_error_message
+            }), 400
+
+        combined_description = job_description
+        if job_responsibilities:
+            if combined_description:
+                combined_description += "\n\nResponsibilities:\n" + job_responsibilities
+            else:
+                combined_description = "Responsibilities:\n" + job_responsibilities
+
+        is_technical = False
+        if job_title and combined_description:
+            is_technical = classify_job_description_is_technical(job_title, combined_description)
+            try:
+                is_technical = _run_callable_with_timeout(
+                    lambda: _classify_if_technical_role(
+                        job_title, combined_description, model=get_ollama_model_name()
+                    ),
+                    10,
+                    label="Technical role classification",
+                )
+            except Exception as classify_error:
+                print(f"[WARN] Failed to classify technical role for URL job: {classify_error}")
+
+        return jsonify({
+            "success": True,
+            "message": "Job extracted from URL successfully",
+            "data": {
+                "job_title": job_title,
+                "job_description": combined_description,
+                "responsibilities": job_responsibilities,
+                "is_technical": is_technical,
+                "requires_manual_paste": requires_manual_paste,
+                "warning_message": warning_message
+            }
+        })
+
+    except Exception as e:
+        print(f"[ERROR] General error in extract_job_from_url_api: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "message": safe_error_message
+        }), 500
 
 
 @app.route('/api/classify-technical-role', methods=['POST', 'OPTIONS'])
@@ -2103,31 +2221,86 @@ def generate_questions():
     try:
         data = request.get_json() or {}
         resume_url = data.get('resume_url')
+        skills_text = data.get('skills_text')
         job_description = (data.get('job_description') or "").strip()
-        job_title = data.get('job_title')
-        if not all([resume_url, job_description, job_title]):
-            return jsonify({"success": False, "message": "resume_url, job_description, job_title required"}), 400
+        job_title = (data.get('job_title') or "").strip()
+        resume_id = data.get('resume_id')
+        jd_id = data.get('jd_id')
+
+        if not job_title or not job_description:
+            return jsonify({
+                "success": False,
+                "message": "Missing required fields: job_title and job_description",
+            }), 400
+        if resume_url and skills_text:
+            return jsonify({
+                "success": False,
+                "message": "Provide either resume_url or skills_text, not both",
+            }), 400
+        if not resume_url and not skills_text:
+            return jsonify({
+                "success": False,
+                "message": "Missing required field: provide either resume_url or skills_text (comma-separated skills)",
+            }), 400
+        if skills_text and (not resume_id or not jd_id):
+            return jsonify({
+                "success": False,
+                "message": "When using skills_text, resume_id and jd_id are required for saving questions",
+            }), 400
+
         is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
         if not is_valid_jd:
             return jsonify({"success": False, "message": jd_validation_error}), 400
 
-        # Load resume from local protected storage or external URL
-        relative = resolve_relative_path(resume_url)
-        if relative:
-            resume_data = read_bytes(relative)
-            ext = relative.rsplit('.', 1)[-1]
-        else:
-            resp = http_requests.get(resume_url)
-            resp.raise_for_status()
-            resume_data = resp.content
-            url_path = urlparse(resume_url).path
-            ext = url_path.rsplit('.', 1)[-1].lower() if '.' in url_path else 'pdf'
+        skills_list = None
+        if skills_text:
+            skills_list = [s.strip() for s in (skills_text or "").split(",") if s and s.strip()]
+            if not skills_list:
+                return jsonify({
+                    "success": False,
+                    "message": "Please provide at least one skill in skills_text (comma-separated)",
+                }), 400
+            if len(skills_list) > 10:
+                return jsonify({
+                    "success": False,
+                    "message": "Please provide at most 10 skills.",
+                }), 400
+            print(f"[DEBUG] Skills-based profile: {len(skills_list)} skills")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
-            tf.write(resume_data)
-            temp_resume = tf.name
+        question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
+        ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+        pipeline_kwargs = {
+            "resume_path": None,
+            "job_title": job_title,
+            "job_description": job_description,
+            "question_counts": question_counts,
+            "include_answers": data.get("include_answers", True),
+            "split": data.get("split", False),
+            "resume_pct": data.get("resume_pct", 50),
+            "jd_pct": data.get("jd_pct", 50),
+            "blend": data.get("blend", False),
+            "blend_pct_resume": data.get("blend_pct_resume", 50),
+            "blend_pct_jd": data.get("blend_pct_jd", 50),
+            "max_retries": 2,
+            "skills_list": skills_list,
+        }
 
-        try:
+        temp_resume = None
+        if resume_url:
+            relative = resolve_relative_path(resume_url)
+            if relative:
+                resume_data = read_bytes(relative)
+                ext = relative.rsplit('.', 1)[-1]
+            else:
+                resp = http_requests.get(resume_url)
+                resp.raise_for_status()
+                resume_data = resp.content
+                ext = resume_url.split('.')[-1].lower() or 'pdf'
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
+                tf.write(resume_data)
+                temp_resume = tf.name
+
             try:
                 resume_text = extract_text_from_uploaded_document(temp_resume, ext)
             except ValueError as ve:
@@ -2135,22 +2308,9 @@ def generate_questions():
             is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
             if not is_valid_resume:
                 return jsonify({"success": False, "message": resume_validation_error}), 400
-            question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
-            ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
-            pipeline_kwargs = {
-                "resume_path": temp_resume,
-                "job_title": job_title,
-                "job_description": job_description,
-                "question_counts": question_counts,
-                "include_answers": data.get("include_answers", True),
-                "split": data.get("split", False),
-                "resume_pct": data.get("resume_pct", 50),
-                "jd_pct": data.get("jd_pct", 50),
-                "blend": data.get("blend", False),
-                "blend_pct_resume": data.get("blend_pct_resume", 50),
-                "blend_pct_jd": data.get("blend_pct_jd", 50),
-                "max_retries": 2,
-            }
+            pipeline_kwargs["resume_path"] = temp_resume
+
+        try:
             from INTERVIEW.Resumeparser import run_pipeline_from_api
             try:
                 result = _run_callable_with_timeout(
@@ -2198,7 +2358,7 @@ def generate_questions():
                 "ollama": result.get("ollama_diagnostics", ollama_diagnostics),
             }})
         finally:
-            if os.path.exists(temp_resume):
+            if temp_resume and os.path.exists(temp_resume):
                 os.unlink(temp_resume)
     except Exception as e:
         traceback.print_exc()
