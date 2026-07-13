@@ -1174,36 +1174,37 @@ function UploadPage() {
               )}
 
             {/* Job Description Input Modes */}
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-sm font-medium text-[var(--color-text-primary)]">
-                  Job Description
-                </span>
-                <div className="inline-flex rounded-full bg-[var(--color-bg-muted)] p-1">
-                  {['file', 'paste', 'link'].map((mode) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => {
-                        setJobDescInputMode(mode);
-                        setJobDescError('');
-                      }}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full transition ${
-                        jobDescInputMode === mode
-                          ? 'bg-[var(--color-primary)] text-white shadow-sm'
-                          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-border)]/60'
-                      }`}
-                      disabled={loading || parsingJobDesc || jobUrlLoading}
-                    >
-                      {mode === 'file' && 'Upload File'}
-                      {mode === 'paste' && 'Paste Description'}
-                      {mode === 'link' && 'Job URL'}
-                    </button>
-                  ))}
-                </div>
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                Job Description
+              </label>
+              <div className="flex rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-input-bg)] p-1">
+                {[
+                  { mode: 'file', label: 'Upload File' },
+                  { mode: 'paste', label: 'Paste Description' },
+                  { mode: 'link', label: 'Job URL' },
+                ].map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      setJobDescInputMode(mode);
+                      setJobDescError('');
+                    }}
+                    className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition ${
+                      jobDescInputMode === mode
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                    disabled={loading || parsingJobDesc || jobUrlLoading}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
+            </div>
 
-              {jobDescInputMode === 'file' && (
+            {jobDescInputMode === 'file' && (
                 <UploadBox
                   key={`jobdesc-${clearCounter}`}
                   label="Job Description File"
@@ -1306,7 +1307,6 @@ function UploadPage() {
                   </div>
                 </div>
               )}
-            </div>
 
               {/* Job Title and Description Fields - Only show after parsing */}
               {jobDescParsed ? (
