@@ -73,7 +73,7 @@ const CodeEditorPopup = ({ isOpen, onClose, initialLanguage = 'javascript', ques
         setErrors(response.message || 'Execution failed');
       }
     } catch (error) {
-      setErrors(`Network error: ${error.message}`);
+      setErrors(error.message || 'Execution failed');
     } finally {
       setIsRunning(false);
     }
@@ -148,7 +148,7 @@ const CodeEditorPopup = ({ isOpen, onClose, initialLanguage = 'javascript', ques
         setErrors(response.message || 'Test execution failed');
       }
     } catch (error) {
-      setErrors(`Network error: ${error.message}`);
+      setErrors(error.message || 'Test execution failed');
     } finally {
       setIsRunning(false);
     }
