@@ -60,6 +60,7 @@ const normalizeStrength = (strength) => {
 const DIFFICULTY_ORDER = { easy: 1, medium: 2, hard: 3 };
 const EXPERIENCE_ORDER = { beginner: 1, intermediate: 2, expert: 3 };
 const ANSWER_LEVELS = ['beginner', 'intermediate', 'expert'];
+const GENERATE_ANSWERS_TIMEOUT_MS = 300000;
 const formatLabel = (value) => String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
 
 const getAnswerDisplayLabel = (strength) => {
@@ -335,6 +336,7 @@ export default function QuestionsPage() {
   const [hasExistingInterviews, setHasExistingInterviews] = useState(false);
   const [interviewQuota, setInterviewQuota] = useState(null);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
+  const [isGeneratingAnswers, setIsGeneratingAnswers] = useState(false);
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
@@ -612,6 +614,103 @@ export default function QuestionsPage() {
     })
   );
 
+  const sampleAnswersMissing = sortedGroupedQuestions.some((questionGroup) =>
+    questionGroup.answers.some(
+      (answer) =>
+        answer.missing ||
+        !String(answer.answer || '').trim() ||
+        answer.answer === 'No answer provided'
+    )
+  );
+
+  const handleGenerateSampleAnswers = async () => {
+    if (!currentResumeId || !currentJdId || !currentQuestionSet) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Missing data',
+        message: 'Resume, job description, and question set are required to generate sample answers.',
+        variant: 'info',
+      });
+      return;
+    }
+
+    setIsGeneratingAnswers(true);
+    try {
+      const session = await getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const backendOrigin = getBackendOrigin();
+      const response = await fetch(`${backendOrigin}/api/generate-answers`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(GENERATE_ANSWERS_TIMEOUT_MS)
+          : undefined,
+        body: JSON.stringify({
+          resume_id: currentResumeId,
+          jd_id: currentJdId,
+          question_set: currentQuestionSet,
+        }),
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('text/html') && response.status === 504) {
+          throw new Error('Sample answer generation timed out on the server. Please try again.');
+        }
+        let errorData = {};
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = {};
+        }
+        throw new Error(errorData.message || `Failed to generate sample answers: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.message || 'Sample answer generation failed');
+      }
+
+      const savedQuestions = result.data?.questions || [];
+      const uniqueQuestionCount = new Set(
+        savedQuestions.map((item) => (item.question_text || item.question || '').trim().toLowerCase())
+      ).size;
+
+      setQuestions(savedQuestions);
+      setExpandedQuestions(new Set());
+      setNoticeModal({
+        isOpen: true,
+        title: 'Sample answers ready',
+        message: `Generated easy, intermediate, and expert sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`,
+        variant: 'info',
+      });
+    } catch (error) {
+      console.error('Error generating sample answers:', error);
+      if (isAuthErrorMessage(error.message)) {
+        redirectToExpiredLogin();
+        return;
+      }
+      const msg =
+        error?.name === 'TimeoutError' || error?.name === 'AbortError'
+          ? 'Sample answer generation timed out. Please try again.'
+          : error.message;
+      setNoticeModal({
+        isOpen: true,
+        title: 'Could not generate sample answers',
+        message: msg,
+        variant: 'error',
+      });
+    } finally {
+      setIsGeneratingAnswers(false);
+    }
+  };
+
   const toggleQuestion = (questionId) => {
     const newExpanded = new Set(expandedQuestions);
     if (newExpanded.has(questionId)) {
@@ -718,7 +817,7 @@ export default function QuestionsPage() {
               Interview Questions & Answers
             </h1>
             <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-4">
-              Review generated questions and sample answers for your interview preparation
+              Review generated questions for your interview preparation. Sample answers can be generated on demand.
             </p>
             {quotaBadgeText && (
               <p className="text-xs sm:text-sm font-medium text-[var(--color-primary)] mb-2">
@@ -743,6 +842,26 @@ export default function QuestionsPage() {
                   <span className="font-medium">{Object.keys(groupedQuestions).length}</span>
                   <span className="opacity-75">questions</span>
                 </div>
+                {!loading && !error && sampleAnswersMissing && (
+                  <button
+                    type="button"
+                    onClick={handleGenerateSampleAnswers}
+                    disabled={isGeneratingAnswers}
+                    className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                  >
+                    {isGeneratingAnswers ? (
+                      <>
+                        <FiLoader className="w-4 h-4 animate-spin" />
+                        Generating answers...
+                      </>
+                    ) : (
+                      <>
+                        <FiRefreshCw className="w-4 h-4" />
+                        Generate Sample Answers
+                      </>
+                    )}
+                  </button>
+                )}
               </motion.div>
             )}
           </motion.div>

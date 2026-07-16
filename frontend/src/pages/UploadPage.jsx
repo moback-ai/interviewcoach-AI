@@ -74,10 +74,11 @@ function UploadPage() {
   const [blendMode, setBlendMode] = useState(false);
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
+  const [includeSampleAnswers, setIncludeSampleAnswers] = useState(false);
   const [, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
-  const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
+  const GENERATE_QUESTIONS_TIMEOUT_MS = 300000;
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -703,6 +704,7 @@ function UploadPage() {
         blend: blendMode,
         blend_pct_resume: blendResumePercentage,
         blend_pct_jd: 100 - blendResumePercentage,
+        include_answers: includeSampleAnswers,
       };
       if (skillsText) {
         body.skills_text = skillsText;
@@ -1638,6 +1640,34 @@ function UploadPage() {
                                 </div>
                               </div>
                             ) : null}
+                        </div>
+
+                        {/* Sample Answers Toggle */}
+                        <div className="pt-2 border-t border-[var(--color-border)]">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <label className="text-sm font-medium text-[var(--color-text-primary)]">
+                                Generate Sample Answers
+                              </label>
+                              <p className="text-xs text-[var(--color-text-secondary)]">
+                                Also create easy, intermediate, and expert sample answers (slower, uses more tokens)
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setIncludeSampleAnswers(!includeSampleAnswers)}
+                              disabled={loading}
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                includeSampleAnswers ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-gray-700'
+                              } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                  includeSampleAnswers ? 'translate-x-6' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </div>
                         </div>
                       </div>
 

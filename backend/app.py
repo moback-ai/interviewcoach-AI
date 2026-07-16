@@ -1406,6 +1406,7 @@ def _env_int(name, default):
 
 
 QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS = _env_int("QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS", 90)
+GENERATE_ANSWERS_TIMEOUT_SECONDS = _env_int("GENERATE_ANSWERS_TIMEOUT_SECONDS", 300)
 JD_PARSE_OLLAMA_TIMEOUT_SECONDS = _env_int("JD_PARSE_OLLAMA_TIMEOUT_SECONDS", 25)
 INTERVIEW_RESPONSE_TIMEOUT_SECONDS = _env_int("INTERVIEW_RESPONSE_TIMEOUT_SECONDS", 45)
 
@@ -1468,13 +1469,13 @@ def _run_callable_with_timeout(fn, timeout_seconds, label="operation"):
 
 
 def _parse_job_description_file(path, model=None):
-    from INTERVIEW.Resumeparser import parse_job_description_file
+    from INTERVIEW.jd_parser import parse_job_description_file
 
     return parse_job_description_file(path, model=model)
 
 
 def _classify_if_technical_role(job_title, job_description, model=None):
-    from INTERVIEW.Resumeparser import classify_if_technical_role
+    from INTERVIEW.jd_parser import classify_if_technical_role
 
     return classify_if_technical_role(job_title, job_description, model=model)
 
@@ -2112,7 +2113,7 @@ def extract_job_from_url_api():
 
         print(f"[DEBUG] Extracting job from URL: {url}")
 
-        from INTERVIEW.Resumeparser import extract_job_from_url
+        from INTERVIEW.jd_parser import extract_job_from_url
 
         try:
             result = extract_job_from_url(url, model=get_ollama_model_name())
@@ -2274,7 +2275,7 @@ def generate_questions():
             "job_title": job_title,
             "job_description": job_description,
             "question_counts": question_counts,
-            "include_answers": data.get("include_answers", True),
+            "include_answers": data.get("include_answers", False),
             "split": data.get("split", False),
             "resume_pct": data.get("resume_pct", 50),
             "jd_pct": data.get("jd_pct", 50),
@@ -2283,6 +2284,8 @@ def generate_questions():
             "blend_pct_jd": data.get("blend_pct_jd", 50),
             "max_retries": 2,
             "skills_list": skills_list,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
         }
 
         temp_resume = None
@@ -2311,7 +2314,7 @@ def generate_questions():
             pipeline_kwargs["resume_path"] = temp_resume
 
         try:
-            from INTERVIEW.Resumeparser import run_pipeline_from_api
+            from INTERVIEW.question_generation import run_pipeline_from_api
             try:
                 result = _run_callable_with_timeout(
                     lambda: run_pipeline_from_api(**pipeline_kwargs),
@@ -2355,11 +2358,192 @@ def generate_questions():
             }, "debug": {
                 "generator": result.get("generator", "unknown"),
                 "answer_generation": result.get("answer_generation", {}),
+                "token_usage": result.get("token_usage", {}),
                 "ollama": result.get("ollama_diagnostics", ollama_diagnostics),
             }})
         finally:
             if temp_resume and os.path.exists(temp_resume):
                 os.unlink(temp_resume)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
+@app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def generate_answers_for_question_set():
+    """Generate sample answers (easy/intermediate/expert) for an existing question set."""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    try:
+        data = request.get_json() or {}
+        resume_id = data.get("resume_id")
+        jd_id = data.get("jd_id")
+        question_set = data.get("question_set")
+        skills_text = data.get("skills_text")
+
+        if not resume_id or not jd_id or question_set is None:
+            return jsonify({
+                "success": False,
+                "message": "resume_id, jd_id, and question_set are required",
+            }), 400
+
+        user_id = request.user["id"]
+        resume_row = query_one(
+            "SELECT * FROM resumes WHERE id=%s AND user_id=%s",
+            (resume_id, user_id),
+        )
+        if not resume_row:
+            return jsonify({"success": False, "message": "Resume not found"}), 404
+
+        jd_row = query_one(
+            "SELECT * FROM job_descriptions WHERE id=%s AND user_id=%s",
+            (jd_id, user_id),
+        )
+        if not jd_row:
+            return jsonify({"success": False, "message": "Job description not found"}), 404
+
+        question_set = int(question_set)
+        existing = query_all(
+            """
+            SELECT * FROM questions
+            WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+            ORDER BY created_at ASC
+            """,
+            (resume_id, jd_id, question_set),
+        )
+        if not existing:
+            return jsonify({
+                "success": False,
+                "message": f"No questions found for question set {question_set}",
+            }), 404
+
+        job_title = (jd_row.get("title") or "").strip()
+        job_description = (jd_row.get("description") or "").strip()
+        if not job_title or not job_description:
+            return jsonify({
+                "success": False,
+                "message": "Job title and description are required for answer generation",
+            }), 400
+
+        skills_list = None
+        resume_path = None
+        file_url = (resume_row.get("file_url") or "").strip()
+        is_skills_profile = (
+            "skills-based" in file_url.lower()
+            or (resume_row.get("file_name") or "").strip().lower() == "skills-based profile"
+        )
+        if is_skills_profile or skills_text:
+            if skills_text:
+                skills_list = [s.strip() for s in skills_text.split(",") if s.strip()]
+            if not skills_list:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "This is a skills-based profile. Provide skills_text (comma-separated) "
+                        "to generate sample answers."
+                    ),
+                }), 400
+        else:
+            stored_path = resume_row.get("stored_path")
+            relative = resolve_relative_path(stored_path or file_url)
+            if not relative:
+                return jsonify({
+                    "success": False,
+                    "message": "Resume file path not found for answer generation",
+                }), 400
+            resume_path = relative
+            if not os.path.isabs(resume_path):
+                resume_path = os.path.join(os.path.dirname(__file__), resume_path)
+
+        from INTERVIEW.answer_generation import run_generate_answers_for_question_set
+
+        ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+        try:
+            result = _run_callable_with_timeout(
+                lambda: run_generate_answers_for_question_set(
+                    resume_path=resume_path,
+                    job_title=job_title,
+                    job_description=job_description,
+                    question_rows=[dict(row) for row in existing],
+                    model=get_ollama_model_name(),
+                    skills_list=skills_list,
+                ),
+                GENERATE_ANSWERS_TIMEOUT_SECONDS,
+                label="Sample answer generation",
+            )
+        except Exception as pipeline_error:
+            print(
+                "[ERROR] Sample answer generation failed: "
+                f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+            )
+            status = _question_generation_error_status(pipeline_error)
+            return jsonify({
+                "success": False,
+                "message": str(pipeline_error),
+                "debug": {"ollama": ollama_diagnostics},
+            }), status
+
+        if not result.get("success"):
+            return jsonify({
+                "success": False,
+                "message": result.get("error") or "Answer generation failed",
+            }), 500
+
+        generated = result.get("questions") or []
+        if not generated:
+            return jsonify({
+                "success": False,
+                "message": "Answer generation returned no questions",
+            }), 500
+
+        execute(
+            "DELETE FROM questions WHERE resume_id=%s AND jd_id=%s AND question_set=%s",
+            (resume_id, jd_id, question_set),
+        )
+
+        saved = []
+        for question in generated:
+            exp = normalize_difficulty_experience(question.get("difficulty_experience"))
+            level = normalize_question_difficulty(
+                question.get("difficulty_category") or question.get("difficulty_level")
+            )
+            row = execute(
+                """
+                INSERT INTO questions (
+                    interview_id, resume_id, jd_id, question_text, expected_answer,
+                    difficulty_level, difficulty_experience, question_set, requires_code
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    None,
+                    resume_id,
+                    jd_id,
+                    question.get("question_text") or question.get("question"),
+                    question.get("expected_answer") or question.get("answer"),
+                    level,
+                    exp,
+                    question_set,
+                    question.get("requires_code", False),
+                ),
+            )
+            saved.append(_serialize_question(row))
+
+        saved.sort(key=_question_sort_key)
+        return jsonify({
+            "success": True,
+            "data": {
+                "questions": saved,
+                "questions_count": len(saved),
+            },
+            "debug": {
+                "answer_generation": result.get("answer_generation", {}),
+                "ollama": ollama_diagnostics,
+            },
+        })
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
