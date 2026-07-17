@@ -466,6 +466,21 @@ body::after {
   }
 }
 
+@keyframes notice-modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.notice-modal-enter {
+  animation: notice-modal-enter 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .auth-simple-header > * {
   animation: auth-fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

@@ -60,7 +60,17 @@ function UploadPage() {
   const [jobUrlLoading, setJobUrlLoading] = useState(false);
   const [clearCounter, setClearCounter] = useState(0);
   const [successModal, setSuccessModal] = useState({ isOpen: false, title: '', message: '', details: null });
-  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
+  const [noticeModal, setNoticeModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'error',
+    primaryLabel: 'OK',
+    secondaryLabel: undefined,
+    onSecondary: undefined,
+    details: undefined,
+  });
+  const pendingPairContinueRef = useRef(null);
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
 
   // New state for question generation settings
@@ -430,7 +440,7 @@ function UploadPage() {
     }
   };
 
-  const createSkillsResumeRecord = async () => {
+  const createSkillsResumeRecord = async (skillsText = '') => {
     const session = await getSession();
     if (!session) {
       throw new Error('No active session');
@@ -446,6 +456,7 @@ function UploadPage() {
       body: JSON.stringify({
         file_url: PLACEHOLDER_PROFILE_URL,
         file_name: 'Skills-based profile',
+        skills_text: skillsText,
       }),
     });
 
@@ -456,6 +467,49 @@ function UploadPage() {
 
     const resumeData = await resumeResponse.json();
     return resumeData.data.id;
+  };
+
+  const checkResumeJdPair = async ({ isSkillsMode, skillsTextForApi }) => {
+    const session = await getSession();
+    if (!session) {
+      throw new Error('No active session');
+    }
+    const backendOrigin = getBackendOrigin();
+    const formData = new FormData();
+    formData.append('job_title', jobTitle.trim());
+    formData.append('job_description', jobDescription.trim());
+    if (isSkillsMode) {
+      formData.append('skills_text', skillsTextForApi);
+    } else if (resume) {
+      formData.append('file', resume);
+      formData.append('file_name', resume.name || '');
+    }
+    const response = await fetch(`${backendOrigin}/api/check-resume-jd-pair`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: formData,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.message || 'Failed to check existing resume/JD pair');
+    }
+    return payload.match || {};
+  };
+
+  const closeNoticeModal = () => {
+    pendingPairContinueRef.current = null;
+    setNoticeModal({
+      isOpen: false,
+      title: '',
+      message: '',
+      variant: 'error',
+      primaryLabel: 'OK',
+      secondaryLabel: undefined,
+      onSecondary: undefined,
+      details: undefined,
+    });
   };
 
   const handleGenerateQuestions = async (e) => {
@@ -523,151 +577,237 @@ function UploadPage() {
     setLoading(true);
     setIsOperationInProgress(true); // ✅ Pause idle timeout during question generation
 
-    try {
-      devLog('[DEBUG] Starting complete workflow...', isSkillsMode ? '(skills mode)' : '(resume mode)');
+    const runWorkflow = async ({
+      reuseResumeId = null,
+      reuseJdId = null,
+      reuseResumeUrl = null,
+      forceNew = false,
+    } = {}) => {
+      try {
+        devLog('[DEBUG] Starting complete workflow...', isSkillsMode ? '(skills mode)' : '(resume mode)');
 
-      let resumeId;
-      let jdId;
-      let resumeUrl = null;
+        let resumeId = reuseResumeId;
+        let jdId = reuseJdId;
+        let resumeUrl = reuseResumeUrl;
 
-      if (isSkillsMode) {
-        devLog('[DEBUG] Step 1: Creating skills profile record...');
-        resumeId = await createSkillsResumeRecord();
-        devLog('[DEBUG] Step 2: Saving job description...');
-        ({ jdId } = await saveJobDescription());
-        trackEvents.jobDescriptionSaved({
-          job_title: jobTitle,
-          job_description_length: jobDescription.length,
-          resume_id: resumeId,
-          jd_id: jdId,
-          save_timestamp: new Date().toISOString(),
-        });
-      } else {
-        // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
-        devLog('[DEBUG] Step 1: Uploading resume file...');
-        ({ resumeId, resumeUrl } = await uploadResume(resume));
+        if (!forceNew && !resumeId && !jdId) {
+          const match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
+          if (match.questions_exist) {
+            setLoading(false);
+            setIsOperationInProgress(false);
+            pendingPairContinueRef.current = () => {
+              closeNoticeModal();
+              setLoading(true);
+              setIsOperationInProgress(true);
+              runWorkflow({
+                reuseResumeId: match.resume_id,
+                reuseJdId: match.jd_id,
+                reuseResumeUrl: match.resume_url || null,
+                forceNew: true,
+              });
+            };
+            const setCount = match.question_set_count || 1;
+            const roleLabel = (match.job_title || jobTitle || '').trim();
+            setNoticeModal({
+              isOpen: true,
+              title: 'You already have questions for this pair',
+              message:
+                setCount === 1
+                  ? 'A question set is ready on your Dashboard. Jump there to practice, or create another set if you want fresh questions.'
+                  : `You already have ${setCount} question sets for this resume and job description. Open the Dashboard to practice, or generate another set.`,
+              variant: 'existing',
+              primaryLabel: 'Go to Dashboard',
+              secondaryLabel: 'Generate new set anyway',
+              details: [
+                ...(roleLabel ? [{ label: 'Role', value: roleLabel }] : []),
+                {
+                  label: 'Question sets',
+                  value: String(setCount),
+                },
+                ...(match.latest_question_set
+                  ? [{ label: 'Latest set', value: `#${match.latest_question_set}` }]
+                  : []),
+              ],
+              onSecondary: () => {
+                if (pendingPairContinueRef.current) pendingPairContinueRef.current();
+              },
+            });
+            return;
+          }
 
-        // Track resume upload
-        trackEvents.resumeUploaded({
-          file_name: resume.name,
-          file_size: resume.size,
-          file_type: resume.type,
-          upload_timestamp: new Date().toISOString(),
-        });
+          if (match.filename_match && !match.content_match_resume && !isSkillsMode) {
+            // Soft caution only — continue after user acknowledges once via console/devLog
+            devWarn('[WARN] Filename already used by this user; content differs — continuing.');
+          }
 
-        // Step 2: Save job description to database
-        devLog('[DEBUG] Step 2: Saving job description...');
-        ({ jdId } = await saveJobDescription());
-
-        // Track job description save
-        trackEvents.jobDescriptionSaved({
-          job_title: jobTitle,
-          job_description_length: jobDescription.length,
-          resume_id: resumeId,
-          jd_id: jdId,
-          save_timestamp: new Date().toISOString(),
-        });
-      }
-
-      // Step 3: Generate questions using backend API
-      devLog('[DEBUG] Step 3: Generating questions...');
-      const questionsResult = await generateQuestionsFromBackend({
-        resumeUrl: resumeUrl || undefined,
-        skillsText: isSkillsMode ? skillsTextForApi : undefined,
-        jobTitle,
-        jobDescription,
-        resumeId,
-        jdId,
-      });
-      
-      if (!questionsResult.success) {
-        throw new Error(`Failed to generate questions: ${questionsResult.message}`);
-      }
-
-      const generationDebug = questionsResult.debug || {};
-      const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-      const generationWarning = fallbackAnswerCount > 0
-        ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-        : '';
-
-      // Step 4: Save questions to database via edge function
-      devLog('[DEBUG] Step 4: Saving questions to database...');
-      const questionsSaveResult = await saveQuestionsToDatabase(
-        resumeId, 
-        jdId, 
-        questionsResult.data.questions
-      );
-
-      if (!questionsSaveResult.success) {
-        throw new Error(`Failed to save questions: ${questionsSaveResult.message}`);
-      }
-
-      // Get the question set number from the saved questions
-      const savedQuestionSet = questionsSaveResult.data[0]?.question_set || 'unknown';
-
-      // Track questions generated
-      const uniqueQuestions = questionsSaveResult.data.reduce((acc, item) => {
-        if (!acc.has(item.question_text)) {
-          acc.add(item.question_text);
+          if (match.resume_id && match.jd_id && match.content_match) {
+            resumeId = match.resume_id;
+            jdId = match.jd_id;
+            resumeUrl = match.resume_url || null;
+            devLog('[DEBUG] Reusing existing resume_id/jd_id from content hash match');
+          } else {
+            if (match.resume_id && match.content_match_resume) {
+              resumeId = match.resume_id;
+              resumeUrl = match.resume_url || null;
+            }
+            if (match.jd_id && match.content_match_jd) {
+              jdId = match.jd_id;
+            }
+          }
         }
-        return acc;
-      }, new Set());
 
-      trackEvents.questionsGenerated({
-        resume_id: resumeId,
-        jd_id: jdId,
-        question_set: savedQuestionSet,
-        total_questions: uniqueQuestions.size,
-        job_title: jobTitle,
-        generation_timestamp: new Date().toISOString()
-      });
+        if (isSkillsMode) {
+          if (!resumeId) {
+            devLog('[DEBUG] Step 1: Creating skills profile record...');
+            resumeId = await createSkillsResumeRecord(skillsTextForApi);
+          }
+          if (!jdId) {
+            devLog('[DEBUG] Step 2: Saving job description...');
+            ({ jdId } = await saveJobDescription());
+          }
+          trackEvents.jobDescriptionSaved({
+            job_title: jobTitle,
+            job_description_length: jobDescription.length,
+            resume_id: resumeId,
+            jd_id: jdId,
+            save_timestamp: new Date().toISOString(),
+          });
+        } else {
+          if (!resumeId) {
+            // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
+            devLog('[DEBUG] Step 1: Uploading resume file...');
+            ({ resumeId, resumeUrl } = await uploadResume(resume));
 
-      // Step 5: Show success message and redirect
-      devLog('[DEBUG] Step 5: Process completed successfully!');
-      devLog('[DEBUG] Resume ID:', resumeId);
-      devLog('[DEBUG] Job Description ID:', jdId);
-      devLog('[DEBUG] Questions saved:', questionsSaveResult.data.length);
+            // Track resume upload
+            trackEvents.resumeUploaded({
+              file_name: resume.name,
+              file_size: resume.size,
+              file_type: resume.type,
+              upload_timestamp: new Date().toISOString(),
+            });
+          }
+
+          if (!jdId) {
+            // Step 2: Save job description to database
+            devLog('[DEBUG] Step 2: Saving job description...');
+            ({ jdId } = await saveJobDescription());
+          }
+
+          // Track job description save
+          trackEvents.jobDescriptionSaved({
+            job_title: jobTitle,
+            job_description_length: jobDescription.length,
+            resume_id: resumeId,
+            jd_id: jdId,
+            save_timestamp: new Date().toISOString(),
+          });
+        }
+
+        // Step 3: Generate questions using backend API
+        devLog('[DEBUG] Step 3: Generating questions...');
+        const questionsResult = await generateQuestionsFromBackend({
+          resumeUrl: resumeUrl || undefined,
+          skillsText: isSkillsMode ? skillsTextForApi : undefined,
+          jobTitle,
+          jobDescription,
+          resumeId,
+          jdId,
+        });
       
-      // Store the created IDs for navigation
-      setLastCreatedIds({
-        resumeId: resumeId,
-        jdId: jdId,
-        questionSet: savedQuestionSet
-      });
-      
-      // Show success modal instead of alert
-      setSuccessModal({
-        isOpen: true,
-        title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
-        message: generationWarning
-          ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
-          : isSkillsMode
-            ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
-            : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
-        details: [
-          `Question Set: ${savedQuestionSet}`,
-          `Total Questions: ${uniqueQuestions.size}`,
-          isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resume.name}`,
-          `Job Title: ${jobTitle}`,
-          generationWarning
-            ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
-            : 'Status: Ready for interview preparation',
-        ],
-      });
+        if (!questionsResult.success) {
+          throw new Error(`Failed to generate questions: ${questionsResult.message}`);
+        }
 
-    } catch (error) {
-      console.error('Error in complete workflow:', error);
-      const msg = error instanceof Error ? error.message : String(error || '');
-      setNoticeModal({
-        isOpen: true,
-        title: 'Upload failed',
-        message: mapEmptyUploadFileError(msg),
-        variant: 'error',
-      });
-    } finally {
-      setLoading(false);
-      setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
-    }
+        const generationDebug = questionsResult.debug || {};
+        const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
+        const generationWarning = fallbackAnswerCount > 0
+          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+          : '';
+
+        // Step 4: Save questions to database via edge function
+        devLog('[DEBUG] Step 4: Saving questions to database...');
+        const questionsSaveResult = await saveQuestionsToDatabase(
+          resumeId, 
+          jdId, 
+          questionsResult.data.questions
+        );
+
+        if (!questionsSaveResult.success) {
+          throw new Error(`Failed to save questions: ${questionsSaveResult.message}`);
+        }
+
+        // Get the question set number from the saved questions
+        const savedQuestionSet = questionsSaveResult.data[0]?.question_set || 'unknown';
+
+        // Track questions generated
+        const uniqueQuestions = questionsSaveResult.data.reduce((acc, item) => {
+          if (!acc.has(item.question_text)) {
+            acc.add(item.question_text);
+          }
+          return acc;
+        }, new Set());
+
+        trackEvents.questionsGenerated({
+          resume_id: resumeId,
+          jd_id: jdId,
+          question_set: savedQuestionSet,
+          total_questions: uniqueQuestions.size,
+          job_title: jobTitle,
+          generation_timestamp: new Date().toISOString()
+        });
+
+        // Step 5: Show success message and redirect
+        devLog('[DEBUG] Step 5: Process completed successfully!');
+        devLog('[DEBUG] Resume ID:', resumeId);
+        devLog('[DEBUG] Job Description ID:', jdId);
+        devLog('[DEBUG] Questions saved:', questionsSaveResult.data.length);
+      
+        // Store the created IDs for navigation
+        setLastCreatedIds({
+          resumeId: resumeId,
+          jdId: jdId,
+          questionSet: savedQuestionSet
+        });
+      
+        // Show success modal instead of alert
+        setSuccessModal({
+          isOpen: true,
+          title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
+          message: generationWarning
+            ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
+            : isSkillsMode
+              ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
+              : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
+          details: [
+            `Question Set: ${savedQuestionSet}`,
+            `Total Questions: ${uniqueQuestions.size}`,
+            isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resume.name}`,
+            `Job Title: ${jobTitle}`,
+            generationWarning
+              ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
+              : 'Status: Ready for interview preparation',
+          ],
+        });
+
+      } catch (error) {
+        console.error('Error in complete workflow:', error);
+        const msg = error instanceof Error ? error.message : String(error || '');
+        setNoticeModal({
+          isOpen: true,
+          title: 'Upload failed',
+          message: mapEmptyUploadFileError(msg),
+          variant: 'error',
+          primaryLabel: 'OK',
+          secondaryLabel: undefined,
+          onSecondary: undefined,
+        });
+      } finally {
+        setLoading(false);
+        setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
+      }
+    };
+
+    await runWorkflow();
   };
 
   // Updated function to call backend API for question generation with new parameters
@@ -1650,7 +1790,7 @@ function UploadPage() {
                                 Generate Sample Answers
                               </label>
                               <p className="text-xs text-[var(--color-text-secondary)]">
-                                Also create easy, intermediate, and expert sample answers (slower, uses more tokens)
+                                Also create one sample answer for each question (uses more tokens)
                               </p>
                             </div>
                             <button
@@ -1731,10 +1871,22 @@ function UploadPage() {
       />
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        onClose={closeNoticeModal}
+        onPrimary={() => {
+          if (noticeModal.primaryLabel === 'Go to Dashboard') {
+            closeNoticeModal();
+            navigate('/dashboard');
+            return;
+          }
+          closeNoticeModal();
+        }}
         title={noticeModal.title}
         message={noticeModal.message}
         variant={noticeModal.variant}
+        primaryLabel={noticeModal.primaryLabel || 'OK'}
+        secondaryLabel={noticeModal.secondaryLabel}
+        onSecondary={noticeModal.onSecondary}
+        details={noticeModal.details}
       />
     </>
   );

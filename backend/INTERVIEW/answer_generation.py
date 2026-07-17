@@ -1,270 +1,427 @@
-"""Sample answer generation for interview questions."""
+"""Sample answer generation for interview questions (one best answer per question)."""
 from __future__ import annotations
 
-import csv
 import json
-import os
-import tempfile
+import re
 
 from INTERVIEW.generation_utils import (
-    read_questions_from_csv,
+    _parse_llm_json_object,
     resolve_ollama_model_name,
+    track_token_usage,
     try_ollama_chat,
 )
-from INTERVIEW.Resumeparser import (
-    build_structured_data_from_skills,
-    extract_text_from_resume,
-    parse_resume_structured,
-)
+
+# Bedrock Converse override is capped at 8192 in common/llm/bedrock.py
+ANSWER_BATCH_MAX_TOKENS = 8192
+ANSWER_BATCH_TEMPERATURE = 0.3
+ANSWER_BATCH_MAX_RETRIES = 3
+ANSWER_BATCH_CHUNK_SIZE = 8  # keep room for long / coding answers
+DOSSIER_ANSWER_MAX_CHARS = 9000
+MIN_ANSWER_CHARS = 80
 
 
-def _is_weak_generated_answer(answer_text):
-    text = (answer_text or "").strip().lower()
-    if len(text.split()) < 18:
-        return True
-    weak_phrases = [
-        "i don't know",
-        "not sure",
-        "cannot say",
-        "no experience",
-        "n/a",
-        "as an ai",
-        "placeholder",
-    ]
-    return any(phrase in text for phrase in weak_phrases)
-
-
-def _generate_follow_up_for_question(original_question, context_answer, model="llama3"):
-    prompt = f"""
-You are an expert interviewer. The model answer below is too weak or vague for training purposes.
-
-Original question: "{original_question}"
-Weak answer: "{context_answer}"
-
-Write ONE specific follow-up question the interviewer should ask if the candidate gives a weak answer.
-Return only the follow-up question text.
-"""
-    try:
-        response = try_ollama_chat(prompt.strip(), model=model)
-        follow_up = response["message"]["content"].strip().strip('"')
-        return follow_up or "Could you walk me through a concrete example with more technical detail?"
-    except Exception as exc:
-        print(f"[WARN] Follow-up generation failed: {exc}")
-        return "Could you elaborate with a specific example from your experience?"
-
-
-def generate_answers_for_existing_questions(structured_resume, job_title, job_description, questions_csv_path, output_path, model="llama3"):
-    if not os.path.exists(questions_csv_path):
-        raise FileNotFoundError(f"[ERROR] CSV not found: {questions_csv_path}")
-    resolved_model = resolve_ollama_model_name(model)
-    stats = {
-        "requested": True,
-        "model": resolved_model,
-        "generated_count": 0,
-        "fallback_count": 0,
-        "fallback_examples": [],
+def _compact_dossier_for_answers(dossier: dict | None) -> str:
+    """Serialize dossier for the answer prompt, trimmed if oversized."""
+    payload = dossier if isinstance(dossier, dict) else {}
+    compact = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    if len(compact) <= DOSSIER_ANSWER_MAX_CHARS:
+        return compact
+    slim = {
+        "job_title": payload.get("job_title"),
+        "hiring_company": payload.get("hiring_company"),
+        "seniority": payload.get("seniority"),
+        "domain": payload.get("domain"),
+        "must_have_skills": (payload.get("must_have_skills") or [])[:8],
+        "jd_highlights": (payload.get("jd_highlights") or [])[:8],
+        "overlap_skills": (payload.get("overlap_skills") or [])[:10],
+        "gap_skills": (payload.get("gap_skills") or [])[:8],
+        "transferable_bridges": (payload.get("transferable_bridges") or [])[:6],
+        "resume_anchors": (payload.get("resume_anchors") or [])[:8],
+        "experience": (payload.get("experience") or [])[:5],
+        "projects": (payload.get("projects") or [])[:5],
+        "resume_highlights": (payload.get("resume_highlights") or [])[:5],
     }
-
-    def fallback_answer(question, strength):
-        labels = {
-            "weak": "easy",
-            "medium": "intermediate",
-            "strong": "expert",
-        }
-        level = labels.get(strength, strength)
-        if strength == "weak":
-            return (
-                f"A good {level} answer should explain the core idea behind this question in simple terms, "
-                f"then connect it to one relevant example from the candidate's experience: {question}"
-            )
-        if strength == "medium":
-            return (
-                f"A good {level} answer should describe a practical approach, the main steps taken, "
-                f"the tools or concepts involved, and one measurable outcome related to: {question}"
-            )
-        return (
-            f"A good {level} answer should go deeper into tradeoffs, edge cases, design choices, "
-            f"risk handling, and how success would be measured for: {question}"
-        )
-
-    # FIX: Use the correct output path instead of overwriting the input file
-    with open(questions_csv_path, "r", encoding="utf-8") as infile, open(output_path, "w", newline='', encoding="utf-8") as outfile:
-        reader = csv.DictReader(infile)
-        writer = csv.writer(outfile)
-        writer.writerow(["question_id", "question", "level", "strength", "answer", "requires_code", "answer_source", "follow_up_question"])
-
-        for row in reader:
-            if row.get("strength"):  # Skip rows that already have answers
-                continue
-            print(f"[DEBUG] Generating answers for {row['question_id']} [{row['level']}]: {row['question'][:80]}...")        
-            
-            # Get requires_code from input row (default to False if not present)
-            requires_code = row.get('requires_code', 'false').lower() == 'true'
-            follow_up_question = ""
-            
-            for strength in ["weak", "medium", "strong"]:  # These map to beginner, intermediate, expert in read_questions_from_csv
-                prompt = f"""
-You are an expert interviewer.
-
-Write a {strength} answer to this interview question:
-
-Job Title: {job_title}
-Level: {row['level']}
-Question: "{row['question']}"
-
-Resume:
-{json.dumps(structured_resume, indent=2)}
-
-Job Description:
-{job_description}
-
-Only respond with the answer text, no formatting.
-"""
-                try:
-                    response = try_ollama_chat(prompt.strip(), model=resolved_model)
-                    answer = response["message"]["content"].strip().replace('"', "'")
-                    if not answer:
-                        raise ValueError("Empty answer generated")
-                    row_follow_up = ""
-                    if strength == "weak" and _is_weak_generated_answer(answer):
-                        row_follow_up = _generate_follow_up_for_question(row["question"], answer, model=model)
-                        if not follow_up_question:
-                            follow_up_question = row_follow_up
-                    writer.writerow([
-                        row["question_id"],
-                        row["question"],
-                        row["level"],
-                        strength,
-                        answer,
-                        "true" if requires_code else "false",
-                        "ai",
-                        row_follow_up,
-                    ])
-                    stats["generated_count"] += 1
-                    print(f"[DEBUG] ↳ {strength.capitalize()} answer generated.")
-                except Exception as e:
-                    print(f"[ERROR] Failed generating answer for {row['question_id']} [{strength}]: {e}")
-                    answer = fallback_answer(row["question"], strength)
-                    row_follow_up = ""
-                    if strength == "weak":
-                        row_follow_up = _generate_follow_up_for_question(row["question"], answer, model=model)
-                        if not follow_up_question:
-                            follow_up_question = row_follow_up
-                    writer.writerow([
-                        row["question_id"],
-                        row["question"],
-                        row["level"],
-                        strength,
-                        answer,
-                        "true" if requires_code else "false",
-                        "fallback",
-                        row_follow_up,
-                    ])
-                    stats["fallback_count"] += 1
-                    if len(stats["fallback_examples"]) < 10:
-                        stats["fallback_examples"].append({
-                            "question_id": row["question_id"],
-                            "strength": strength,
-                            "error": str(e),
-                        })
-                    print(f"[WARN] ↳ Wrote fallback {strength} answer for {row['question_id']}")
-
-    print(f"[DONE] Answers written to: {output_path}")
-    return stats
+    return json.dumps(slim, separators=(",", ":"), ensure_ascii=False)[:DOSSIER_ANSWER_MAX_CHARS]
 
 
-def run_generate_answers_for_question_set(
-    resume_path,
-    job_title,
-    job_description,
-    question_rows,
-    model="llama3",
-    skills_list=None,
-):
-    """
-    Generate sample answers (weak/medium/strong) for existing questions only.
-    question_rows: list of dicts from DB (question_text, difficulty_level, requires_code, ...).
-    """
-    resolved_model = resolve_ollama_model_name(model)
-    if skills_list:
-        structured_data = build_structured_data_from_skills(skills_list)
-        if not structured_data or not structured_data.get("skills"):
-            return {"success": False, "error": "skills_list is required for skills-based profiles"}
-    else:
-        if not resume_path or not os.path.exists(resume_path):
-            return {"success": False, "error": "Resume file not found for answer generation"}
-        resume_text = extract_text_from_resume(resume_path)
-        from common.document_validation import validate_resume_text
-        is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
-        if not is_valid_resume:
-            return {"success": False, "error": resume_validation_error}
-        structured_data = parse_resume_structured(resume_text)
+def _normalize_level(raw_level) -> str:
+    level = (raw_level or "medium").strip().lower()
+    if level in ("easy", "beginner", "basic"):
+        return "easy"
+    if level in ("hard", "expert", "advanced"):
+        return "hard"
+    # coding questions map to medium difficulty but keep requires_code
+    return "medium"
 
-    def _csv_level(raw_level):
-        level = (raw_level or "medium").strip().lower()
-        if level in ("easy", "beginner", "basic"):
-            return "beginner"
-        if level in ("hard", "expert", "advanced"):
-            return "hard"
-        return "medium"
 
+def _dedupe_question_rows(question_rows: list) -> list[dict]:
+    """One canonical row per (difficulty_level, question_text). Prefer earliest id."""
     seen = set()
-    csv_rows = []
-    qid = 1
+    unique = []
     for row in question_rows or []:
         q_text = (row.get("question_text") or row.get("question") or "").strip()
         if not q_text:
             continue
-        csv_level = _csv_level(row.get("difficulty_level") or row.get("difficulty_category"))
-        key = (csv_level, q_text.lower())
+        raw_level = str(row.get("difficulty_level") or row.get("difficulty_category") or "").strip().lower()
+        level = _normalize_level(raw_level)
+        key = (level, q_text.lower())
         if key in seen:
             continue
         seen.add(key)
         requires_code = row.get("requires_code", False)
         if isinstance(requires_code, str):
             requires_code = requires_code.lower() == "true"
-        csv_rows.append({
-            "question_id": f"q{qid}",
-            "question": q_text,
-            "level": csv_level,
-            "requires_code": requires_code,
+        if raw_level == "coding":
+            requires_code = True
+        unique.append({
+            "id": str(row.get("id") or ""),
+            "question_text": q_text,
+            "difficulty_level": level,
+            "requires_code": bool(requires_code),
+            "question_set": row.get("question_set"),
+            "resume_id": row.get("resume_id"),
+            "jd_id": row.get("jd_id"),
         })
-        qid += 1
+    return unique
 
-    if not csv_rows:
+
+def _chunk_questions(questions: list[dict]) -> list[list[dict]]:
+    """Split into chunks; put coding questions in smaller chunks for full solutions."""
+    if not questions:
+        return []
+    coding = [q for q in questions if q.get("requires_code")]
+    other = [q for q in questions if not q.get("requires_code")]
+    chunks: list[list[dict]] = []
+
+    coding_chunk_size = max(3, ANSWER_BATCH_CHUNK_SIZE // 2)
+    for i in range(0, len(coding), coding_chunk_size):
+        chunks.append(coding[i : i + coding_chunk_size])
+    for i in range(0, len(other), ANSWER_BATCH_CHUNK_SIZE):
+        chunks.append(other[i : i + ANSWER_BATCH_CHUNK_SIZE])
+    return chunks
+
+
+def _build_answer_batch_prompt(
+    dossier: dict,
+    questions: list[dict],
+    job_title: str = "",
+    missing_ids: list[str] | None = None,
+) -> str:
+    title = (job_title or (dossier or {}).get("job_title") or "the role").strip()
+    dossier_blob = _compact_dossier_for_answers(dossier)
+    q_lines = []
+    for q in questions:
+        qid = q["id"]
+        level = q.get("difficulty_level") or "medium"
+        code_flag = " requires_code=true" if q.get("requires_code") else ""
+        text = q["question_text"]
+        q_lines.append(f'- id="{qid}" level={level}{code_flag}: {text}')
+    questions_block = "\n".join(q_lines)
+
+    repair = ""
+    if missing_ids:
+        repair = (
+            "\n\nIMPORTANT: Previous response missed these question ids: "
+            + ", ".join(missing_ids)
+            + ". Return a COMPLETE JSON object with every id listed above — "
+            "especially the missing ones. Do not omit any."
+        )
+
+    return f"""You are an expert interview coach writing ONE strong sample answer per question for a candidate preparing for **{title}**.
+
+CANDIDATE + ROLE DOSSIER (use this as ground truth; do not invent employers/projects/skills not present):
+{dossier_blob}
+
+QUESTIONS:
+{questions_block}
+
+Rules:
+- Return ONLY one JSON object. Keys must be the question id strings. Values are answer strings.
+- Exactly one best sample answer per question (not easy/intermediate/expert variants).
+- Answers must be FULL interview-prep quality — not brief blurbs. Cover approach, reasoning, tools/tech, and a concrete example from the dossier when relevant.
+- For requires_code=true questions: include a COMPLETE working solution (full code), plus a short explanation of approach and complexity. Do not truncate mid-function.
+- You may put code inside the answer string using markdown fences (```language ... ```).
+- Match depth to level: easy = clear and complete; medium = practical depth; hard = tradeoffs and judgment.
+- Ground answers in the dossier (anchors, highlights, bridges) when relevant. Do not invent employers/projects.
+- Every question id in the list MUST appear as a key. No missing keys.
+- No commentary outside the JSON object.
+
+Example shape:
+{{"uuid-1": "Full sample answer with enough detail for interview prep...", "uuid-2": "..."}}
+{repair}
+"""
+
+
+def _extract_answers_map(raw: str, question_ids: list[str]) -> dict[str, str]:
+    """Parse LLM JSON into id -> answer. Accepts answers array fallback."""
+    parsed = _parse_llm_json_object(raw)
+    out: dict[str, str] = {}
+
+    if isinstance(parsed, dict):
+        for qid in question_ids:
+            val = parsed.get(qid)
+            if isinstance(val, str) and val.strip():
+                out[qid] = val.strip()
+            elif isinstance(val, dict):
+                ans = val.get("answer") or val.get("expected_answer") or val.get("sample_answer")
+                if isinstance(ans, str) and ans.strip():
+                    out[qid] = ans.strip()
+
+        if not out and isinstance(parsed.get("answers"), dict):
+            for qid in question_ids:
+                val = parsed["answers"].get(qid)
+                if isinstance(val, str) and val.strip():
+                    out[qid] = val.strip()
+        if not out and isinstance(parsed.get("answers"), list):
+            for item in parsed["answers"]:
+                if not isinstance(item, dict):
+                    continue
+                qid = str(item.get("id") or item.get("question_id") or "")
+                ans = item.get("answer") or item.get("expected_answer") or item.get("sample_answer")
+                if qid in question_ids and isinstance(ans, str) and ans.strip():
+                    out[qid] = ans.strip()
+
+    if out:
+        return out
+
+    for qid in question_ids:
+        pattern = rf'"{re.escape(qid)}"\s*:\s*"((?:\\.|[^"\\])*)"'
+        m = re.search(pattern, raw or "", flags=re.DOTALL)
+        if m:
+            try:
+                out[qid] = json.loads(f'"{m.group(1)}"').strip()
+            except Exception:
+                out[qid] = m.group(1).replace('\\"', '"').strip()
+    return out
+
+
+def _is_usable_answer(answer: str, requires_code: bool = False) -> bool:
+    text = (answer or "").strip()
+    if len(text) < MIN_ANSWER_CHARS:
+        return False
+    if requires_code:
+        # Prefer real code blocks; still accept long plain-code answers
+        has_fence = "```" in text
+        has_codey = any(
+            token in text
+            for token in ("def ", "function ", "class ", "SELECT ", "const ", "import ", "public ")
+        )
+        if not has_fence and not has_codey:
+            return False
+        if has_fence and text.count("```") < 2:
+            return False  # truncated fence
+    return True
+
+
+def _call_chunk_until_complete(
+    dossier: dict,
+    chunk: list[dict],
+    model: str,
+    job_title: str,
+    dossier_cache: str,
+    chunk_index: int,
+    chunk_total: int,
+) -> tuple[dict[str, str], str | None]:
+    """LLM call(s) for one chunk until all ids have usable answers, or retries exhausted."""
+    question_ids = [q["id"] for q in chunk]
+    by_id = {q["id"]: q for q in chunk}
+    answers_map: dict[str, str] = {}
+    last_error = None
+    missing = list(question_ids)
+
+    for attempt in range(ANSWER_BATCH_MAX_RETRIES):
+        prompt = _build_answer_batch_prompt(
+            dossier,
+            chunk if attempt == 0 else [by_id[i] for i in missing],
+            job_title=job_title,
+            missing_ids=missing if attempt > 0 else None,
+        )
+        target_ids = missing if attempt > 0 else question_ids
+        try:
+            print(
+                f"[INFO] Answer batch LLM chunk {chunk_index}/{chunk_total} "
+                f"attempt {attempt + 1}/{ANSWER_BATCH_MAX_RETRIES} "
+                f"questions={len(target_ids)} max_tokens={ANSWER_BATCH_MAX_TOKENS} "
+                f"dossier_cache={dossier_cache}"
+            )
+            response = try_ollama_chat(
+                prompt.strip(),
+                model=model,
+                max_tokens=ANSWER_BATCH_MAX_TOKENS,
+                temperature=ANSWER_BATCH_TEMPERATURE,
+            )
+            raw = (response.get("message") or {}).get("content") or ""
+            parsed = _extract_answers_map(raw, target_ids)
+            for qid, ans in parsed.items():
+                if _is_usable_answer(ans, requires_code=bool(by_id.get(qid, {}).get("requires_code"))):
+                    answers_map[qid] = ans
+            missing = [qid for qid in question_ids if qid not in answers_map]
+            print(
+                f"[INFO] Answer batch chunk {chunk_index}/{chunk_total} "
+                f"answers={len(answers_map)}/{len(question_ids)} missing={len(missing)}"
+            )
+            if not missing:
+                return answers_map, None
+            last_error = "incomplete_or_weak_answers"
+        except Exception as exc:
+            last_error = str(exc)
+            print(
+                f"[WARN] Answer batch chunk {chunk_index}/{chunk_total} "
+                f"attempt {attempt + 1} failed: {exc}"
+            )
+
+    return answers_map, last_error or "incomplete_answers"
+
+
+def generate_sample_answers_batch(
+    dossier: dict,
+    question_rows: list,
+    model: str = "llama3",
+    job_title: str = "",
+    dossier_cache: str = "hit",
+):
+    """
+    Generate one best sample answer per unique question via chunked LLM calls.
+    No template fallbacks — returns error if any answer is missing after retries.
+    """
+    resolved_model = resolve_ollama_model_name(model)
+    unique = _dedupe_question_rows(question_rows)
+    if not unique:
         return {"success": False, "error": "No questions found to generate answers for"}
+    if not isinstance(dossier, dict) or not dossier:
+        return {
+            "success": False,
+            "error": "Interview dossier not found for this resume and job description",
+        }
 
-    temp_dir = tempfile.mkdtemp(prefix="answer_gen_")
-    questions_path = os.path.join(temp_dir, "questions.csv")
-    qa_path = os.path.join(temp_dir, "interview_output.csv")
+    for i, q in enumerate(unique):
+        if not q.get("id"):
+            q["id"] = f"q{i + 1}"
 
-    with open(questions_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["question_id", "question", "level", "strength", "answer", "requires_code"])
-        for r in csv_rows:
-            writer.writerow([
-                r["question_id"],
-                r["question"],
-                r["level"],
-                "",
-                "",
-                "true" if r["requires_code"] else "false",
-            ])
+    chunks = _chunk_questions(unique)
+    answers_map: dict[str, str] = {}
+    last_error = None
 
-    answer_generation = generate_answers_for_existing_questions(
-        structured_data,
-        job_title,
-        job_description,
-        questions_path,
-        qa_path,
-        model=resolved_model,
+    print(
+        f"[INFO] Answer generation start: questions={len(unique)} chunks={len(chunks)} "
+        f"max_tokens={ANSWER_BATCH_MAX_TOKENS} chunk_size={ANSWER_BATCH_CHUNK_SIZE} "
+        f"dossier_cache={dossier_cache}"
     )
-    questions = read_questions_from_csv(qa_path)
+
+    with track_token_usage(label="answer_generation") as token_tracker:
+        for idx, chunk in enumerate(chunks, start=1):
+            chunk_answers, err = _call_chunk_until_complete(
+                dossier=dossier,
+                chunk=chunk,
+                model=resolved_model,
+                job_title=job_title,
+                dossier_cache=dossier_cache,
+                chunk_index=idx,
+                chunk_total=len(chunks),
+            )
+            answers_map.update(chunk_answers)
+            if err:
+                last_error = err
+        token_usage = token_tracker.as_dict()
+        token_tracker.log(
+            extra=(
+                f"dossier_cache={dossier_cache} questions={len(unique)} "
+                f"chunks={len(chunks)}"
+            )
+        )
+
+    missing = []
+    for q in unique:
+        qid = q["id"]
+        ans = (answers_map.get(qid) or "").strip()
+        if not _is_usable_answer(ans, requires_code=bool(q.get("requires_code"))):
+            missing.append(qid)
+
+    if missing:
+        print(
+            f"[ERROR] Answer generation incomplete: missing={len(missing)}/{len(unique)} "
+            f"ids={missing[:5]}{'...' if len(missing) > 5 else ''}"
+        )
+        return {
+            "success": False,
+            "error": (
+                f"LLM did not return complete sample answers for {len(missing)} question(s). "
+                "Please try again."
+            ),
+            "answer_generation": {
+                "requested": True,
+                "model": resolved_model,
+                "generated_count": len(unique) - len(missing),
+                "fallback_count": 0,
+                "missing_ids": missing,
+                "llm_calls": token_usage.get("llm_calls", 0),
+                "input_tokens": token_usage.get("input_tokens", 0),
+                "output_tokens": token_usage.get("output_tokens", 0),
+                "total_tokens": token_usage.get("total_tokens", 0),
+                "dossier_cache": dossier_cache,
+                "batch": True,
+                "chunks": len(chunks),
+                "last_error": last_error,
+            },
+            "ollama_model": resolved_model,
+        }
+
+    enriched = []
+    for q in unique:
+        answer = answers_map[q["id"]]
+        enriched.append({
+            **q,
+            "expected_answer": answer,
+            "answer": answer,
+            "answer_source": "ai",
+            "difficulty_category": q.get("difficulty_level"),
+        })
+
+    stats = {
+        "requested": True,
+        "model": resolved_model,
+        "generated_count": len(enriched),
+        "fallback_count": 0,
+        "fallback_examples": [],
+        "llm_calls": token_usage.get("llm_calls", 0),
+        "input_tokens": token_usage.get("input_tokens", 0),
+        "output_tokens": token_usage.get("output_tokens", 0),
+        "total_tokens": token_usage.get("total_tokens", 0),
+        "dossier_cache": dossier_cache,
+        "batch": True,
+        "chunks": len(chunks),
+        "answers_per_question": 1,
+    }
+
+    print(
+        f"[DONE] Sample answers ready: ai={len(enriched)} fallback=0 "
+        f"total={len(enriched)} chunks={len(chunks)} dossier_cache={dossier_cache}"
+    )
     return {
         "success": True,
-        "questions": questions,
-        "questions_count": len(questions),
-        "answer_generation": answer_generation,
+        "questions": enriched,
+        "questions_count": len(enriched),
+        "answer_generation": stats,
         "ollama_model": resolved_model,
     }
 
+
+def run_generate_answers_for_question_set(
+    dossier,
+    question_rows,
+    model="llama3",
+    job_title="",
+    dossier_cache="hit",
+    **_unused,
+):
+    """
+    Generate one sample answer per question using the interview dossier.
+    Chunked LLM calls; no template fallbacks.
+    """
+    return generate_sample_answers_batch(
+        dossier=dossier,
+        question_rows=question_rows,
+        model=model,
+        job_title=job_title,
+        dossier_cache=dossier_cache,
+    )

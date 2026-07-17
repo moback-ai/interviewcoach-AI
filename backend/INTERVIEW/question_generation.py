@@ -1,6 +1,7 @@
 """Interview dossier + question generation (core/split/blend/hybrid/coding) + API pipeline."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -24,18 +25,23 @@ from INTERVIEW.Resumeparser import (
     build_structured_data_from_skills,
     extract_text_from_resume,
 )
-from INTERVIEW.dossier_store import load_dossier, save_dossier
+from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION, load_dossier, save_dossier
 
 
 QUESTION_GEN_MAX_RETRIES = 3
 DOSSIER_LLM_MAX_RETRIES = 8
 DOSSIER_LLM_MAX_TOKENS = 3072
 DOSSIER_LLM_TEMPERATURE = 0.2
-DOSSIER_TARGET_MAX_CHARS = 4500
-JD_PREP_EXCERPT_MAX = 3000
-RESUME_PREP_DESC_MAX = 160
+DOSSIER_TARGET_MAX_CHARS = 9000
+JD_PREP_EXCERPT_MAX = 5000
+HIGHLIGHTS_MAX = 4
+JD_HIGHLIGHTS_MAX = 8
+HIGHLIGHT_ITEM_MAX = 140
 RESUME_TEXT_DOSSIER_MAX = 10000
 QUESTION_REPAIR_MAX_PASSES = 1
+QUESTION_BATCH_MAX_TOKENS = 3072
+QUESTION_BATCH_TEMPERATURE = 0.3
+QUESTION_BATCH_MAX_REFILL_ROUNDS = 8
 
 
 def _candidate_name_from_text(resume_text: str) -> str:
@@ -69,6 +75,94 @@ def _shorten_text(text, max_chars):
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 3].rstrip() + "..."
+
+
+def _coerce_highlights(*sources, limit=HIGHLIGHTS_MAX, item_max=HIGHLIGHT_ITEM_MAX):
+    """
+    Normalize bullet highlights from lists/strings.
+    Never stringifies a list (avoids \"['Interacted...\" garbage).
+    Accepts legacy description / summary / jd_excerpt as sources.
+    """
+    raw_items = []
+
+    def _extend_from_string(text: str):
+        text = (text or "").strip()
+        if not text:
+            return
+        if text.startswith("[") and text.endswith("]"):
+            parsed = None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                try:
+                    parsed = ast.literal_eval(text)
+                except Exception:
+                    parsed = None
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, str) and item.strip():
+                        raw_items.append(item.strip())
+                    elif item is not None:
+                        s = str(item).strip()
+                        if s:
+                            raw_items.append(s)
+                return
+        parts = [p.strip(" -•\t") for p in re.split(r"[\n;]+", text) if p.strip(" -•\t")]
+        if len(parts) > 1:
+            raw_items.extend(parts)
+        else:
+            raw_items.append(text)
+
+    for source in sources:
+        if source is None or source == "":
+            continue
+        if isinstance(source, list):
+            for item in source:
+                if isinstance(item, str) and item.strip():
+                    raw_items.append(item.strip())
+                elif isinstance(item, dict):
+                    for key in ("text", "highlight", "description", "summary", "action"):
+                        val = item.get(key)
+                        if isinstance(val, str) and val.strip():
+                            raw_items.append(val.strip())
+                            break
+                elif item is not None:
+                    s = str(item).strip()
+                    if s and not (s.startswith("[") and "'," in s):
+                        raw_items.append(s)
+        elif isinstance(source, str):
+            _extend_from_string(source)
+
+    seen = set()
+    out = []
+    for item in raw_items:
+        shortened = _shorten_text(item, item_max)
+        key = _normalize_skill_token(shortened)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(shortened)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _entry_highlights_artifact(entry: dict) -> str:
+    """First 1–2 highlights (or legacy description) for anchor examples."""
+    if not isinstance(entry, dict):
+        return ""
+    highlights = entry.get("highlights")
+    if isinstance(highlights, list):
+        parts = [h.strip() for h in highlights[:2] if isinstance(h, str) and h.strip()]
+        if parts:
+            return "; ".join(parts)
+    legacy = entry.get("description") or entry.get("summary") or ""
+    if isinstance(legacy, list):
+        parts = [str(h).strip() for h in legacy[:2] if str(h).strip()]
+        return "; ".join(parts)
+    if isinstance(legacy, str):
+        return legacy.strip()
+    return ""
 
 
 def _normalize_skill_token(token):
@@ -136,12 +230,18 @@ def _build_resume_prep_slice(structured_resume):
     for exp in (structured_resume.get("work_experience") or [])[:5]:
         if not isinstance(exp, dict):
             continue
+        highlights = _coerce_highlights(
+            exp.get("highlights"),
+            exp.get("description"),
+            exp.get("summary"),
+            limit=HIGHLIGHTS_MAX,
+        )
         item = {
             "title": _shorten_text(exp.get("title") or "", 60),
             "company": _shorten_text(exp.get("company") or "", 40),
-            "description": _shorten_text(exp.get("description") or "", RESUME_PREP_DESC_MAX),
+            "highlights": highlights,
         }
-        if item["title"] or item["company"] or item["description"]:
+        if item["title"] or item["company"] or item["highlights"]:
             experiences.append(item)
 
     projects = []
@@ -153,13 +253,19 @@ def _build_resume_prep_slice(structured_resume):
             tools = [t.strip() for t in tools.split(",") if t.strip()]
         elif not isinstance(tools, list):
             tools = []
+        highlights = _coerce_highlights(
+            proj.get("highlights"),
+            proj.get("description"),
+            proj.get("summary"),
+            limit=HIGHLIGHTS_MAX,
+        )
         item = {
             "name": _shorten_text(proj.get("name") or "", 50),
             "role": _shorten_text(proj.get("role") or "", 40),
             "tools": [str(t) for t in tools[:6] if t],
-            "description": _shorten_text(proj.get("description") or "", RESUME_PREP_DESC_MAX),
+            "highlights": highlights,
         }
-        if item["name"] or item["description"]:
+        if item["name"] or item["highlights"]:
             projects.append(item)
 
     return {
@@ -171,9 +277,11 @@ def _build_resume_prep_slice(structured_resume):
     }
 
 
-def _empty_dossier(job_title, prep_slice=None, jd_excerpt="", reason="llm_failed"):
+def _empty_dossier(job_title, prep_slice=None, reason="llm_failed"):
     """Hard-failure shell only — no invented JD metrics or fake quality fields."""
     prep_slice = prep_slice or {}
+    experience = _coerce_experience_list(prep_slice.get("experience"), limit=5)
+    projects = _coerce_project_list(prep_slice.get("projects"), limit=5)
     return {
         "job_title": job_title or "",
         "hiring_company": "",
@@ -185,14 +293,15 @@ def _empty_dossier(job_title, prep_slice=None, jd_excerpt="", reason="llm_failed
         "tools": [],
         "resume_skills": list(prep_slice.get("skills") or [])[:20],
         "companies": [],
-        "experience": list(prep_slice.get("experience") or [])[:5],
-        "projects": list(prep_slice.get("projects") or [])[:5],
+        "experience": experience,
+        "projects": projects,
         "resume_highlights": [],
         "overlap_skills": [],
         "gap_skills": [],
         "transferable_bridges": [],
         "resume_anchors": [],
-        "jd_excerpt": _shorten_text(jd_excerpt or "", 600),
+        "jd_highlights": [],
+        "schema_version": DOSSIER_SCHEMA_VERSION,
         "source": reason,
     }
 
@@ -208,7 +317,16 @@ def _coerce_str_list(value, limit=12, item_max=140):
             # allow highlight objects -> compact string
             parts = [
                 str(item.get(k)).strip()
-                for k in ("company", "title", "name", "role", "project", "description", "bridge")
+                for k in (
+                    "company",
+                    "title",
+                    "name",
+                    "role",
+                    "project",
+                    "description",
+                    "highlight",
+                    "bridge",
+                )
                 if item.get(k)
             ]
             if parts:
@@ -229,7 +347,7 @@ def _coerce_experience_list(value, limit=5):
                 "title": "",
                 "dates": "",
                 "tech": [],
-                "description": _shorten_text(item.strip(), RESUME_PREP_DESC_MAX),
+                "highlights": _coerce_highlights(item, limit=HIGHLIGHTS_MAX),
             })
         elif isinstance(item, dict):
             tech = item.get("tech") or item.get("tools") or []
@@ -237,17 +355,20 @@ def _coerce_experience_list(value, limit=5):
                 tech = [t.strip() for t in tech.split(",") if t.strip()]
             elif not isinstance(tech, list):
                 tech = []
+            highlights = _coerce_highlights(
+                item.get("highlights"),
+                item.get("description"),
+                item.get("summary"),
+                limit=HIGHLIGHTS_MAX,
+            )
             exp = {
                 "company": _shorten_text(str(item.get("company") or ""), 50),
                 "title": _shorten_text(str(item.get("title") or item.get("role") or ""), 60),
                 "dates": _shorten_text(str(item.get("dates") or item.get("duration") or ""), 40),
                 "tech": _coerce_str_list(tech, limit=8, item_max=40),
-                "description": _shorten_text(
-                    str(item.get("description") or item.get("summary") or ""),
-                    RESUME_PREP_DESC_MAX,
-                ),
+                "highlights": highlights,
             }
-            if exp["company"] or exp["title"] or exp["description"]:
+            if exp["company"] or exp["title"] or exp["highlights"]:
                 out.append(exp)
         if len(out) >= limit:
             break
@@ -264,7 +385,7 @@ def _coerce_project_list(value, limit=5):
                 "name": _shorten_text(item.strip(), 60),
                 "role": "",
                 "tech": [],
-                "description": "",
+                "highlights": [],
             })
         elif isinstance(item, dict):
             tech = item.get("tech") or item.get("tools") or []
@@ -272,16 +393,19 @@ def _coerce_project_list(value, limit=5):
                 tech = [t.strip() for t in tech.split(",") if t.strip()]
             elif not isinstance(tech, list):
                 tech = []
+            highlights = _coerce_highlights(
+                item.get("highlights"),
+                item.get("description"),
+                item.get("summary"),
+                limit=HIGHLIGHTS_MAX,
+            )
             proj = {
                 "name": _shorten_text(str(item.get("name") or item.get("project") or ""), 60),
                 "role": _shorten_text(str(item.get("role") or ""), 40),
                 "tech": _coerce_str_list(tech, limit=8, item_max=40),
-                "description": _shorten_text(
-                    str(item.get("description") or item.get("summary") or ""),
-                    RESUME_PREP_DESC_MAX,
-                ),
+                "highlights": highlights,
             }
-            if proj["name"] or proj["description"]:
+            if proj["name"] or proj["highlights"]:
                 out.append(proj)
         if len(out) >= limit:
             break
@@ -346,6 +470,7 @@ def _log_dossier_field_counts(dossier: dict, prefix: str = "[INFO]") -> None:
         f"overlap={len(d.get('overlap_skills') or [])} "
         f"gaps={len(d.get('gap_skills') or [])} "
         f"bridges={len(d.get('transferable_bridges') or [])} "
+        f"jd_highlights={len(d.get('jd_highlights') or [])} "
         f"hiring_company={d.get('hiring_company') or '-'} "
         f"source={d.get('source') or '-'}"
     )
@@ -357,17 +482,29 @@ def _shrink_dossier_to_target(dossier):
         return dossier, compact
     for e in dossier.get("experience") or []:
         if isinstance(e, dict):
-            e["description"] = _shorten_text(e.get("description") or "", 80)
+            e["highlights"] = _coerce_highlights(
+                e.get("highlights"), e.get("description"), limit=2, item_max=100
+            )
+            e.pop("description", None)
             e["tech"] = (e.get("tech") or [])[:4]
     for p in dossier.get("projects") or []:
         if isinstance(p, dict):
-            p["description"] = _shorten_text(p.get("description") or "", 80)
+            p["highlights"] = _coerce_highlights(
+                p.get("highlights"), p.get("description"), limit=2, item_max=100
+            )
+            p.pop("description", None)
             p["tech"] = (p.get("tech") or [])[:4]
     for a in dossier.get("resume_anchors") or []:
         if isinstance(a, dict):
             a["actions"] = (a.get("actions") or [])[:2]
             a["tech"] = (a.get("tech") or [])[:4]
-    dossier["jd_excerpt"] = _shorten_text(dossier.get("jd_excerpt") or "", 300)
+    dossier["jd_highlights"] = _coerce_highlights(
+        dossier.get("jd_highlights"),
+        dossier.get("jd_excerpt"),
+        limit=5,
+        item_max=100,
+    )
+    dossier.pop("jd_excerpt", None)
     dossier["resume_skills"] = (dossier.get("resume_skills") or [])[:12]
     dossier["resume_highlights"] = (dossier.get("resume_highlights") or [])[:5]
     dossier["responsibilities"] = (dossier.get("responsibilities") or [])[:5]
@@ -384,6 +521,7 @@ def _dossier_json_contract_block():
   "must_have_skills": ["..."],
   "nice_to_have_skills": ["..."],
   "responsibilities": ["..."],
+  "jd_highlights": ["4-8 JD must-haves / core duties / key tools only"],
   "seniority": "junior|mid|senior|lead|principal|",
   "domain": "short domain label or empty",
   "tools": ["..."],
@@ -394,7 +532,7 @@ def _dossier_json_contract_block():
       "title": "...",
       "dates": "optional",
       "tech": ["tools used there"],
-      "description": "1-2 concrete bullets of what they did"
+      "highlights": ["2-4 interview-useful bullets: action + what + tech/system when present"]
     }}
   ],
   "projects": [
@@ -402,11 +540,11 @@ def _dossier_json_contract_block():
       "name": "...",
       "role": "optional",
       "tech": ["..."],
-      "description": "what they built / owned"
+      "highlights": ["2-4 interview-useful bullets of what they built / owned"]
     }}
   ],
   "resume_skills": ["skills explicitly present in the resume"],
-  "resume_highlights": ["short highlight rooted in the resume"],
+  "resume_highlights": ["1-5 standout resume facts useful for probing questions"],
   "overlap_skills": ["skills present in BOTH resume and JD — prefer real tech, not soft skills"],
   "gap_skills": ["JD must-haves missing from the resume"],
   "transferable_bridges": [
@@ -417,7 +555,7 @@ def _dossier_json_contract_block():
       "company": "...",
       "project": "...",
       "tech": ["..."],
-      "actions": ["what they did"]
+      "actions": ["specific artifact or ownership worth asking about"]
     }}
   ]
 }}
@@ -427,20 +565,39 @@ Rules:
 - ALWAYS fill companies, experience, and projects when the resume mentions them (even briefly).
 - Prefer precise skill/tool names over vague soft skills (do not let Agile dominate overlap_skills).
 - Keep lists short: max 5 companies, 5 experience, 5 projects, 8 must_have_skills, 5 nice_to_have,
-  6 responsibilities, 6 tools, 5 resume_highlights, 10 overlap_skills, 8 gap_skills,
+  6 responsibilities, 8 jd_highlights, 6 tools, 5 resume_highlights, 10 overlap_skills, 8 gap_skills,
   6 transferable_bridges, 10 resume_anchors, 20 resume_skills.
+- SELECT highlights — do not dump every resume line. Prefer fewer strong bullets over padded ones.
+  Aim for 2-4 per experience/project; use 1-2 if that is all that is concrete; omit fluff rather than fill.
+- Each experience/project highlight MUST be interview-useful: concrete action + object/system + tech when present
+  (e.g. "Built TPM/Retail Execution on Salesforce Lightning with Apex batch jobs").
+- REJECT generic process fluff in highlights, resume_highlights, and resume_anchors.actions, including:
+  delivered on time, followed Agile, worked with BA/PO, documentation only, trained users,
+  "developed the provided requirements", "took care of deployments" with no system/tool detail.
+- For jd_highlights: select only differentiating must-haves, core duties, and key tools/seniority context.
+  Do NOT restate the entire JD or soft-collaboration filler. Prefer 4-8 strong points.
+- For resume_anchors: only specific companies/projects/artifacts the interviewer can cite; actions must be concrete.
+- For transferable_bridges: only real resume capability -> JD expectation links (tech/system), not soft skills.
 - Output a single raw JSON object only. No markdown fences. No ```json. No commentary.
-- Keep descriptions short (1 sentence). Keep total JSON under ~{DOSSIER_TARGET_MAX_CHARS} characters.
+- Keep total JSON under ~{DOSSIER_TARGET_MAX_CHARS} characters.
 """
 
 
-def _normalize_parsed_dossier(parsed, job_title, jd_excerpt, resume_skills_fallback=None, source="llm"):
+def _normalize_parsed_dossier(parsed, job_title, resume_skills_fallback=None, source="llm"):
     """Normalize LLM JSON into the canonical dossier shape."""
     resume_skills_fallback = resume_skills_fallback or []
     llm_resume_skills = _coerce_str_list(parsed.get("resume_skills"), limit=20, item_max=40)
     companies = _coerce_str_list(parsed.get("companies"), limit=5, item_max=50)
     experience = _coerce_experience_list(parsed.get("experience"), limit=5)
     projects = _coerce_project_list(parsed.get("projects"), limit=5)
+    responsibilities = _coerce_str_list(parsed.get("responsibilities"), limit=6, item_max=140)
+    jd_highlights = _coerce_highlights(
+        parsed.get("jd_highlights"),
+        parsed.get("jd_excerpt"),
+        limit=JD_HIGHLIGHTS_MAX,
+    )
+    if not jd_highlights and responsibilities:
+        jd_highlights = list(responsibilities)[:JD_HIGHLIGHTS_MAX]
 
     # Backfill companies from experience if LLM omitted the list
     if not companies and experience:
@@ -456,7 +613,7 @@ def _normalize_parsed_dossier(parsed, job_title, jd_excerpt, resume_skills_fallb
         "domain": _shorten_text(str(parsed.get("domain") or ""), 40),
         "must_have_skills": _coerce_str_list(parsed.get("must_have_skills"), limit=8, item_max=40),
         "nice_to_have_skills": _coerce_str_list(parsed.get("nice_to_have_skills"), limit=5, item_max=40),
-        "responsibilities": _coerce_str_list(parsed.get("responsibilities"), limit=6, item_max=140),
+        "responsibilities": responsibilities,
         "tools": _coerce_str_list(parsed.get("tools"), limit=6, item_max=40),
         "resume_skills": llm_resume_skills or list(resume_skills_fallback)[:20],
         "companies": companies,
@@ -469,7 +626,8 @@ def _normalize_parsed_dossier(parsed, job_title, jd_excerpt, resume_skills_fallb
             parsed.get("transferable_bridges"), limit=6, item_max=140
         ),
         "resume_anchors": _coerce_resume_anchors(parsed.get("resume_anchors"), limit=10),
-        "jd_excerpt": _shorten_text(jd_excerpt, 600),
+        "jd_highlights": jd_highlights,
+        "schema_version": DOSSIER_SCHEMA_VERSION,
         "source": source,
     }
     return dossier
@@ -542,7 +700,7 @@ def build_interview_dossier(structured_resume, job_title, job_description, model
     job_title = (job_title or "").strip()
     job_description = job_description or ""
     prep_slice = _build_resume_prep_slice(structured_resume)
-    jd_excerpt = _shorten_text(job_description, JD_PREP_EXCERPT_MAX)
+    jd_prep_text = _shorten_text(job_description, JD_PREP_EXCERPT_MAX)
     prep_blob = json.dumps(prep_slice, separators=(",", ":"))
 
     prompt = f"""You are building a rich interview dossier for question generation.
@@ -552,8 +710,10 @@ Job title: {job_title}
 RESUME PREP SLICE (already parsed; do NOT invent employers, projects, or skills not listed):
 {prep_blob}
 
-JOB DESCRIPTION (truncated):
-\"\"\"{jd_excerpt}\"\"\"
+JOB DESCRIPTION (truncated for input only; extract only the most important jd_highlights):
+\"\"\"{jd_prep_text}\"\"\"
+
+Select interview-useful highlights and anchors only — polish and keep what matters; do not dump every line.
 
 {_dossier_json_contract_block()}
 """
@@ -561,7 +721,7 @@ JOB DESCRIPTION (truncated):
     repair_suffix = (
         "\n\nIMPORTANT: Previous output was too thin (missing companies/experience/projects/"
         "resume_anchors). Re-read the resume slice and FILL those fields from what is present. "
-        "JSON only."
+        "Keep highlights concrete and selective (no process fluff). JSON only."
     )
 
     parsed, last_error, attempts = _call_dossier_llm(prompt, model, label="structured")
@@ -570,15 +730,18 @@ JOB DESCRIPTION (truncated):
         dossier = _normalize_parsed_dossier(
             parsed,
             job_title,
-            jd_excerpt,
             resume_skills_fallback=prep_slice.get("skills") or [],
             source="llm",
         )
         # Prefer prep-slice experience/projects if LLM left them empty but slice has them
         if not dossier.get("experience") and prep_slice.get("experience"):
-            dossier["experience"] = list(prep_slice.get("experience") or [])[:5]
+            dossier["experience"] = _coerce_experience_list(
+                prep_slice.get("experience"), limit=5
+            )
         if not dossier.get("projects") and prep_slice.get("projects"):
-            dossier["projects"] = list(prep_slice.get("projects") or [])[:5]
+            dossier["projects"] = _coerce_project_list(
+                prep_slice.get("projects"), limit=5
+            )
         if not dossier.get("companies") and dossier.get("experience"):
             dossier["companies"] = _dedupe_str_list(
                 [e.get("company") for e in dossier["experience"] if e.get("company")],
@@ -599,7 +762,6 @@ JOB DESCRIPTION (truncated):
                 dossier = _normalize_parsed_dossier(
                     parsed2,
                     job_title,
-                    jd_excerpt,
                     resume_skills_fallback=prep_slice.get("skills") or [],
                     source="llm",
                 )
@@ -611,7 +773,7 @@ JOB DESCRIPTION (truncated):
             f"[ERROR] Dossier LLM FAILED (structured) reason={last_error} "
             f"attempts={attempts}. Returning empty-ish dossier; no heuristic invent."
         )
-        dossier = _empty_dossier(job_title, prep_slice, jd_excerpt, reason="llm_failed")
+        dossier = _empty_dossier(job_title, prep_slice, reason="llm_failed")
         compact = json.dumps(dossier, separators=(",", ":"))
         _log_dossier_field_counts(dossier, prefix="[ERROR]")
         print(f"[ERROR] Interview dossier ready: {len(compact)} chars (source=llm_failed)")
@@ -640,7 +802,7 @@ def build_interview_dossier_from_text(
     """
     job_title = (job_title or "").strip()
     job_description = job_description or ""
-    jd_excerpt = _shorten_text(job_description, JD_PREP_EXCERPT_MAX)
+    jd_prep_text = _shorten_text(job_description, JD_PREP_EXCERPT_MAX)
 
     if skills_list:
         skill_parts = [str(s).strip() for s in skills_list if str(s).strip()]
@@ -659,11 +821,12 @@ Job title: {job_title}
 RESUME / CANDIDATE TEXT (raw extract; do NOT invent employers, projects, or skills not present):
 \"\"\"{resume_blob}\"\"\"
 
-JOB DESCRIPTION (truncated):
-\"\"\"{jd_excerpt}\"\"\"
+JOB DESCRIPTION (truncated for input only; extract only the most important jd_highlights):
+\"\"\"{jd_prep_text}\"\"\"
 
 Extract companies, job titles, projects, tools, and concrete actions from the resume text
 into experience / projects / companies / resume_anchors. This grounding is critical.
+For highlights and anchors: select only interview-useful facts (action + system/tech); skip generic fluff.
 
 {_dossier_json_contract_block()}
 """
@@ -671,7 +834,8 @@ into experience / projects / companies / resume_anchors. This grounding is criti
     repair_suffix = (
         "\n\nIMPORTANT: Previous output was too thin (missing companies/experience/projects/"
         "resume_anchors). Scan the resume text again for employer names, project names, "
-        "technologies, and what the candidate did. FILL those fields. Do not invent. JSON only."
+        "technologies, and what the candidate did. FILL those fields. Do not invent. "
+        "Keep highlights concrete and selective (no process fluff). JSON only."
     )
 
     print(f"[INFO] Building dossier via LLM ({label})...")
@@ -681,7 +845,6 @@ into experience / projects / companies / resume_anchors. This grounding is criti
         dossier = _normalize_parsed_dossier(
             parsed,
             job_title,
-            jd_excerpt,
             resume_skills_fallback=resume_skills_hint,
             source="llm",
         )
@@ -699,7 +862,6 @@ into experience / projects / companies / resume_anchors. This grounding is criti
                 repaired = _normalize_parsed_dossier(
                     parsed2,
                     job_title,
-                    jd_excerpt,
                     resume_skills_fallback=resume_skills_hint,
                     source="llm",
                 )
@@ -715,6 +877,7 @@ into experience / projects / companies / resume_anchors. This grounding is criti
                     "hiring_company",
                     "tools",
                     "responsibilities",
+                    "jd_highlights",
                     "resume_highlights",
                 ):
                     if repaired.get(key) and (
@@ -734,7 +897,7 @@ into experience / projects / companies / resume_anchors. This grounding is criti
             f"attempts={attempts}. Returning empty-ish dossier; no heuristic invent."
         )
         prep_slice = {"skills": resume_skills_hint, "experience": [], "projects": []}
-        dossier = _empty_dossier(job_title, prep_slice, jd_excerpt, reason="llm_failed")
+        dossier = _empty_dossier(job_title, prep_slice, reason="llm_failed")
         compact = json.dumps(dossier, separators=(",", ":"))
         _log_dossier_field_counts(dossier, prefix="[ERROR]")
         print(f"[ERROR] Interview dossier ready: {len(compact)} chars (source=llm_failed)")
@@ -762,28 +925,46 @@ def _dossier_json(dossier):
 
 def _shared_interview_contract_text():
     return """SHARED RULES (strict):
-- Write REAL interview probes a hiring manager would ask in a live interview.
+- Write REAL interview probes a hiring manager would ask in a live interview for THIS job title.
+- Adapt tone to the role domain in the dossier (technical, business, creative, operations, etc.).
 - BAN definition/textbook stems: "What is", "Explain", "Define", "List advantages", "Describe the difference between".
-- Every question MUST name at least one concrete resume_anchor (from resume_anchors / experience / projects / companies)
+- BAN soft/vague stems: "Tell us about your experience with", "What was your approach to",
+  "What strategies would you employ", "How did you handle X" when X is only a bare skill name,
+  "Describe your role in" with no concrete artifact.
+- Every question MUST name at least one concrete resume artifact from the dossier:
+  company, project/initiative, outcome/metric, method, or tool named in the dossier —
   AND tie to a JD expectation (must_have_skills, tools, responsibilities, or transferable_bridges).
-- Prefer experience/projects details (company, tech, actions) over vague soft skills.
-- Prefer overlap_skills and transferable_bridges; use gap_skills only as fair probes tied to closest resume experience.
+- ONE anchor bundle per question: do not combine project from one story with outcome from another.
+- Prefer experience/projects details (company, actions, outcomes) over vague soft skills.
+- Prefer overlap_skills and transferable_bridges.
+- gap_skills: NEVER claim the candidate already used them. Phrase as transfer:
+  "Given your <resume work>, how would you approach <gap skill / JD need> for this role?"
 - Never treat hiring_company as the candidate's past employer unless it also appears in companies/experience.
-- No coding tasks, puzzles, algorithms, or leetcode in these theory questions.
-- Use ONLY the dossier. Do not invent employers, projects, or skills.
+- No coding tasks, puzzles, algorithms, or leetcode unless the role clearly requires coding questions
+  (those are handled separately). For these theory questions, stay non-leetcode.
+- Use ONLY the dossier. Do not invent employers, projects, skills, or past usage of gap tools.
 
-DIFFICULTY (interview depth, not textbook depth):
-- beginner/easy: clarify their own past work — what they did with a tool/project/company from the dossier.
-- medium: how/why they implemented, process, ownership, failure modes linking resume work to the role.
-- hard: tradeoffs, architecture/judgment under JD constraints; what they would change for this role's needs.
+DIFFICULTY LADDER (must get deeper; do not rephrase the same anecdote):
+- beginner/easy: walk through ONE concrete thing they did — name project/outcome/tool from dossier.
+- medium: how/why/process, ownership, failure modes, or measurement — still on THEIR past work, aimed at JD.
+- hard: tradeoffs and judgment applying THEIR past work to THIS role's constraints; what they would change and why.
 """
 
 
 def _difficulty_depth_hint(level):
     hints = {
-        "beginner": "Ask them to walk through something they actually did (tool/project/company).",
-        "medium": "Ask how/why they built or decided something, linked to a JD expectation.",
-        "hard": "Ask for tradeoffs/judgment applying their experience to this role's constraints.",
+        "beginner": (
+            "Ask them to walk through one concrete past artifact "
+            "(named project/outcome/tool from the dossier)."
+        ),
+        "medium": (
+            "Ask how/why they built or decided something, including failure modes or measurement, "
+            "linked to a JD expectation."
+        ),
+        "hard": (
+            "Ask for tradeoffs/judgment applying their concrete past work to this role's "
+            "constraints (prefer transferable_bridges); not a generic strategy essay."
+        ),
     }
     return hints.get(level, hints["medium"])
 
@@ -803,11 +984,226 @@ def _is_generic_definition_question(question_text):
         "describe the difference",
         "tell me about yourself",
         "why should we hire",
+        "tell us about your experience",
+        "tell me about your experience",
+        "what was your approach to",
+        "what strategies would you employ",
+        "what considerations would you take",
+        "how would you approach designing a scalable",
+        "how would you balance the trade-offs between using",
     )
     if any(q.startswith(b) for b in banned_starts):
         return True
-    # Generic role quiz without personalization markers is hard to detect; stem ban covers most.
+    soft_patterns = (
+        "experience with docker",
+        "experience with kubernetes",
+        "database management in your previous",
+        "reliability and availability of cloud-based",
+        "tell us about your experience with",
+        "tell me about your experience with",
+        "how would you leverage your experience",
+        "design a scalable approach for",
+        "design a scalable approach to",
+    )
+    if any(p in q for p in soft_patterns):
+        return True
     return False
+
+
+def _dossier_anchor_bundles(dossier: dict, limit: int = 5) -> list:
+    """
+    Self-contained anchor bundles — project + artifact from the SAME source.
+    Avoids mashing unrelated highlights into one example question.
+    """
+    d = dossier or {}
+    bundles = []
+    seen_projects = set()
+
+    def _add(company, project, artifact, tool_or_method=""):
+        project_key = (project or "").strip().lower()[:60]
+        if project_key and project_key in seen_projects:
+            return
+        if project_key:
+            seen_projects.add(project_key)
+        if not (project or artifact or company):
+            return
+        bundles.append({
+            "company": _shorten_text((company or "").strip(), 60) or "their employer",
+            "project": _shorten_text((project or "").strip(), 80) or "a key initiative",
+            "artifact": _shorten_text((artifact or "").strip(), 120) or project or "their work",
+            "tool_or_method": _shorten_text((tool_or_method or "").strip(), 40),
+        })
+
+    for anchor in d.get("resume_anchors") or []:
+        if not isinstance(anchor, dict):
+            continue
+        tech = anchor.get("tech") or []
+        tool = tech[0] if isinstance(tech, list) and tech else ""
+        actions = anchor.get("actions") or []
+        artifact = actions[0] if isinstance(actions, list) and actions else ""
+        _add(anchor.get("company"), anchor.get("project"), artifact, tool)
+
+    for proj in d.get("projects") or []:
+        if not isinstance(proj, dict):
+            continue
+        tech = proj.get("tech") or []
+        tool = tech[0] if isinstance(tech, list) and tech else ""
+        _add(
+            (d.get("companies") or [""])[0] if d.get("companies") else "",
+            proj.get("name"),
+            _entry_highlights_artifact(proj),
+            tool,
+        )
+
+    for exp in d.get("experience") or []:
+        if not isinstance(exp, dict):
+            continue
+        tech = exp.get("tech") or []
+        tool = tech[0] if isinstance(tech, list) and tech else ""
+        _add(exp.get("company"), exp.get("title"), _entry_highlights_artifact(exp), tool)
+
+    return bundles[:limit]
+
+
+def _dossier_anchor_assignment_block(dossier: dict) -> str:
+    """Prompt block listing resume anchors the model must distribute across questions."""
+    bundles = _dossier_anchor_bundles(dossier, limit=12)
+    if not bundles:
+        return ""
+    lines = [
+        "RESUME ANCHOR POOL (assign questions across these; reuse only after all are used once):"
+    ]
+    for i, b in enumerate(bundles, 1):
+        lines.append(
+            f"  {i}. {b['project']} @ {b['company']} — {b['artifact']}"
+        )
+    gaps = [g for g in (dossier or {}).get("gap_skills") or [] if isinstance(g, str) and g.strip()]
+    if gaps:
+        lines.append(
+            "Gap skills (transfer-only, never as past experience): "
+            + ", ".join(gaps[:8])
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _first_nonempty(*values):
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            return _shorten_text(v.strip(), 80)
+        if isinstance(v, list) and v:
+            for item in v:
+                if isinstance(item, str) and item.strip():
+                    return _shorten_text(item.strip(), 80)
+                if isinstance(item, dict):
+                    for key in ("name", "project", "company", "title", "description", "highlights", "actions"):
+                        inner = item.get(key)
+                        if isinstance(inner, list) and inner:
+                            s = str(inner[0]).strip()
+                            if s:
+                                return _shorten_text(s, 80)
+                        if isinstance(inner, str) and inner.strip():
+                            return _shorten_text(inner.strip(), 80)
+    return ""
+
+
+def _dossier_example_snippets(dossier: dict) -> dict:
+    """
+    Pull real anchors from THIS dossier for prompt examples.
+    Uses self-contained bundles so examples never mash unrelated projects.
+    """
+    d = dossier or {}
+    bundles = _dossier_anchor_bundles(d, limit=5)
+    a = bundles[0] if bundles else {
+        "company": "their employer",
+        "project": "a key initiative from the resume",
+        "artifact": "a concrete outcome they owned",
+        "tool_or_method": "a method or tool from the resume",
+    }
+    b = bundles[1] if len(bundles) > 1 else a
+
+    responsibilities = d.get("responsibilities") or []
+    must_haves = d.get("must_have_skills") or []
+    gaps = d.get("gap_skills") or []
+    bridges = d.get("transferable_bridges") or []
+
+    jd_need = _first_nonempty(
+        responsibilities[0] if responsibilities else "",
+        must_haves[0] if must_haves else "",
+        d.get("job_title") or "",
+        "a core responsibility from the JD",
+    )
+    gap = _first_nonempty(gaps[0] if gaps else "", "a JD skill not strong on the resume")
+    bridge = _first_nonempty(
+        bridges[0] if bridges else "",
+        f"{a.get('artifact')} -> {jd_need}",
+    )
+    job_title = _first_nonempty(d.get("job_title") or "", "this role")
+    domain = _first_nonempty(d.get("domain") or "", "general")
+
+    return {
+        "company": a["company"],
+        "project": a["project"],
+        "artifact": a["artifact"],
+        "tool_or_method": a.get("tool_or_method") or "a method from the resume",
+        "project_b": b["project"],
+        "artifact_b": b["artifact"],
+        "company_b": b["company"],
+        "jd_need": jd_need,
+        "gap": gap,
+        "bridge": bridge,
+        "job_title": job_title,
+        "domain": domain,
+        "bundles": bundles,
+    }
+
+
+def _dossier_dynamic_examples_block(dossier: dict) -> str:
+    """Universal BAD examples + GOOD examples grounded in THIS dossier."""
+    s = _dossier_example_snippets(dossier)
+    domain_line = ""
+    if s["domain"] and s["domain"] != "general":
+        domain_line = (
+            f"\nRole domain hint from dossier: {s['domain']}. "
+            "Match interview style to that domain (do not force unrelated jargon).\n"
+        )
+    bundle_lines = []
+    for i, bundle in enumerate(s.get("bundles") or [], 1):
+        bundle_lines.append(
+            f"  Anchor {i}: company={bundle.get('company')!r}, "
+            f"project={bundle.get('project')!r}, "
+            f"artifact={bundle.get('artifact')!r}"
+        )
+    bundle_block = "\n".join(bundle_lines) if bundle_lines else ""
+
+    return f"""{domain_line}
+Use ONE anchor bundle per question — do NOT combine project from anchor A with outcome from anchor B.
+Self-contained resume anchors from THIS dossier:
+{bundle_block}
+- JD expectation: {s['jd_need']}
+- Gap / stretch skill (transfer only, never as past experience): {s['gap']}
+
+BEGINNER (concrete walkthrough — pick ONE anchor bundle):
+- Must name a specific project/outcome from a single anchor (not a bare skill label).
+- BAD: "Tell us about your experience with {s['tool_or_method']}."
+- BAD: Mixing two anchors: "On {s['project']}, how did you approach {s['artifact_b']}?" (if they are different work)
+- GOOD: "Walk through {s['project']} at {s['company']} — what did you own and what changed?"
+- GOOD: "Regarding {s['artifact']} at {s['company']}, what did you personally build and what was the result?"
+
+MEDIUM (mechanism / failure / measurement — ONE anchor only):
+- Ask how/why, ownership, what broke, or what you measured on that same anchor.
+- Link to a JD expectation from the dossier.
+- BAD: "Describe a time you faced a challenge at work."
+- BAD: "What challenges did you face integrating {s['gap']}?" (gap_skill — invents past use)
+- GOOD: "On {s['project']}, what failure mode worried you most in production and how did you mitigate it?"
+- GOOD: "For {s['artifact_b']} at {s['company_b']}, how did you measure success and what would you change for {s['jd_need']}?"
+
+HARD (judgment for THIS role — resume anchor + JD need; gap skills as transfer only):
+- Apply ONE concrete past anchor to this role's constraints; ask tradeoffs and what they would change.
+- BAD: "How would you design a scalable approach for {s['job_title']}?"
+- BAD: "Given your experience with {s['gap']}..." (gap must NOT be claimed as past experience)
+- GOOD: "Given {s['project']} at {s['company']}, what would you change to meet this role's need for {s['jd_need']} — and why?"
+- GOOD: "You may not list {s['gap']} strongly; given {s['artifact_b']}, how would you ramp up for that JD expectation?"
+"""
 
 
 def _coerce_text_field(value, max_chars=200) -> str:
@@ -1004,6 +1400,703 @@ def filter_questions_batch(questions, job_title, dossier, level, weight, model, 
     return questions[:target_count] if target_count else questions
 
 
+def _exclude_questions_block(exclude_questions) -> str:
+    if not exclude_questions:
+        return ""
+    lines = []
+    for i, q in enumerate(exclude_questions[:40], 1):
+        text = (q if isinstance(q, str) else (q.get("question") or "")).strip()
+        if text:
+            lines.append(f"{i}. {text}")
+    if not lines:
+        return ""
+    return (
+        "\nALREADY KEPT QUESTIONS (do NOT repeat, rephrase, or reuse the same "
+        "story/project/tech theme):\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+def _batch_mode_instructions(
+    mode,
+    resume_pct=50,
+    jd_pct=50,
+    blend_pct_resume=50,
+    blend_pct_jd=50,
+) -> str:
+    """Mode-specific rules for one-call batch prompts (domain-agnostic)."""
+    return {
+        "core": (
+            "MODE: core (resume-primary).\n"
+            "About 70% resume grounding, 30% JD alignment.\n"
+            "Focus mostly on resume experience/projects; use JD to aim the probe at role expectations."
+        ),
+        "blend": (
+            f"MODE: blend ({blend_pct_resume}% resume / {blend_pct_jd}% JD per question).\n"
+            "EVERY question must meaningfully combine one resume_anchor with one JD expectation "
+            "(prefer overlap_skills; use gap_skills only as transfer tied to closest experience)."
+        ),
+        "split": (
+            f"MODE: split — two buckets in ONE response.\n"
+            f"- resume bucket (~{resume_pct}%): ground deeply in resume experience/projects/tools; "
+            "briefly connect to a JD expectation.\n"
+            f"- jd bucket (~{jd_pct}%): probe JD must-haves/responsibilities, ALWAYS grounded in "
+            "closest resume overlap or a fair gap tied to nearest experience. "
+            "Do NOT ask generic textbook JD theory."
+        ),
+        "hybrid": (
+            "MODE: hybrid — three buckets in ONE response.\n"
+            f"- resume bucket: deep resume probes; still name a JD expectation for relevance.\n"
+            f"- jd bucket: JD expectations grounded in closest resume overlap or acknowledged gap — "
+            "not textbook quizzes.\n"
+            f"- blend bucket ({blend_pct_resume}% resume / {blend_pct_jd}% JD): each question must "
+            "integrate both a resume_anchor and a JD expectation."
+        ),
+    }.get(mode, "MODE: core.")
+
+
+def _levels_schema_block(b, m, h) -> str:
+    return f"""Return ONLY one JSON object with exactly these keys and EXACTLY these counts:
+- "beginner": array of EXACTLY {b} objects
+- "medium": array of EXACTLY {m} objects
+- "hard": array of EXACTLY {h} objects
+
+Each object shape:
+{{"question":"...","resume_anchor":"short string","jd_anchor":"short string"}}
+
+resume_anchor and jd_anchor MUST be plain short strings (not objects/arrays).
+If a count is 0, return an empty array for that key.
+Raw JSON object only. No markdown fences. No commentary."""
+
+
+def _nested_levels_line(name, dist) -> str:
+    b, m, h = int(dist[0]), int(dist[1]), int(dist[2])
+    return (
+        f'- "{name}": object with "beginner" (EXACTLY {b}), '
+        f'"medium" (EXACTLY {m}), "hard" (EXACTLY {h})'
+    )
+
+
+def _split_schema_block(resume_dist, jd_dist) -> str:
+    return f"""Return ONLY one JSON object with exactly these top-level keys:
+{_nested_levels_line("resume", resume_dist)}
+{_nested_levels_line("jd", jd_dist)}
+
+Each question object shape:
+{{"question":"...","resume_anchor":"short string","jd_anchor":"short string"}}
+
+resume_anchor and jd_anchor MUST be plain short strings (not objects/arrays).
+If a count is 0, return an empty array for that key.
+Raw JSON object only. No markdown fences. No commentary."""
+
+
+def _hybrid_schema_block(resume_dist, jd_dist, blend_dist) -> str:
+    return f"""Return ONLY one JSON object with exactly these top-level keys:
+{_nested_levels_line("resume", resume_dist)}
+{_nested_levels_line("jd", jd_dist)}
+{_nested_levels_line("blend", blend_dist)}
+
+Each question object shape:
+{{"question":"...","resume_anchor":"short string","jd_anchor":"short string"}}
+
+resume_anchor and jd_anchor MUST be plain short strings (not objects/arrays).
+If a count is 0, return an empty array for that key.
+Raw JSON object only. No markdown fences. No commentary."""
+
+
+def _build_mode_batch_prompt(
+    job_title,
+    dossier,
+    mode="core",
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    resume_dist=None,
+    jd_dist=None,
+    blend_dist=None,
+    resume_pct=50,
+    jd_pct=50,
+    blend_pct_resume=50,
+    blend_pct_jd=50,
+    exclude_questions=None,
+    only_missing=None,
+    schema=None,
+):
+    """
+    One-call batch prompt for core/blend (flat levels) or split/hybrid (nested buckets).
+    only_missing: flat {{beginner,medium,hard}} or nested {{resume/jd/blend: {{...}}}}.
+    """
+    schema = schema or ("levels" if mode in ("core", "blend") else mode)
+    dossier_blob = _dossier_json(dossier)
+    exclude_block = _exclude_questions_block(exclude_questions)
+    examples_block = _dossier_dynamic_examples_block(dossier or {})
+    anchor_block = _dossier_anchor_assignment_block(dossier or {})
+    mode_block = _batch_mode_instructions(
+        mode, resume_pct, jd_pct, blend_pct_resume, blend_pct_jd
+    )
+
+    if schema == "levels":
+        if only_missing and isinstance(only_missing, dict) and "beginner" in only_missing:
+            b = int(only_missing.get("beginner") or 0)
+            m = int(only_missing.get("medium") or 0)
+            h = int(only_missing.get("hard") or 0)
+        else:
+            b, m, h = beginner_count, medium_count, hard_count
+        count_contract = (
+            f"MANDATORY COUNTS: beginner={b}, medium={m}, hard={h}. "
+            "Your JSON is INVALID if any array has a different length. "
+            "Do not return fewer items to avoid repetition — write distinct questions instead."
+        )
+        schema_block = _levels_schema_block(b, m, h)
+    elif schema == "split":
+        if only_missing and isinstance(only_missing, dict) and "resume" in only_missing:
+            rd = only_missing.get("resume") or {}
+            jd = only_missing.get("jd") or {}
+            resume_dist = [
+                int(rd.get("beginner") or 0),
+                int(rd.get("medium") or 0),
+                int(rd.get("hard") or 0),
+            ]
+            jd_dist = [
+                int(jd.get("beginner") or 0),
+                int(jd.get("medium") or 0),
+                int(jd.get("hard") or 0),
+            ]
+        resume_dist = list(resume_dist or [0, 0, 0])
+        jd_dist = list(jd_dist or [0, 0, 0])
+        count_contract = (
+            f"MANDATORY NESTED COUNTS: resume beginner/medium/hard="
+            f"{resume_dist[0]}/{resume_dist[1]}/{resume_dist[2]}; "
+            f"jd beginner/medium/hard={jd_dist[0]}/{jd_dist[1]}/{jd_dist[2]}. "
+            "Your JSON is INVALID if any array length differs. "
+            "Do not return fewer items to avoid repetition."
+        )
+        schema_block = _split_schema_block(resume_dist, jd_dist)
+    else:  # hybrid
+        if only_missing and isinstance(only_missing, dict) and "resume" in only_missing:
+            rd = only_missing.get("resume") or {}
+            jd = only_missing.get("jd") or {}
+            bd = only_missing.get("blend") or {}
+            resume_dist = [
+                int(rd.get("beginner") or 0),
+                int(rd.get("medium") or 0),
+                int(rd.get("hard") or 0),
+            ]
+            jd_dist = [
+                int(jd.get("beginner") or 0),
+                int(jd.get("medium") or 0),
+                int(jd.get("hard") or 0),
+            ]
+            blend_dist = [
+                int(bd.get("beginner") or 0),
+                int(bd.get("medium") or 0),
+                int(bd.get("hard") or 0),
+            ]
+        resume_dist = list(resume_dist or [0, 0, 0])
+        jd_dist = list(jd_dist or [0, 0, 0])
+        blend_dist = list(blend_dist or [0, 0, 0])
+        count_contract = (
+            f"MANDATORY NESTED COUNTS: resume={resume_dist[0]}/{resume_dist[1]}/{resume_dist[2]}; "
+            f"jd={jd_dist[0]}/{jd_dist[1]}/{jd_dist[2]}; "
+            f"blend={blend_dist[0]}/{blend_dist[1]}/{blend_dist[2]}. "
+            "Your JSON is INVALID if any array length differs. "
+            "Do not return fewer items to avoid repetition."
+        )
+        schema_block = _hybrid_schema_block(resume_dist, jd_dist, blend_dist)
+
+    return f"""You are an expert interviewer writing live interview questions for **{job_title}**.
+
+{_shared_interview_contract_text()}
+
+{mode_block}
+Generate ALL difficulties (and buckets if applicable) in ONE response.
+Depth MUST increase beginner → medium → hard within each bucket.
+Match the domain of THIS resume and JD — do not force unrelated industry jargon
+(tech, business, creative, operations, etc. — follow the dossier domain).
+
+{count_contract}
+
+{anchor_block}
+{examples_block}
+UNIQUENESS (strict — enforced by you, not post-processing):
+- Every question MUST be distinct: different anchor, angle, or JD tie-in. No near-paraphrases.
+- Each question uses ONE anchor bundle only (do not mix unrelated project + outcome).
+- Spread questions across the RESUME ANCHOR POOL before reusing any project.
+- gap_skills: NEVER as past experience — only transfer ("how would you approach…").
+- Soft skills (communication, teamwork, Agile) in at most ONE question total across the whole batch.
+- beginner = walkthrough; medium = mechanism/failure/measurement; hard = tradeoffs/judgment for THIS role.
+{exclude_block}
+CANDIDATE/ROLE DOSSIER (use ONLY this; do not invent employers/projects not listed):
+{dossier_blob}
+
+{schema_block}"""
+
+
+def _build_core_batch_prompt(
+    job_title,
+    dossier,
+    beginner_count,
+    medium_count,
+    hard_count,
+    exclude_questions=None,
+    only_missing=None,
+):
+    """Backward-compatible wrapper for core flat-level batch prompts."""
+    return _build_mode_batch_prompt(
+        job_title,
+        dossier,
+        mode="core",
+        beginner_count=beginner_count,
+        medium_count=medium_count,
+        hard_count=hard_count,
+        exclude_questions=exclude_questions,
+        only_missing=only_missing,
+        schema="levels",
+    )
+
+
+def _parse_level_batch_from_dict(parsed, beginner_count, medium_count, hard_count):
+    """Normalize beginner/medium/hard arrays from a dict (or empty)."""
+    if not isinstance(parsed, dict):
+        return [], [], []
+    beginner = _normalize_question_items(parsed.get("beginner") or [], "beginner", 1)
+    medium = _normalize_question_items(parsed.get("medium") or [], "medium", 3)
+    hard = _normalize_question_items(parsed.get("hard") or [], "hard", 5)
+    return (
+        beginner[:beginner_count] if beginner_count else [],
+        medium[:medium_count] if medium_count else [],
+        hard[:hard_count] if hard_count else [],
+    )
+
+
+def _parse_flat_array_by_difficulty(raw, beginner_count, medium_count, hard_count):
+    arr = extract_json_array(raw) if raw else []
+    beginner, medium, hard = [], [], []
+    for item in arr or []:
+        if not isinstance(item, dict):
+            continue
+        level = (item.get("difficulty") or item.get("level") or "").strip().lower()
+        if level in ("beginner", "easy", "basic"):
+            beginner.append(item)
+        elif level in ("medium", "intermediate", "mid"):
+            medium.append(item)
+        elif level in ("hard", "expert", "advanced"):
+            hard.append(item)
+    return (
+        _normalize_question_items(beginner, "beginner", 1)[:beginner_count],
+        _normalize_question_items(medium, "medium", 3)[:medium_count],
+        _normalize_question_items(hard, "hard", 5)[:hard_count],
+    )
+
+
+def _parse_core_batch_response(raw, beginner_count, medium_count, hard_count):
+    """Parse batched core/blend JSON into normalized per-level lists."""
+    parsed = _parse_llm_json_object(raw)
+    if not isinstance(parsed, dict):
+        return _parse_flat_array_by_difficulty(raw, beginner_count, medium_count, hard_count)
+    # Nested mistaken response: flatten resume/jd/blend if present without top-level levels
+    if (
+        parsed.get("beginner") is None
+        and parsed.get("medium") is None
+        and parsed.get("hard") is None
+        and any(k in parsed for k in ("resume", "jd", "blend"))
+    ):
+        return _flatten_bucket_levels(parsed, beginner_count, medium_count, hard_count)
+    return _parse_level_batch_from_dict(parsed, beginner_count, medium_count, hard_count)
+
+
+def _flatten_bucket_levels(parsed, beginner_count, medium_count, hard_count):
+    """Merge nested resume/jd/blend level arrays into flat lists (cap at targets)."""
+    beginner, medium, hard = [], [], []
+    for key in ("resume", "jd", "blend"):
+        bucket = parsed.get(key)
+        if not isinstance(bucket, dict):
+            continue
+        b, m, h = _parse_level_batch_from_dict(bucket, 999, 999, 999)
+        beginner.extend(b)
+        medium.extend(m)
+        hard.extend(h)
+    return (
+        beginner[:beginner_count] if beginner_count else [],
+        medium[:medium_count] if medium_count else [],
+        hard[:hard_count] if hard_count else [],
+    )
+
+
+def _parse_split_batch_response(raw, resume_dist, jd_dist):
+    """Parse nested split JSON; return flattened beginner/medium/hard lists."""
+    resume_dist = list(resume_dist or [0, 0, 0])
+    jd_dist = list(jd_dist or [0, 0, 0])
+    target_b = resume_dist[0] + jd_dist[0]
+    target_m = resume_dist[1] + jd_dist[1]
+    target_h = resume_dist[2] + jd_dist[2]
+
+    parsed = _parse_llm_json_object(raw)
+    if not isinstance(parsed, dict):
+        return _parse_flat_array_by_difficulty(raw, target_b, target_m, target_h)
+
+    # Flat levels fallback
+    if parsed.get("beginner") is not None or parsed.get("medium") is not None:
+        return _parse_level_batch_from_dict(parsed, target_b, target_m, target_h)
+
+    rb, rm, rh = _parse_level_batch_from_dict(
+        parsed.get("resume") or {}, resume_dist[0], resume_dist[1], resume_dist[2]
+    )
+    jb, jm, jh = _parse_level_batch_from_dict(
+        parsed.get("jd") or {}, jd_dist[0], jd_dist[1], jd_dist[2]
+    )
+    return (
+        (rb + jb)[:target_b],
+        (rm + jm)[:target_m],
+        (rh + jh)[:target_h],
+    )
+
+
+def _parse_hybrid_batch_response(raw, resume_dist, jd_dist, blend_dist):
+    """Parse nested hybrid JSON; return flattened beginner/medium/hard lists."""
+    resume_dist = list(resume_dist or [0, 0, 0])
+    jd_dist = list(jd_dist or [0, 0, 0])
+    blend_dist = list(blend_dist or [0, 0, 0])
+    target_b = resume_dist[0] + jd_dist[0] + blend_dist[0]
+    target_m = resume_dist[1] + jd_dist[1] + blend_dist[1]
+    target_h = resume_dist[2] + jd_dist[2] + blend_dist[2]
+
+    parsed = _parse_llm_json_object(raw)
+    if not isinstance(parsed, dict):
+        return _parse_flat_array_by_difficulty(raw, target_b, target_m, target_h)
+
+    if parsed.get("beginner") is not None or parsed.get("medium") is not None:
+        return _parse_level_batch_from_dict(parsed, target_b, target_m, target_h)
+
+    rb, rm, rh = _parse_level_batch_from_dict(
+        parsed.get("resume") or {}, resume_dist[0], resume_dist[1], resume_dist[2]
+    )
+    jb, jm, jh = _parse_level_batch_from_dict(
+        parsed.get("jd") or {}, jd_dist[0], jd_dist[1], jd_dist[2]
+    )
+    bb, bm, bh = _parse_level_batch_from_dict(
+        parsed.get("blend") or {}, blend_dist[0], blend_dist[1], blend_dist[2]
+    )
+    return (
+        (rb + jb + bb)[:target_b],
+        (rm + jm + bm)[:target_m],
+        (rh + jh + bh)[:target_h],
+    )
+
+
+def _batch_json_looks_usable(parsed) -> bool:
+    if not isinstance(parsed, dict):
+        return False
+    if (
+        parsed.get("beginner") is not None
+        or parsed.get("medium") is not None
+        or parsed.get("hard") is not None
+    ):
+        return True
+    for key in ("resume", "jd", "blend"):
+        bucket = parsed.get(key)
+        if isinstance(bucket, dict) and (
+            bucket.get("beginner") is not None
+            or bucket.get("medium") is not None
+            or bucket.get("hard") is not None
+        ):
+            return True
+    return False
+
+
+def _call_core_batch_llm(prompt, model, label="core_batch"):
+    """One batched question call with high output budget. Returns (raw|None, error|None)."""
+    print(
+        f"[INFO] Question batch LLM start ({label}): "
+        f"max_tokens={QUESTION_BATCH_MAX_TOKENS} temperature={QUESTION_BATCH_TEMPERATURE}"
+    )
+    last_error = None
+    best_raw = None
+    for attempt in range(QUESTION_GEN_MAX_RETRIES):
+        try:
+            response = try_ollama_chat(
+                prompt.strip(),
+                model=model,
+                max_tokens=QUESTION_BATCH_MAX_TOKENS,
+                temperature=QUESTION_BATCH_TEMPERATURE,
+            )
+            raw = (response.get("message") or {}).get("content") or ""
+            usage = response.get("usage") or {}
+            out_tok = usage.get("output_tokens")
+            parsed = _parse_llm_json_object(raw)
+            if _batch_json_looks_usable(parsed):
+                print(
+                    f"[INFO] Question batch JSON ok ({label}) "
+                    f"attempt {attempt + 1}/{QUESTION_GEN_MAX_RETRIES}"
+                    + (f" output_tokens={out_tok}" if out_tok is not None else "")
+                )
+                return raw, None
+            # Accept flat array fallback as usable raw
+            arr = extract_json_array(raw)
+            if arr:
+                print(
+                    f"[INFO] Question batch array fallback ok ({label}) "
+                    f"attempt {attempt + 1}/{QUESTION_GEN_MAX_RETRIES}"
+                )
+                return raw, None
+            last_error = "invalid_or_empty_json"
+            best_raw = raw or best_raw
+            preview = (raw or "").replace("\n", " ")[:160]
+            print(
+                f"[WARN] Question batch unusable JSON ({label}) "
+                f"attempt {attempt + 1}/{QUESTION_GEN_MAX_RETRIES} "
+                f"raw_len={len(raw or '')} preview={preview!r}"
+            )
+        except Exception as e:
+            last_error = str(e)
+            print(
+                f"[WARN] Question batch LLM failed ({label}) "
+                f"attempt {attempt + 1}/{QUESTION_GEN_MAX_RETRIES}: {e}"
+            )
+    return best_raw, last_error
+
+
+def _missing_nested_for_refill(need_b, need_m, need_h, schema):
+    """Put all missing level counts into the resume bucket for nested refill rounds."""
+    levels = {"beginner": need_b, "medium": need_m, "hard": need_h}
+    empty = {"beginner": 0, "medium": 0, "hard": 0}
+    if schema == "split":
+        return {"resume": levels, "jd": dict(empty)}
+    return {"resume": levels, "jd": dict(empty), "blend": dict(empty)}
+
+
+def _generate_batched_levels(
+    job_title,
+    dossier,
+    beginner_count,
+    medium_count,
+    hard_count,
+    model,
+    mode="core",
+    label_prefix="core_batch",
+    blend_pct_resume=50,
+    blend_pct_jd=50,
+):
+    """
+    Shared exact-count runner for flat beginner/medium/hard schemas (core + blend).
+    Refills until counts met or max rounds exhausted. No heuristic dedupe.
+    """
+    beginner_count = max(0, int(beginner_count or 0))
+    medium_count = max(0, int(medium_count or 0))
+    hard_count = max(0, int(hard_count or 0))
+    if beginner_count + medium_count + hard_count <= 0:
+        return {"beginner": [], "medium": [], "hard": []}
+
+    print(
+        f"[INFO] Generating {mode} questions in one batch (dossier-backed)... "
+        f"counts beginner={beginner_count} medium={medium_count} hard={hard_count}"
+    )
+
+    beginner_qs: list = []
+    medium_qs: list = []
+    hard_qs: list = []
+
+    for round_num in range(QUESTION_BATCH_MAX_REFILL_ROUNDS):
+        need_b = max(0, beginner_count - len(beginner_qs))
+        need_m = max(0, medium_count - len(medium_qs))
+        need_h = max(0, hard_count - len(hard_qs))
+        if not need_b and not need_m and not need_h:
+            break
+
+        if round_num == 0:
+            req_b, req_m, req_h = beginner_count, medium_count, hard_count
+            label = label_prefix
+            exclude = None
+            only_missing = None
+        else:
+            req_b, req_m, req_h = need_b, need_m, need_h
+            label = f"{label_prefix}_refill_{round_num}"
+            exclude = beginner_qs + medium_qs + hard_qs
+            only_missing = {"beginner": need_b, "medium": need_m, "hard": need_h}
+            print(
+                f"[INFO] {mode} batch refill round {round_num}: "
+                f"beginner={need_b} medium={need_m} hard={need_h}"
+            )
+
+        prompt = _build_mode_batch_prompt(
+            job_title,
+            dossier,
+            mode=mode,
+            beginner_count=beginner_count,
+            medium_count=medium_count,
+            hard_count=hard_count,
+            blend_pct_resume=blend_pct_resume,
+            blend_pct_jd=blend_pct_jd,
+            exclude_questions=exclude,
+            only_missing=only_missing,
+            schema="levels",
+        )
+        raw, err = _call_core_batch_llm(prompt, model, label=label)
+        if not raw:
+            print(f"[ERROR] {mode} batch question generation failed ({label}): {err}")
+            break
+
+        rb, rm, rh = _parse_core_batch_response(raw, req_b, req_m, req_h)
+        print(
+            f"[INFO] {label} parsed: "
+            f"beginner={len(rb)}/{req_b} medium={len(rm)}/{req_m} hard={len(rh)}/{req_h}"
+        )
+
+        beginner_qs = (beginner_qs + rb)[:beginner_count]
+        medium_qs = (medium_qs + rm)[:medium_count]
+        hard_qs = (hard_qs + rh)[:hard_count]
+
+    final_b, final_m, final_h = len(beginner_qs), len(medium_qs), len(hard_qs)
+    if final_b < beginner_count or final_m < medium_count or final_h < hard_count:
+        print(
+            f"[WARN] {mode} question counts short after {QUESTION_BATCH_MAX_REFILL_ROUNDS} rounds: "
+            f"beginner={final_b}/{beginner_count} "
+            f"medium={final_m}/{medium_count} "
+            f"hard={final_h}/{hard_count}"
+        )
+    else:
+        print(
+            f"[INFO] {mode} question counts satisfied: "
+            f"beginner={final_b} medium={final_m} hard={final_h}"
+        )
+
+    print(f"[DEBUG] Beginner: {final_b} | Medium: {final_m} | Hard: {final_h}")
+
+    return {
+        "beginner": _strip_internal_question_fields(beginner_qs),
+        "medium": _strip_internal_question_fields(medium_qs),
+        "hard": _strip_internal_question_fields(hard_qs),
+    }
+
+
+def _generate_batched_buckets(
+    job_title,
+    dossier,
+    beginner_count,
+    medium_count,
+    hard_count,
+    model,
+    mode,
+    label_prefix,
+    resume_dist,
+    jd_dist,
+    blend_dist=None,
+    resume_pct=50,
+    jd_pct=50,
+    blend_pct_resume=50,
+    blend_pct_jd=50,
+):
+    """
+    Shared exact-count runner for nested split/hybrid schemas.
+    Flattened beginner/medium/hard must match requested totals.
+    """
+    beginner_count = max(0, int(beginner_count or 0))
+    medium_count = max(0, int(medium_count or 0))
+    hard_count = max(0, int(hard_count or 0))
+    resume_dist = list(resume_dist or [0, 0, 0])
+    jd_dist = list(jd_dist or [0, 0, 0])
+    blend_dist = list(blend_dist or [0, 0, 0]) if mode == "hybrid" else None
+    schema = "hybrid" if mode == "hybrid" else "split"
+
+    beginner_qs: list = []
+    medium_qs: list = []
+    hard_qs: list = []
+
+    for round_num in range(QUESTION_BATCH_MAX_REFILL_ROUNDS):
+        need_b = max(0, beginner_count - len(beginner_qs))
+        need_m = max(0, medium_count - len(medium_qs))
+        need_h = max(0, hard_count - len(hard_qs))
+        if not need_b and not need_m and not need_h:
+            break
+
+        if round_num == 0:
+            label = label_prefix
+            exclude = None
+            only_missing = None
+            req_rd, req_jd, req_bd = resume_dist, jd_dist, blend_dist
+        else:
+            label = f"{label_prefix}_refill_{round_num}"
+            exclude = beginner_qs + medium_qs + hard_qs
+            only_missing = _missing_nested_for_refill(need_b, need_m, need_h, schema)
+            req_rd = [
+                only_missing["resume"]["beginner"],
+                only_missing["resume"]["medium"],
+                only_missing["resume"]["hard"],
+            ]
+            req_jd = [0, 0, 0]
+            req_bd = [0, 0, 0] if mode == "hybrid" else None
+            print(
+                f"[INFO] {mode} batch refill round {round_num}: "
+                f"beginner={need_b} medium={need_m} hard={need_h}"
+            )
+
+        prompt = _build_mode_batch_prompt(
+            job_title,
+            dossier,
+            mode=mode,
+            resume_dist=req_rd,
+            jd_dist=req_jd,
+            blend_dist=req_bd,
+            resume_pct=resume_pct,
+            jd_pct=jd_pct,
+            blend_pct_resume=blend_pct_resume,
+            blend_pct_jd=blend_pct_jd,
+            exclude_questions=exclude,
+            only_missing=only_missing,
+            schema=schema,
+        )
+        raw, err = _call_core_batch_llm(prompt, model, label=label)
+        if not raw:
+            print(f"[ERROR] {mode} batch question generation failed ({label}): {err}")
+            break
+
+        if mode == "hybrid":
+            rb, rm, rh = _parse_hybrid_batch_response(raw, req_rd, req_jd, req_bd or [0, 0, 0])
+        else:
+            rb, rm, rh = _parse_split_batch_response(raw, req_rd, req_jd)
+
+        # Cap additions so we never exceed remaining need this round
+        rb = rb[:need_b if round_num else beginner_count]
+        rm = rm[:need_m if round_num else medium_count]
+        rh = rh[:need_h if round_num else hard_count]
+        if round_num == 0:
+            rb = rb[:beginner_count]
+            rm = rm[:medium_count]
+            rh = rh[:hard_count]
+
+        print(
+            f"[INFO] {label} parsed: "
+            f"beginner={len(rb)} medium={len(rm)} hard={len(rh)}"
+        )
+
+        beginner_qs = (beginner_qs + rb)[:beginner_count]
+        medium_qs = (medium_qs + rm)[:medium_count]
+        hard_qs = (hard_qs + rh)[:hard_count]
+
+    final_b, final_m, final_h = len(beginner_qs), len(medium_qs), len(hard_qs)
+    if final_b < beginner_count or final_m < medium_count or final_h < hard_count:
+        print(
+            f"[WARN] {mode} question counts short after {QUESTION_BATCH_MAX_REFILL_ROUNDS} rounds: "
+            f"beginner={final_b}/{beginner_count} "
+            f"medium={final_m}/{medium_count} "
+            f"hard={final_h}/{hard_count}"
+        )
+    else:
+        print(
+            f"[INFO] {mode} question counts satisfied: "
+            f"beginner={final_b} medium={final_m} hard={final_h}"
+        )
+
+    print(f"[DONE] Final counts -> Beginner: {final_b}, Medium: {final_m}, Hard: {final_h}")
+
+    return {
+        "beginner": _strip_internal_question_fields(beginner_qs),
+        "medium": _strip_internal_question_fields(medium_qs),
+        "hard": _strip_internal_question_fields(hard_qs),
+    }
+
+
 def generate_core_questions(
     structured_resume,
     job_title,
@@ -1014,28 +2107,24 @@ def generate_core_questions(
     model="llama3",
     dossier=None,
 ):
+    """
+    Generate core questions via batched LLM calls (dossier fed once per round).
+    Refills until exact per-level counts are met or max rounds exhausted.
+    No post-generation heuristic dedupe — quality enforced via prompt only.
+    """
     if dossier is None:
         dossier = build_interview_dossier(structured_resume, job_title, job_description, model=model)
 
-    def generate_questions_by_level(level, count, weight):
-        if count <= 0:
-            return []
-        prompt = _build_theory_prompt(job_title, dossier, level, count, weight, mode="core")
-        qs = _generate_questions_with_retries(prompt, level, count, weight, model)
-        return filter_questions_batch(qs, job_title, dossier, level, weight, model, count)
-
-    print("[INFO] Generating core questions by difficulty (dossier-backed)...")
-    beginner_qs = generate_questions_by_level("beginner", beginner_count, 1)
-    medium_qs = generate_questions_by_level("medium", medium_count, 3)
-    hard_qs = generate_questions_by_level("hard", hard_count, 5)
-
-    print(f"[DEBUG] Beginner: {len(beginner_qs)} | Medium: {len(medium_qs)} | Hard: {len(hard_qs)}")
-
-    return {
-        "beginner": _strip_internal_question_fields(beginner_qs),
-        "medium": _strip_internal_question_fields(medium_qs),
-        "hard": _strip_internal_question_fields(hard_qs),
-    }
+    return _generate_batched_levels(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="core",
+        label_prefix="core_batch",
+    )
 
 # === CODING QUESTIONS GENERATION ===
 
@@ -1165,26 +2254,13 @@ def generate_split_questions(
     model="llama3",
     dossier=None,
 ):
+    """Split mode: one nested batch call (resume + jd × all difficulties), then refill."""
     if dossier is None:
         dossier = build_interview_dossier(structured_resume, job_title, job_description, model=model)
 
-    def generate_questions_by_source(level, count, weight, source):
-        if count <= 0:
-            return []
-        mode = "split_resume" if source == "resume" else "split_jd"
-        prompt = _build_theory_prompt(
-            job_title,
-            dossier,
-            level,
-            count,
-            weight,
-            mode=mode,
-            resume_pct=resume_pct,
-            jd_pct=jd_pct,
-        )
-        qs = _generate_questions_with_retries(prompt, level, count, weight, model)
-        return filter_questions_batch(qs, job_title, dossier, level, weight, model, count)
-
+    beginner_count = max(0, int(beginner_count or 0))
+    medium_count = max(0, int(medium_count or 0))
+    hard_count = max(0, int(hard_count or 0))
     total = beginner_count + medium_count + hard_count
     if total == 0:
         return {"beginner": [], "medium": [], "hard": []}
@@ -1220,24 +2296,21 @@ def generate_split_questions(
     print(f"  {Fore.GREEN}JD     -> Beginner={jd_dist[0]}, Medium={jd_dist[1]}, Hard={jd_dist[2]}{Style.RESET_ALL}")
     print(f"{Fore.BLUE}=========================={Style.RESET_ALL}\n")
 
-    beginner_qs, medium_qs, hard_qs = [], [], []
+    return _generate_batched_buckets(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="split",
+        label_prefix="split_batch",
+        resume_dist=resume_dist,
+        jd_dist=jd_dist,
+        resume_pct=resume_pct,
+        jd_pct=jd_pct,
+    )
 
-    beginner_qs.extend(generate_questions_by_source("beginner", resume_dist[0], 1, "resume"))
-    beginner_qs.extend(generate_questions_by_source("beginner", jd_dist[0], 1, "jd"))
-
-    medium_qs.extend(generate_questions_by_source("medium", resume_dist[1], 3, "resume"))
-    medium_qs.extend(generate_questions_by_source("medium", jd_dist[1], 3, "jd"))
-
-    hard_qs.extend(generate_questions_by_source("hard", resume_dist[2], 5, "resume"))
-    hard_qs.extend(generate_questions_by_source("hard", jd_dist[2], 5, "jd"))
-
-    print(f"[DONE] Final counts -> Beginner: {len(beginner_qs)}, Medium: {len(medium_qs)}, Hard: {len(hard_qs)}")
-
-    return {
-        "beginner": _strip_internal_question_fields(beginner_qs),
-        "medium": _strip_internal_question_fields(medium_qs),
-        "hard": _strip_internal_question_fields(hard_qs),
-    }
 
 # === END OF CORE QUESTION GENERATION WITH SPLIT INTEGRATED ===
 
@@ -1256,41 +2329,24 @@ def generate_blend_questions(
     model="llama3",
     dossier=None,
 ):
-    """Generate interview questions blending resume and JD via compact dossier."""
+    """Generate blended questions in one multi-difficulty batch (exact counts via refill)."""
     if dossier is None:
         dossier = build_interview_dossier(structured_resume, job_title, job_description, model=model)
 
-    def generate_questions_blend(level, count, weight):
-        if count <= 0:
-            return []
-        prompt = _build_theory_prompt(
-            job_title,
-            dossier,
-            level,
-            count,
-            weight,
-            mode="blend",
-            blend_pct_resume=blend_pct_resume,
-            blend_pct_jd=blend_pct_jd,
-        )
-        qs = _generate_questions_with_retries(prompt, level, count, weight, model)
-        return filter_questions_batch(qs, job_title, dossier, level, weight, model, count)
-
     print(f"[INFO] Generating blended questions (Resume {blend_pct_resume}% | JD {blend_pct_jd}%)")
 
-    beginner_qs, medium_qs, hard_qs = [], [], []
-    if beginner_count > 0:
-        beginner_qs = generate_questions_blend("beginner", beginner_count, 1)
-    if medium_count > 0:
-        medium_qs = generate_questions_blend("medium", medium_count, 3)
-    if hard_count > 0:
-        hard_qs = generate_questions_blend("hard", hard_count, 5)
-
-    return {
-        "beginner": _strip_internal_question_fields(beginner_qs),
-        "medium": _strip_internal_question_fields(medium_qs),
-        "hard": _strip_internal_question_fields(hard_qs),
-    }
+    return _generate_batched_levels(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="blend",
+        label_prefix="blend_batch",
+        blend_pct_resume=blend_pct_resume,
+        blend_pct_jd=blend_pct_jd,
+    )
 
 # === END OF CORE QUESTION GENERATION WITH BLEND INTEGRATED ===
 
@@ -1313,11 +2369,14 @@ def generate_hybrid_questions(
 ):
     """
     Hybrid mode: 40% blended questions, 60% split (resume vs JD).
-    Preserves user-requested beginner/medium/hard counts.
+    One nested batch call; preserves user-requested beginner/medium/hard counts.
     """
     if dossier is None:
         dossier = build_interview_dossier(structured_resume, job_title, job_description, model=model)
 
+    beginner_count = max(0, int(beginner_count or 0))
+    medium_count = max(0, int(medium_count or 0))
+    hard_count = max(0, int(hard_count or 0))
     total = beginner_count + medium_count + hard_count
     if total == 0:
         return {"beginner": [], "medium": [], "hard": []}
@@ -1390,85 +2449,23 @@ def generate_hybrid_questions(
     print(f"  Blend  -> {Fore.MAGENTA}BEGINNER={blend_dist[0]}, MEDIUM={blend_dist[1]}, HARD={blend_dist[2]}{Style.RESET_ALL}")
     print(f"{Fore.BLUE}==========================\n{Style.RESET_ALL}")
 
-    beginner_qs, medium_qs, hard_qs = [], [], []
-
-    def generate_from_source(level, count, weight, source):
-        if count <= 0:
-            return []
-        mode = "hybrid_resume" if source == "resume" else "hybrid_jd"
-        prompt = _build_theory_prompt(
-            job_title,
-            dossier,
-            level,
-            count,
-            weight,
-            mode=mode,
-            resume_pct=resume_pct,
-            jd_pct=jd_pct,
-        )
-        qs = _generate_questions_with_retries(prompt, level, count, weight, model)
-        return filter_questions_batch(qs, job_title, dossier, level, weight, model, count)
-
-    def generate_blended(level, count, weight):
-        if count <= 0:
-            return []
-        prompt = _build_theory_prompt(
-            job_title,
-            dossier,
-            level,
-            count,
-            weight,
-            mode="hybrid_blend",
-            blend_pct_resume=blend_pct_resume,
-            blend_pct_jd=blend_pct_jd,
-        )
-        qs = _generate_questions_with_retries(prompt, level, count, weight, model)
-        return filter_questions_batch(qs, job_title, dossier, level, weight, model, count)
-
-    beginner_qs.extend(generate_from_source("beginner", resume_dist[0], 1, "resume"))
-    medium_qs.extend(generate_from_source("medium", resume_dist[1], 3, "resume"))
-    hard_qs.extend(generate_from_source("hard", resume_dist[2], 5, "resume"))
-
-    beginner_qs.extend(generate_from_source("beginner", jd_dist[0], 1, "jd"))
-    medium_qs.extend(generate_from_source("medium", jd_dist[1], 3, "jd"))
-    hard_qs.extend(generate_from_source("hard", jd_dist[2], 5, "jd"))
-
-    beginner_qs.extend(generate_blended("beginner", blend_dist[0], 1))
-    medium_qs.extend(generate_blended("medium", blend_dist[1], 3))
-    hard_qs.extend(generate_blended("hard", blend_dist[2], 5))
-
-    def trim_or_pad(lst, target, level, weight):
-        if len(lst) > target:
-            return lst[:target]
-        # Cap pad attempts to avoid token burn (replaces unbounded loop + Fallback stubs)
-        pad_attempts = 0
-        max_pad_attempts = max(target - len(lst), 0) * 2 + 1
-        while len(lst) < target and pad_attempts < max_pad_attempts:
-            pad_attempts += 1
-            need = target - len(lst)
-            new_qs = generate_from_source(level, need, weight, "resume")
-            if not new_qs:
-                new_qs = generate_blended(level, need, weight)
-            if not new_qs:
-                new_qs = generate_from_source(level, need, weight, "jd")
-            if not new_qs:
-                break
-            lst.extend(new_qs)
-            if len(lst) > target:
-                lst = lst[:target]
-        return lst
-
-    beginner_qs = trim_or_pad(beginner_qs, beginner_count, "beginner", 1)
-    medium_qs = trim_or_pad(medium_qs, medium_count, "medium", 3)
-    hard_qs = trim_or_pad(hard_qs, hard_count, "hard", 5)
-
-    print(f"[DONE] Final counts -> Beginner: {len(beginner_qs)}, Medium: {len(medium_qs)}, Hard: {len(hard_qs)}")
-
-    return {
-        "beginner": _strip_internal_question_fields(beginner_qs),
-        "medium": _strip_internal_question_fields(medium_qs),
-        "hard": _strip_internal_question_fields(hard_qs),
-    }
+    return _generate_batched_buckets(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="hybrid",
+        label_prefix="hybrid_batch",
+        resume_dist=resume_dist,
+        jd_dist=jd_dist,
+        blend_dist=blend_dist,
+        resume_pct=resume_pct,
+        jd_pct=jd_pct,
+        blend_pct_resume=blend_pct_resume,
+        blend_pct_jd=blend_pct_jd,
+    )
 
 
 def run_pipeline_from_api(
@@ -1487,20 +2484,23 @@ def run_pipeline_from_api(
     skills_list=None,
     resume_id=None,
     jd_id=None,
+    user_id=None,
 ):
 
     """
     Run the resume pipeline with data from frontend instead of config file.
     Either resume_path (file) or skills_list must be provided.
 
-    Dossier-first: extract text → load/build dossier (local cache by resume_id+jd_id)
+    Dossier-first: extract text → load/build dossier (DB + local cache by resume_id+jd_id)
     → generate questions. Does not call structured-resume LLM.
     Sample answers are deferred to a later stage (even if include_answers=True).
     """
     
     resolved_model = resolve_ollama_model_name()
+    import shutil
 
     for attempt in range(max_retries):
+        temp_dir = None
         try:
             print(f"\n[INFO] API Attempt {attempt + 1} of {max_retries}")
 
@@ -1550,11 +2550,11 @@ def run_pipeline_from_api(
                         raise ResumeParseError(resume_validation_error)
                     candidate_name = _candidate_name_from_text(resume_text)
 
-                # Compact JD+resume dossier: local cache by resume_id+jd_id when available
+                # Compact JD+resume dossier: DB + local cache by resume_id+jd_id when available
                 can_cache = bool((resume_id or "").strip() and (jd_id or "").strip())
                 dossier = None
                 if can_cache:
-                    dossier = load_dossier(resume_id, jd_id)
+                    dossier = load_dossier(resume_id, jd_id, user_id=user_id)
                     if dossier:
                         dossier_cache_status = "hit"
                         print(
@@ -1583,13 +2583,19 @@ def run_pipeline_from_api(
                                 "will retry LLM on next generate"
                             )
                         else:
-                            save_dossier(resume_id, jd_id, dossier, job_title=job_title)
+                            save_dossier(
+                                resume_id,
+                                jd_id,
+                                dossier,
+                                job_title=job_title,
+                                user_id=user_id,
+                            )
 
                 structured_data = _stub_structured_from_dossier(
                     dossier, candidate_name, skills_list=skills_list
                 )
 
-                # Create temporary output directory
+                # Create temporary output directory (cleaned in finally)
                 import tempfile
                 temp_dir = tempfile.mkdtemp(prefix=f"resume_processing_{candidate_name}_")
 
@@ -1716,10 +2722,8 @@ def run_pipeline_from_api(
                 else:
                     print("[INFO] Skipping answer generation as requested.")
 
-                final_csv_path = questions_path
-
-                # Read back questions
-                questions = read_questions_from_csv(final_csv_path)
+                # Read back questions into memory before temp cleanup
+                questions = read_questions_from_csv(questions_path)
 
                 token_tracker.log(
                     extra=(
@@ -1742,8 +2746,6 @@ def run_pipeline_from_api(
                     "answer_generation": answer_generation,
                     "parsed_resume": structured_data,
                     "dossier": dossier,
-                    "temp_dir": temp_dir,
-                    "qa_csv": final_csv_path,
                     "token_usage": token_usage,
                 }
 
@@ -1757,4 +2759,11 @@ def run_pipeline_from_api(
                     "error": f"Max retries reached: {e}"
                 }
             print("[INFO] Retrying...\n")
+        finally:
+            if temp_dir and os.path.isdir(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    print(f"[INFO] Cleaned temp dir: {temp_dir}")
+                except Exception as cleanup_err:
+                    print(f"[WARN] Temp dir cleanup failed: {cleanup_err}")
 

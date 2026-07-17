@@ -59,6 +59,12 @@ from common.auth import (
     check_password,
 )
 from common.db import query_one, query_all, execute, execute_many
+from common.content_hash import (
+    hash_resume_bytes,
+    hash_skills_list,
+    hash_skills_text,
+    hash_job_description,
+)
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import (
     save_bytes,
@@ -433,6 +439,46 @@ def ensure_questions_schema():
     )
 
 
+def ensure_dossier_and_content_hash_schema():
+    """Idempotent: content_hash columns + interview_dossiers table."""
+    execute("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS content_hash TEXT")
+    execute("ALTER TABLE job_descriptions ADD COLUMN IF NOT EXISTS content_hash TEXT")
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_resumes_user_content_hash
+        ON resumes(user_id, content_hash)
+        """
+    )
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_jd_user_content_hash
+        ON job_descriptions(user_id, content_hash)
+        """
+    )
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS interview_dossiers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+            jd_id UUID NOT NULL REFERENCES job_descriptions(id) ON DELETE CASCADE,
+            job_title TEXT,
+            source TEXT,
+            dossier JSONB NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE (resume_id, jd_id)
+        )
+        """
+    )
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_interview_dossiers_user_pair
+        ON interview_dossiers(user_id, resume_id, jd_id)
+        """
+    )
+
+
 def serialize_user(user):
     if not user:
         return None
@@ -524,6 +570,7 @@ def _ensure_app_schemas_once():
         return
     ensure_auth_schema()
     ensure_questions_schema()
+    ensure_dossier_and_content_hash_schema()
     _schemas_initialized = True
 
 
@@ -1279,13 +1326,8 @@ def extract_text_from_uploaded_document(file_path, ext):
     raise RuntimeError(f"Unsupported file type: {ext}")
 
 
-def summarize_job_description_text(raw_text):
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    text = "\n".join(lines).strip()
-    if not text:
-        return {"job_title": "", "job_description": ""}
-
-    title = ""
+def _guess_job_title_from_lines(lines):
+    """Deterministic title guess from extracted JD lines (no LLM)."""
     for line in lines[:12]:
         normalized = line.lower()
         if 2 <= len(line) <= 120 and any(keyword in normalized for keyword in [
@@ -1293,18 +1335,48 @@ def summarize_job_description_text(raw_text):
             'architect', 'lead', 'qa', 'tester', 'intern', 'administrator', 'devops',
             'sre', 'support', 'designer', 'scientist'
         ]):
-            title = line
-            break
+            return line
+    return (lines[0][:120] if lines else "")
 
-    if not title:
-        title = lines[0][:120]
 
+def summarize_job_description_text(raw_text):
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    text = "\n".join(lines).strip()
+    if not text:
+        return {"job_title": "", "job_description": ""}
+
+    title = _guess_job_title_from_lines(lines)
     compact_description = " ".join(segment.strip() for segment in lines[:40])
     compact_description = compact_description[:4000].strip()
 
     return {
         "job_title": title,
         "job_description": compact_description,
+    }
+
+
+def extract_job_description_from_file_text(raw_text):
+    """
+    File-upload path: keep extracted text as-is (no LLM polish) so content_hash stays stable.
+    Only guess a title heuristically for the title tab.
+    """
+    text = (raw_text or "").strip()
+    if not text:
+        return {
+            "job_title": "",
+            "job_description": "",
+            "is_technical": False,
+            "parser": "extract",
+        }
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    job_title = _guess_job_title_from_lines(lines)
+    is_technical = classify_job_description_is_technical(job_title, text)
+    return {
+        "job_title": job_title,
+        "job_description": text,
+        "is_technical": is_technical,
+        "parser": "extract",
     }
 
 
@@ -1723,18 +1795,22 @@ def upload_resume():
     if ext not in ['pdf', 'doc', 'docx', 'txt']:
         return jsonify({"success": False, "message": "File type not allowed"}), 400
     import uuid
+    file_bytes = file.read()
+    content_hash = hash_resume_bytes(file_bytes)
     filename = f"{uuid.uuid4()}.{ext}"
     folder = f"resumes/{user_id}"
-    result = save_bytes(file.read(), folder, filename)
+    result = save_bytes(file_bytes, folder, filename)
     resume = execute(
-        "INSERT INTO resumes (user_id, file_url, file_name, stored_path) VALUES (%s, %s, %s, %s) RETURNING id, file_url, file_name",
-        (user_id, result['public_url'], file.filename, result['relative_path'])
+        "INSERT INTO resumes (user_id, file_url, file_name, stored_path, content_hash) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id, file_url, file_name, content_hash",
+        (user_id, result['public_url'], file.filename, result['relative_path'], content_hash)
     )
     return jsonify({"success": True, "data": {
         "resume_id": str(resume['id']),
         "url": result['public_url'],
         "path": result['relative_path'],
-        "file_name": file.filename
+        "file_name": file.filename,
+        "content_hash": content_hash,
     }})
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1751,9 +1827,12 @@ def create_job_description():
     is_valid_jd, jd_validation_error = validate_job_description_text(jd_description)
     if not is_valid_jd:
         return jsonify({"success": False, "message": jd_validation_error}), 400
+    title = (data.get('title') or "").strip()
+    content_hash = hash_job_description(title, jd_description)
     jd = execute(
-        "INSERT INTO job_descriptions (user_id, title, description, technical) VALUES (%s,%s,%s,%s) RETURNING *",
-        (request.user['id'], data.get('title'), jd_description, data.get('technical', True))
+        "INSERT INTO job_descriptions (user_id, title, description, technical, content_hash) "
+        "VALUES (%s,%s,%s,%s,%s) RETURNING *",
+        (request.user['id'], title, jd_description, data.get('technical', True), content_hash)
     )
     return jsonify({"success": True, "data": dict(jd)}), 201
 
@@ -1764,6 +1843,138 @@ def get_job_descriptions():
     rows = query_all("SELECT * FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC",
                      (request.user['id'],))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
+
+
+@app.route('/api/check-resume-jd-pair', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def check_resume_jd_pair():
+    """
+    Detect existing resume+JD pair for this user via content hash (+ filename gate).
+    Multipart: file + job_title + job_description
+    JSON: skills_text + job_title + job_description (+ optional file_name)
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+
+    user_id = request.user['id']
+    job_title = (request.form.get('job_title') or (request.get_json(silent=True) or {}).get('job_title') or "").strip()
+    job_description = (
+        request.form.get('job_description')
+        or (request.get_json(silent=True) or {}).get('job_description')
+        or ""
+    ).strip()
+    if not job_title or not job_description:
+        return jsonify({
+            "success": False,
+            "message": "job_title and job_description are required",
+        }), 400
+
+    data_json = request.get_json(silent=True) or {}
+    skills_text = (request.form.get('skills_text') or data_json.get('skills_text') or "").strip()
+    incoming_file_name = (request.form.get('file_name') or data_json.get('file_name') or "").strip()
+
+    resume_hash = None
+    filename_match = False
+    content_match_resume = False
+    resume_id = None
+    resume_url = None
+
+    if 'file' in request.files and request.files['file'] and request.files['file'].filename:
+        upload = request.files['file']
+        file_bytes = upload.read()
+        resume_hash = hash_resume_bytes(file_bytes)
+        incoming_file_name = incoming_file_name or (upload.filename or "").strip()
+    elif skills_text:
+        resume_hash = hash_skills_text(skills_text)
+        incoming_file_name = ""
+    else:
+        return jsonify({
+            "success": False,
+            "message": "Provide a resume file or skills_text",
+        }), 400
+
+    jd_hash = hash_job_description(job_title, job_description)
+
+    if incoming_file_name:
+        name_row = query_one(
+            """
+            SELECT id, file_url, content_hash, file_name
+            FROM resumes
+            WHERE user_id=%s AND lower(file_name)=lower(%s)
+            ORDER BY uploaded_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (user_id, incoming_file_name),
+        )
+        if name_row:
+            filename_match = True
+
+    hash_resume_row = query_one(
+        """
+        SELECT id, file_url, content_hash, file_name
+        FROM resumes
+        WHERE user_id=%s AND content_hash=%s
+        ORDER BY uploaded_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        (user_id, resume_hash),
+    ) if resume_hash else None
+    if hash_resume_row:
+        content_match_resume = True
+        resume_id = str(hash_resume_row['id'])
+        resume_url = hash_resume_row.get('file_url')
+
+    jd_row = query_one(
+        """
+        SELECT id, title, content_hash
+        FROM job_descriptions
+        WHERE user_id=%s AND content_hash=%s
+        ORDER BY created_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        (user_id, jd_hash),
+    )
+    jd_id = str(jd_row['id']) if jd_row else None
+    content_match_jd = bool(jd_row)
+    content_match = bool(content_match_resume and content_match_jd)
+
+    questions_exist = False
+    question_set_count = 0
+    latest_question_set = None
+    if resume_id and jd_id:
+        q_stats = query_one(
+            """
+            SELECT COUNT(DISTINCT question_set) AS set_count,
+                   MAX(question_set) AS latest_set
+            FROM questions
+            WHERE resume_id=%s AND jd_id=%s
+            """,
+            (resume_id, jd_id),
+        )
+        if q_stats:
+            question_set_count = int(q_stats.get('set_count') or 0)
+            latest_question_set = q_stats.get('latest_set')
+            questions_exist = question_set_count > 0
+
+    return jsonify({
+        "success": True,
+        "match": {
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "resume_url": resume_url,
+            "resume_hash": resume_hash,
+            "jd_hash": jd_hash,
+            "filename_match": filename_match,
+            "content_match": content_match,
+            "content_match_resume": content_match_resume,
+            "content_match_jd": content_match_jd,
+            "questions_exist": questions_exist and content_match,
+            "question_set_count": question_set_count,
+            "latest_question_set": latest_question_set,
+            "job_title": job_title,
+        },
+    }), 200
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  INTERVIEWS
@@ -2075,12 +2286,14 @@ def parse_job_description():
             if not is_valid_jd:
                 return jsonify({"success": False, "message": jd_validation_error}), 400
 
-            parsed = _parse_job_description_with_ollama(extracted_text, temp_path)
+            # File upload: raw extract only (no LLM polish) so JD content_hash is stable.
+            # Paste / URL flows keep their existing LLM paths.
+            parsed = extract_job_description_from_file_text(extracted_text)
             return jsonify({"success": True, "data": {
                 "job_title": parsed["job_title"],
                 "job_description": parsed["job_description"],
                 "is_technical": parsed["is_technical"],
-                "parser": parsed.get("parser", "local"),
+                "parser": parsed.get("parser", "extract"),
             }})
         finally:
             if os.path.exists(temp_path):
@@ -2286,6 +2499,7 @@ def generate_questions():
             "skills_list": skills_list,
             "resume_id": resume_id,
             "jd_id": jd_id,
+            "user_id": request.user["id"],
         }
 
         temp_resume = None
@@ -2373,7 +2587,7 @@ def generate_questions():
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 def generate_answers_for_question_set():
-    """Generate sample answers (easy/intermediate/expert) for an existing question set."""
+    """Generate one best sample answer per question (dossier-backed batch)."""
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     try:
@@ -2381,7 +2595,6 @@ def generate_answers_for_question_set():
         resume_id = data.get("resume_id")
         jd_id = data.get("jd_id")
         question_set = data.get("question_set")
-        skills_text = data.get("skills_text")
 
         if not resume_id or not jd_id or question_set is None:
             return jsonify({
@@ -2420,55 +2633,41 @@ def generate_answers_for_question_set():
             }), 404
 
         job_title = (jd_row.get("title") or "").strip()
-        job_description = (jd_row.get("description") or "").strip()
-        if not job_title or not job_description:
+
+        from INTERVIEW.dossier_store import load_dossier
+        from INTERVIEW.answer_generation import (
+            _dedupe_question_rows,
+            run_generate_answers_for_question_set,
+        )
+
+        dossier = load_dossier(resume_id, jd_id, user_id=user_id)
+        if not dossier:
             return jsonify({
                 "success": False,
-                "message": "Job title and description are required for answer generation",
-            }), 400
+                "message": (
+                    "Interview dossier not found for this resume and job description. "
+                    "Regenerate questions for this pair first, then generate sample answers."
+                ),
+            }), 404
 
-        skills_list = None
-        resume_path = None
-        file_url = (resume_row.get("file_url") or "").strip()
-        is_skills_profile = (
-            "skills-based" in file_url.lower()
-            or (resume_row.get("file_name") or "").strip().lower() == "skills-based profile"
-        )
-        if is_skills_profile or skills_text:
-            if skills_text:
-                skills_list = [s.strip() for s in skills_text.split(",") if s.strip()]
-            if not skills_list:
-                return jsonify({
-                    "success": False,
-                    "message": (
-                        "This is a skills-based profile. Provide skills_text (comma-separated) "
-                        "to generate sample answers."
-                    ),
-                }), 400
-        else:
-            stored_path = resume_row.get("stored_path")
-            relative = resolve_relative_path(stored_path or file_url)
-            if not relative:
-                return jsonify({
-                    "success": False,
-                    "message": "Resume file path not found for answer generation",
-                }), 400
-            resume_path = relative
-            if not os.path.isabs(resume_path):
-                resume_path = os.path.join(os.path.dirname(__file__), resume_path)
-
-        from INTERVIEW.answer_generation import run_generate_answers_for_question_set
+        dossier_cache = "hit"
+        existing_rows = [dict(row) for row in existing]
+        unique_rows = _dedupe_question_rows(existing_rows)
+        if not unique_rows:
+            return jsonify({
+                "success": False,
+                "message": "No questions found to generate answers for",
+            }), 404
 
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         try:
             result = _run_callable_with_timeout(
                 lambda: run_generate_answers_for_question_set(
-                    resume_path=resume_path,
-                    job_title=job_title,
-                    job_description=job_description,
-                    question_rows=[dict(row) for row in existing],
+                    dossier=dossier,
+                    question_rows=unique_rows,
                     model=get_ollama_model_name(),
-                    skills_list=skills_list,
+                    job_title=job_title,
+                    dossier_cache=dossier_cache,
                 ),
                 GENERATE_ANSWERS_TIMEOUT_SECONDS,
                 label="Sample answer generation",
@@ -2498,39 +2697,63 @@ def generate_answers_for_question_set():
                 "message": "Answer generation returned no questions",
             }), 500
 
-        execute(
-            "DELETE FROM questions WHERE resume_id=%s AND jd_id=%s AND question_set=%s",
-            (resume_id, jd_id, question_set),
-        )
-
         saved = []
         for question in generated:
-            exp = normalize_difficulty_experience(question.get("difficulty_experience"))
+            qid = question.get("id")
+            answer = question.get("expected_answer") or question.get("answer") or ""
+            q_text = (question.get("question_text") or question.get("question") or "").strip()
             level = normalize_question_difficulty(
                 question.get("difficulty_category") or question.get("difficulty_level")
             )
+            if not qid:
+                continue
             row = execute(
                 """
-                INSERT INTO questions (
-                    interview_id, resume_id, jd_id, question_text, expected_answer,
-                    difficulty_level, difficulty_experience, question_set, requires_code
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                UPDATE questions
+                SET expected_answer=%s
+                WHERE id=%s AND resume_id=%s AND jd_id=%s AND question_set=%s
                 RETURNING *
                 """,
-                (
-                    None,
-                    resume_id,
-                    jd_id,
-                    question.get("question_text") or question.get("question"),
-                    question.get("expected_answer") or question.get("answer"),
-                    level,
-                    exp,
-                    question_set,
-                    question.get("requires_code", False),
-                ),
+                (answer, qid, resume_id, jd_id, question_set),
             )
-            saved.append(_serialize_question(row))
+            if not row and q_text:
+                # Fallback: match by text+level if id was synthetic
+                row = execute(
+                    """
+                    UPDATE questions
+                    SET expected_answer=%s
+                    WHERE id = (
+                        SELECT id FROM questions
+                        WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                          AND lower(question_text)=lower(%s)
+                          AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                    )
+                    RETURNING *
+                    """,
+                    (answer, resume_id, jd_id, question_set, q_text, level),
+                )
+            if row:
+                saved.append(_serialize_question(row))
+
+                # Delete legacy duplicate rows (same text+level, different answer-depth rows)
+                execute(
+                    """
+                    DELETE FROM questions
+                    WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                      AND lower(question_text)=lower(%s)
+                      AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                      AND id <> %s
+                    """,
+                    (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
+                )
+
+        if not saved:
+            return jsonify({
+                "success": False,
+                "message": "Failed to save sample answers to the database",
+            }), 500
 
         saved.sort(key=_question_sort_key)
         return jsonify({
@@ -2542,6 +2765,7 @@ def generate_answers_for_question_set():
             "debug": {
                 "answer_generation": result.get("answer_generation", {}),
                 "ollama": ollama_diagnostics,
+                "dossier_cache": dossier_cache,
             },
         })
     except Exception as e:
@@ -3746,9 +3970,18 @@ def resumes_api():
     file_url = _serialize_file_url(data.get('file_url'))
     file_name = data.get('file_name') or 'resume'
     stored_path = data.get('stored_path')
+    content_hash = (data.get('content_hash') or "").strip() or None
+    if not content_hash and file_name.strip().lower() == 'skills-based profile':
+        # Prefer hash from skills_text when provided by client
+        skills_text = data.get('skills_text') or ""
+        if skills_text:
+            content_hash = hash_skills_text(skills_text)
+        else:
+            content_hash = hash_skills_list([])
     row = execute(
-        'INSERT INTO resumes (user_id, file_url, file_name, stored_path) VALUES (%s, %s, %s, %s) RETURNING *',
-        (user_id, file_url, file_name, stored_path),
+        'INSERT INTO resumes (user_id, file_url, file_name, stored_path, content_hash) '
+        'VALUES (%s, %s, %s, %s, %s) RETURNING *',
+        (user_id, file_url, file_name, stored_path, content_hash),
     )
     return jsonify({'success': True, 'data': dict(row)}), 201
 

@@ -654,6 +654,24 @@ function DashboardPage() {
                       </div>
                     </div>
                   </div>
+
+                  {(() => {
+                    const setCount = pairing.questionSets?.length || 0;
+                    const totalQuestions = (pairing.questionSets || []).reduce(
+                      (sum, qs) => sum + (Array.isArray(qs.questions) ? qs.questions.length : 0),
+                      0
+                    );
+                    return (
+                      <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2.5 py-1 text-[11px] sm:text-xs font-medium text-[var(--color-text-secondary)]">
+                          {setCount} question set{setCount !== 1 ? 's' : ''}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-primary)_28%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] px-2.5 py-1 text-[11px] sm:text-xs font-semibold text-[var(--color-primary)]">
+                          {totalQuestions} question{totalQuestions !== 1 ? 's' : ''} total
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                                                {/* Question Sets and Action Buttons - Only show when selected */}
@@ -670,9 +688,23 @@ function DashboardPage() {
                          </div>
                          Question Sets
                        </h3>
-                       <span className="text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] px-2 sm:px-3 py-1 rounded-full border border-[var(--color-border)] self-start sm:self-auto">
-                         {pairing.questionSets.length} set{pairing.questionSets.length !== 1 ? 's' : ''}
-                       </span>
+                       {(() => {
+                         const setCount = pairing.questionSets.length;
+                         const totalQuestions = pairing.questionSets.reduce(
+                           (sum, qs) => sum + (Array.isArray(qs.questions) ? qs.questions.length : 0),
+                           0
+                         );
+                         return (
+                           <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                             <span className="text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] px-2 sm:px-3 py-1 rounded-full border border-[var(--color-border)]">
+                               {setCount} set{setCount !== 1 ? 's' : ''}
+                             </span>
+                             <span className="text-xs sm:text-sm font-medium text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] px-2 sm:px-3 py-1 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_28%,var(--color-border))]">
+                               {totalQuestions} question{totalQuestions !== 1 ? 's' : ''}
+                             </span>
+                           </div>
+                         );
+                       })()}
                      </div>
                      <div className="grid gap-3 sm:gap-4">
                        {pairing.questionSets.map((questionSet) => (
@@ -717,40 +749,37 @@ function DashboardPage() {
       {/* Job Description Modal — portaled so fixed positioning is not trapped by App route motion wrapper */}
       {isModalOpen && modalContent && typeof document !== 'undefined' &&
         createPortal(
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-2 sm:p-4">
-          <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg max-w-xs sm:max-w-md md:max-w-2xl w-full max-h-[90vh] sm:max-h-[80vh] overflow-hidden shadow-xl">
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-3 sm:p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) closeModal();
+            }}
+          >
+          <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl max-w-xs sm:max-w-md md:max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] overflow-hidden shadow-xl flex flex-col">
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-3 sm:p-4 md:p-6 border-b border-[var(--color-border)]">
-              <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)]">
+            <div className="flex items-center justify-between gap-3 p-3 sm:p-4 md:p-5 border-b border-[var(--color-border)] shrink-0">
+              <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)] min-w-0 truncate">
                 {modalContent.title}
               </h3>
               <button
+                type="button"
                 onClick={closeModal}
-                className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-200 p-1 cursor-pointer"
+                aria-label="Close job description"
+                className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-200 p-1 cursor-pointer shrink-0"
               >
                 <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            
-            {/* Modal Content */}
-            <div className="p-3 sm:p-4 md:p-6 overflow-y-auto max-h-[calc(90vh-120px)] sm:max-h-[calc(80vh-120px)]">
+
+            {/* Modal Content — scrolls fully; top X closes */}
+            <div className="p-3 sm:p-4 md:p-6 overflow-y-auto flex-1 min-h-0">
               <div className="prose prose-sm max-w-none">
                 <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] leading-relaxed whitespace-pre-wrap">
                   {modalContent.description}
                 </p>
               </div>
-            </div>
-            
-            {/* Modal Footer */}
-            <div className="flex justify-end p-3 sm:p-4 md:p-6 border-t border-[var(--color-border)]">
-              <button
-                onClick={closeModal}
-                className="px-3 sm:px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90 transition-opacity duration-200 text-sm sm:text-base cursor-pointer"
-              >
-                Close
-              </button>
             </div>
           </div>
         </div>,
@@ -1060,7 +1089,7 @@ function DashboardPage() {
                         Generate Sample Answers
                       </label>
                       <p className="text-xs text-[var(--color-text-secondary)]">
-                        Also create easy, intermediate, and expert sample answers (slower, uses more tokens)
+                        Also create one sample answer for each question (uses more tokens)
                       </p>
                     </div>
                     <button

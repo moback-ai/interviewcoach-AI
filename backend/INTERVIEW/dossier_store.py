@@ -1,12 +1,11 @@
-"""Local filesystem cache for interview dossiers keyed by resume_id + jd_id."""
+"""Interview dossier cache: Postgres only (interview_dossiers)."""
 from __future__ import annotations
 
 import json
-import os
 import re
-from datetime import datetime, timezone
 
-from common.runtime_config import require_env
+# Bump when dossier shape changes incompatibly (e.g. highlights / jd_highlights).
+DOSSIER_SCHEMA_VERSION = 2
 
 _SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -19,77 +18,130 @@ def _sanitize_id(value: str) -> str | None:
     return safe or None
 
 
-def _dossier_dir() -> str:
-    root = require_env("STORAGE_PATH")
-    path = os.path.join(root, "dossiers")
-    os.makedirs(path, exist_ok=True)
-    return path
+def _is_failed_dossier(dossier: dict, source: str = "") -> bool:
+    src = (source or (dossier or {}).get("source") or "").strip()
+    return src == "llm_failed"
 
 
-def dossier_path(resume_id: str, jd_id: str) -> str | None:
-    rid = _sanitize_id(resume_id)
-    jid = _sanitize_id(jd_id)
-    if not rid or not jid:
-        return None
-    return os.path.join(_dossier_dir(), f"{rid}_{jid}.json")
+def _payload_schema_version(payload: dict | None, dossier: dict | None = None) -> int:
+    for source in (payload, dossier):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("schema_version")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
-def load_dossier(resume_id: str, jd_id: str) -> dict | None:
-    """Return cached dossier dict, or None on miss / missing ids / failed cache / read error."""
-    path = dossier_path(resume_id, jd_id)
-    if not path or not os.path.isfile(path):
+def _schema_version_ok(payload: dict | None = None, dossier: dict | None = None) -> bool:
+    version = _payload_schema_version(payload, dossier)
+    if version >= DOSSIER_SCHEMA_VERSION:
+        return True
+    print(
+        f"[WARN] Ignoring dossier cache schema_version={version} "
+        f"(need >={DOSSIER_SCHEMA_VERSION}); will rebuild via LLM"
+    )
+    return False
+
+
+def _load_dossier_from_db(resume_id: str, jd_id: str, user_id: str | None) -> dict | None:
+    if not user_id:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
+        from common.db import query_one
+
+        row = query_one(
+            """
+            SELECT dossier, source
+            FROM interview_dossiers
+            WHERE user_id=%s AND resume_id=%s AND jd_id=%s
+            """,
+            (user_id, resume_id, jd_id),
+        )
     except Exception as e:
-        print(f"[WARN] Failed to load dossier cache {path}: {e}")
+        print(f"[WARN] Failed to load dossier from DB: {e}")
         return None
-    if not isinstance(payload, dict):
+    if not row:
         return None
-    dossier = payload.get("dossier")
-    if isinstance(dossier, dict) and dossier:
-        source = (dossier.get("source") or payload.get("source") or "").strip()
-        if source == "llm_failed":
-            print(
-                f"[WARN] Ignoring cached llm_failed dossier at {path}; "
-                "will rebuild via LLM"
-            )
+    dossier = row.get("dossier")
+    if isinstance(dossier, str):
+        try:
+            dossier = json.loads(dossier)
+        except Exception:
             return None
-        return dossier
-    # Allow legacy/plain dossier files without wrapper
-    if payload.get("must_have_skills") is not None or payload.get("source"):
-        if (payload.get("source") or "").strip() == "llm_failed":
-            print(
-                f"[WARN] Ignoring cached llm_failed dossier at {path}; "
-                "will rebuild via LLM"
-            )
-            return None
-        return payload
-    return None
+    if not isinstance(dossier, dict) or not dossier:
+        return None
+    source = (row.get("source") or dossier.get("source") or "").strip()
+    if _is_failed_dossier(dossier, source):
+        print("[WARN] Ignoring DB llm_failed dossier; will rebuild via LLM")
+        return None
+    if not _schema_version_ok(None, dossier):
+        return None
+    return dossier
 
 
-def save_dossier(resume_id: str, jd_id: str, dossier: dict, job_title: str = "") -> bool:
-    """Persist dossier with metadata. Skips llm_failed. Returns False if ids missing or write fails."""
-    if (dossier or {}).get("source") == "llm_failed":
-        print("[WARN] Refusing to cache dossier with source=llm_failed")
+def _save_dossier_to_db(
+    resume_id: str,
+    jd_id: str,
+    dossier: dict,
+    job_title: str = "",
+    user_id: str | None = None,
+) -> bool:
+    if not user_id:
+        print("[WARN] Skipping dossier DB save: user_id is required")
         return False
-    path = dossier_path(resume_id, jd_id)
-    if not path:
-        return False
-    payload = {
-        "resume_id": (resume_id or "").strip(),
-        "jd_id": (jd_id or "").strip(),
-        "job_title": (job_title or "").strip() or (dossier or {}).get("job_title") or "",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "source": (dossier or {}).get("source") or "llm",
-        "dossier": dossier or {},
-    }
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f"[INFO] Dossier saved: {path}")
+        from common.db import execute
+
+        dossier = dict(dossier or {})
+        dossier["schema_version"] = DOSSIER_SCHEMA_VERSION
+        title = (job_title or "").strip() or dossier.get("job_title") or ""
+        source = dossier.get("source") or "llm"
+        dossier_json = json.dumps(dossier)
+        execute(
+            """
+            INSERT INTO interview_dossiers (
+                user_id, resume_id, jd_id, job_title, source, dossier, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, now())
+            ON CONFLICT (resume_id, jd_id) DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                job_title = EXCLUDED.job_title,
+                source = EXCLUDED.source,
+                dossier = EXCLUDED.dossier,
+                updated_at = now()
+            """,
+            (user_id, resume_id, jd_id, title, source, dossier_json),
+        )
+        print(f"[INFO] Dossier DB upsert resume_id={resume_id} jd_id={jd_id}")
         return True
     except Exception as e:
-        print(f"[WARN] Failed to save dossier cache {path}: {e}")
+        print(f"[WARN] Failed to save dossier to DB: {e}")
         return False
+
+
+def load_dossier(resume_id: str, jd_id: str, user_id: str | None = None) -> dict | None:
+    """Return dossier from Postgres, or None on miss / failed cache / read error."""
+    if not _sanitize_id(resume_id) or not _sanitize_id(jd_id):
+        return None
+    return _load_dossier_from_db(resume_id, jd_id, user_id)
+
+
+def save_dossier(
+    resume_id: str,
+    jd_id: str,
+    dossier: dict,
+    job_title: str = "",
+    user_id: str | None = None,
+) -> bool:
+    """Persist dossier to Postgres. Skips llm_failed. Returns False if ids/user missing."""
+    if _is_failed_dossier(dossier or {}):
+        print("[WARN] Refusing to cache dossier with source=llm_failed")
+        return False
+    if not _sanitize_id(resume_id) or not _sanitize_id(jd_id):
+        return False
+    return _save_dossier_to_db(
+        resume_id, jd_id, dossier, job_title=job_title, user_id=user_id
+    )
