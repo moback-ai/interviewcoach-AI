@@ -3155,29 +3155,153 @@ def _execute_python(code):
 
 
 def _execute_typescript(code):
-    return _run_interpreted(["npx", "--yes", "ts-node"], code, ".ts")
+    npx = "npx.cmd" if _IS_WINDOWS else "npx"
+    return _run_interpreted([npx, "--yes", "tsx"], code, ".ts")
 
 
 def _execute_csharp(code):
-    return _run_interpreted(["dotnet", "script"], code, ".cs")
+    """Run C# via `dotnet run` + temp project (SDK only; no dotnet-script)."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+
+    import shutil
+
+    work_dir = tempfile.mkdtemp(prefix="ic_csharp_")
+    csproj_path = os.path.join(work_dir, "CodeExec.csproj")
+    program_path = os.path.join(work_dir, "Program.cs")
+    # First run may restore packages; allow more time than simple scripts
+    timeout = max(_CODE_TIMEOUT, 30)
+    try:
+        with open(csproj_path, "w", encoding="utf-8") as f:
+            f.write(
+                """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"""
+            )
+        with open(program_path, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        env = None
+        run_kwargs = _subprocess_kwargs(timeout)
+        # Ensure telemetry/first-run noise is off; merge with sandbox env on Linux
+        base_env = run_kwargs.pop("env", None) or os.environ.copy()
+        base_env = {
+            **base_env,
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_NOLOGO": "1",
+            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+        }
+        run_kwargs["env"] = base_env
+
+        result = subprocess.run(
+            ["dotnet", "run", "--project", csproj_path, "--nologo"],
+            **run_kwargs,
+        )
+        error = result.stderr if result.returncode != 0 else None
+        # dotnet often writes build info to stderr even on success — only treat as error on failure
+        if result.returncode == 0:
+            return _success_payload(result.stdout, None)
+        return _success_payload(result.stdout, error or result.stderr)
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or "dotnet"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "message": f"Code execution timed out ({timeout}s limit)",
+        }), 408
+    finally:
+        try:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def _execute_go(code):
     return _run_interpreted(["go", "run"], code, ".go")
 
 
+def _java_main_class(code):
+    """Pick the Java class to compile/run (must match the .java filename)."""
+    public = re.search(r"\bpublic\s+class\s+([A-Za-z_]\w*)", code)
+    if public:
+        return public.group(1)
+    with_main = re.search(
+        r"\bclass\s+([A-Za-z_]\w*)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w.,\s]+)?\{"
+        r"[\s\S]*?\bpublic\s+static\s+void\s+main\s*\(",
+        code,
+    )
+    if with_main:
+        return with_main.group(1)
+    first = re.search(r"\bclass\s+([A-Za-z_]\w*)", code)
+    if first:
+        return first.group(1)
+    return "Main"
+
+
 def _execute_java(code):
-    def compile_cmd(path):
-        return ["javac", path]
+    """Compile/run Java using ClassName.java so public classes work."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
 
-    def run_cmd(path):
-        class_name = os.path.splitext(os.path.basename(path))[0]
-        return ["java", "-cp", os.path.dirname(path), class_name]
+    class_name = _java_main_class(code)
+    if not re.fullmatch(r"[A-Za-z_]\w*", class_name):
+        return jsonify({"success": False, "message": "Invalid Java class name"}), 400
 
-    def extras(path):
-        return [path.replace(".java", ".class")]
+    work_dir = tempfile.mkdtemp(prefix="ic_java_")
+    source_path = os.path.join(work_dir, f"{class_name}.java")
+    class_path = os.path.join(work_dir, f"{class_name}.class")
+    try:
+        with open(source_path, "w", encoding="utf-8") as f:
+            f.write(code)
 
-    return _run_compile_then_exec(compile_cmd, run_cmd, code, ".java", extra_cleanup=extras)
+        compiled = subprocess.run(
+            ["javac", source_path],
+            **_subprocess_kwargs(_CODE_TIMEOUT),
+        )
+        if compiled.returncode != 0:
+            return _success_payload("", compiled.stderr)
+
+        result = subprocess.run(
+            ["java", "-cp", work_dir, class_name],
+            **_subprocess_kwargs(_CODE_TIMEOUT),
+        )
+        error = result.stderr if result.returncode != 0 else None
+        return _success_payload(result.stdout, error)
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or "javac"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "message": f"Code execution timed out ({_CODE_TIMEOUT}s limit)",
+        }), 408
+    finally:
+        _cleanup(source_path, class_path)
+        try:
+            os.rmdir(work_dir)
+        except OSError:
+            # Remove leftover .class files from nested/inner classes if any
+            try:
+                for name in os.listdir(work_dir):
+                    _cleanup(os.path.join(work_dir, name))
+                os.rmdir(work_dir)
+            except OSError:
+                pass
 
 
 def _execute_cpp(code):
