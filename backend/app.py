@@ -3011,64 +3011,361 @@ def overall_performance():
 #  CODE EXECUTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sandbox_preexec():
-    """Apply resource limits before exec — Linux only."""
-    try:
-        import resource
-        # Max CPU seconds
-        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        # Max output size 16 MB
-        resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
-        # Max RAM 256 MB
-        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-        # Max open file descriptors
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        # No new processes
-        resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
-    except Exception:
-        pass  # Non-Linux platforms skip silently
-
-
+_IS_WINDOWS = sys.platform == "win32"
 _CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
+_CODE_TIMEOUT = 10
+_SANDBOX_PATH = (
+    "/usr/bin:/bin:/usr/local/bin:/usr/lib/jvm/default-java/bin:"
+    "/usr/local/go/bin:/root/.cargo/bin"
+)
 
-# Simple pattern blocklist for obviously dangerous code
-import re as _re
-_DANGER_PATTERNS = _re.compile(
+_DANGER_PATTERNS = re.compile(
     r'(import\s+os|import\s+subprocess|import\s+sys|'
     r'__import__|open\s*\(|exec\s*\(|eval\s*\(|'
     r'shutil|socket|requests|urllib|http\.client|'
     r'importlib|ctypes|threading|multiprocessing|'
     r'require\s*\(\s*[\'"]child_process|require\s*\(\s*[\'"]fs|'
-    r'require\s*\(\s*[\'"]net|process\.|global\.|Function\s*\()',
-    _re.IGNORECASE
+    r'require\s*\(\s*[\'"]net|process\.|global\.|globalThis\.|Function\s*\()',
+    re.IGNORECASE,
 )
 
 
-def _run_code(cmd, code, suffix, timeout=8):
+def _sandbox_preexec():
+    """Apply resource limits before exec — Linux only."""
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        # Allow a few forks for compilers / npx / go run (0 breaks toolchains)
+        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+    except Exception:
+        pass
+
+
+def _subprocess_kwargs(timeout=_CODE_TIMEOUT):
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+    }
+    if not _IS_WINDOWS:
+        kwargs["preexec_fn"] = _sandbox_preexec
+        kwargs["env"] = {"PATH": _SANDBOX_PATH, "HOME": "/tmp", "LANG": "C.UTF-8"}
+    return kwargs
+
+
+def _cap_output(text, limit=50_000):
+    if not text:
+        return text or ""
+    return text[:limit]
+
+
+def _validate_code(code):
     if len(code) > _CODE_SIZE_LIMIT:
         return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
     if _DANGER_PATTERNS.search(code):
         return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
-    with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
+    return None
+
+
+def _success_payload(output="", error=None, test_results=None):
+    return jsonify({
+        "success": True,
+        "data": {
+            "output": _cap_output(output),
+            "error": _cap_output(error, 10_000) if error else None,
+            "testResults": test_results,
+        },
+    })
+
+
+def _write_temp(code, suffix):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, encoding="utf-8") as f:
         f.write(code)
-        path = f.name
+        return f.name
+
+
+def _cleanup(*paths):
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _python_cmd():
+    return [sys.executable] if _IS_WINDOWS else ["python3"]
+
+
+def _run_interpreted(cmd, code, suffix, timeout=_CODE_TIMEOUT):
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+    path = _write_temp(code, suffix)
     try:
-        result = subprocess.run(
-            cmd + [path],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            preexec_fn=_sandbox_preexec,
-            env={"PATH": "/usr/bin:/usr/local/bin"}  # Stripped env
-        )
-        output = result.stdout[:50_000]  # Cap output at 50 KB
-        error = result.stderr[:10_000] if result.returncode != 0 else None
-        return jsonify({"success": True, "data": {"output": output, "error": error}})
+        result = subprocess.run(cmd + [path], **_subprocess_kwargs(timeout))
+        error = result.stderr if result.returncode != 0 else None
+        return _success_payload(result.stdout, error)
+    except FileNotFoundError as e:
+        missing = cmd[0] if cmd else "runtime"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
     except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "message": "Code execution timed out (8s limit)"}), 408
+        return jsonify({"success": False, "message": f"Code execution timed out ({timeout}s limit)"}), 408
     finally:
-        if os.path.exists(path):
-            os.unlink(path)
+        _cleanup(path)
+
+
+def _run_compile_then_exec(compile_cmd, run_cmd, code, suffix, extra_cleanup=None, timeout=_CODE_TIMEOUT):
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+    path = _write_temp(code, suffix)
+    extras = list(extra_cleanup(path) if callable(extra_cleanup) else (extra_cleanup or []))
+    try:
+        compiled = subprocess.run(compile_cmd(path), **_subprocess_kwargs(timeout))
+        if compiled.returncode != 0:
+            return _success_payload("", compiled.stderr)
+        result = subprocess.run(run_cmd(path), **_subprocess_kwargs(timeout))
+        error = result.stderr if result.returncode != 0 else None
+        return _success_payload(result.stdout, error)
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or (compile_cmd(path)[0] if path else "compiler")
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "message": f"Code execution timed out ({timeout}s limit)"}), 408
+    finally:
+        _cleanup(path, *extras)
+
+
+def _execute_javascript(code):
+    return _run_interpreted(["node"], code, ".js")
+
+
+def _execute_python(code):
+    return _run_interpreted(_python_cmd(), code, ".py")
+
+
+def _execute_typescript(code):
+    npx = "npx.cmd" if _IS_WINDOWS else "npx"
+    return _run_interpreted([npx, "--yes", "tsx"], code, ".ts")
+
+
+def _execute_csharp(code):
+    """Run C# via `dotnet run` + temp project (SDK only; no dotnet-script)."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+
+    import shutil
+
+    work_dir = tempfile.mkdtemp(prefix="ic_csharp_")
+    csproj_path = os.path.join(work_dir, "CodeExec.csproj")
+    program_path = os.path.join(work_dir, "Program.cs")
+    # First run may restore packages; allow more time than simple scripts
+    timeout = max(_CODE_TIMEOUT, 30)
+    try:
+        with open(csproj_path, "w", encoding="utf-8") as f:
+            f.write(
+                """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"""
+            )
+        with open(program_path, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        env = None
+        run_kwargs = _subprocess_kwargs(timeout)
+        # Ensure telemetry/first-run noise is off; merge with sandbox env on Linux
+        base_env = run_kwargs.pop("env", None) or os.environ.copy()
+        base_env = {
+            **base_env,
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_NOLOGO": "1",
+            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+        }
+        run_kwargs["env"] = base_env
+
+        result = subprocess.run(
+            ["dotnet", "run", "--project", csproj_path, "--nologo"],
+            **run_kwargs,
+        )
+        error = result.stderr if result.returncode != 0 else None
+        # dotnet often writes build info to stderr even on success — only treat as error on failure
+        if result.returncode == 0:
+            return _success_payload(result.stdout, None)
+        return _success_payload(result.stdout, error or result.stderr)
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or "dotnet"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "message": f"Code execution timed out ({timeout}s limit)",
+        }), 408
+    finally:
+        try:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _execute_go(code):
+    return _run_interpreted(["go", "run"], code, ".go")
+
+
+def _java_main_class(code):
+    """Pick the Java class to compile/run (must match the .java filename)."""
+    public = re.search(r"\bpublic\s+class\s+([A-Za-z_]\w*)", code)
+    if public:
+        return public.group(1)
+    with_main = re.search(
+        r"\bclass\s+([A-Za-z_]\w*)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w.,\s]+)?\{"
+        r"[\s\S]*?\bpublic\s+static\s+void\s+main\s*\(",
+        code,
+    )
+    if with_main:
+        return with_main.group(1)
+    first = re.search(r"\bclass\s+([A-Za-z_]\w*)", code)
+    if first:
+        return first.group(1)
+    return "Main"
+
+
+def _execute_java(code):
+    """Compile/run Java using ClassName.java so public classes work."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+
+    class_name = _java_main_class(code)
+    if not re.fullmatch(r"[A-Za-z_]\w*", class_name):
+        return jsonify({"success": False, "message": "Invalid Java class name"}), 400
+
+    work_dir = tempfile.mkdtemp(prefix="ic_java_")
+    source_path = os.path.join(work_dir, f"{class_name}.java")
+    class_path = os.path.join(work_dir, f"{class_name}.class")
+    try:
+        with open(source_path, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        compiled = subprocess.run(
+            ["javac", source_path],
+            **_subprocess_kwargs(_CODE_TIMEOUT),
+        )
+        if compiled.returncode != 0:
+            return _success_payload("", compiled.stderr)
+
+        result = subprocess.run(
+            ["java", "-cp", work_dir, class_name],
+            **_subprocess_kwargs(_CODE_TIMEOUT),
+        )
+        error = result.stderr if result.returncode != 0 else None
+        return _success_payload(result.stdout, error)
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or "javac"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "message": f"Code execution timed out ({_CODE_TIMEOUT}s limit)",
+        }), 408
+    finally:
+        _cleanup(source_path, class_path)
+        try:
+            os.rmdir(work_dir)
+        except OSError:
+            # Remove leftover .class files from nested/inner classes if any
+            try:
+                for name in os.listdir(work_dir):
+                    _cleanup(os.path.join(work_dir, name))
+                os.rmdir(work_dir)
+            except OSError:
+                pass
+
+
+def _execute_cpp(code):
+    def binary_path(path):
+        base = path[:-4] if path.endswith(".cpp") else path
+        return base + (".exe" if _IS_WINDOWS else "")
+
+    def compile_cmd(path):
+        return ["g++", "-o", binary_path(path), path]
+
+    def run_cmd(path):
+        return [binary_path(path)]
+
+    def extras(path):
+        return [binary_path(path)]
+
+    return _run_compile_then_exec(compile_cmd, run_cmd, code, ".cpp", extra_cleanup=extras)
+
+
+def _execute_rust(code):
+    def binary_path(path):
+        base = path[:-3] if path.endswith(".rs") else path
+        return base + (".exe" if _IS_WINDOWS else "")
+
+    def compile_cmd(path):
+        return ["rustc", path, "-o", binary_path(path)]
+
+    def run_cmd(path):
+        return [binary_path(path)]
+
+    def extras(path):
+        return [binary_path(path)]
+
+    return _run_compile_then_exec(compile_cmd, run_cmd, code, ".rs", extra_cleanup=extras)
+
+
+def _execute_sql(code):
+    """Run SQL against an in-memory SQLite DB (no external binary required)."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+    try:
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.cursor()
+            statements = [s.strip() for s in code.split(";") if s.strip()]
+            chunks = []
+            for stmt in statements:
+                cursor.execute(stmt)
+                if cursor.description:
+                    cols = [d[0] for d in cursor.description]
+                    rows = cursor.fetchall()
+                    chunks.append("\t".join(cols))
+                    for row in rows:
+                        chunks.append("\t".join("" if v is None else str(v) for v in row))
+                else:
+                    chunks.append(f"OK ({cursor.rowcount} row(s) affected)")
+            conn.commit()
+            return _success_payload("\n".join(chunks) if chunks else "OK")
+        finally:
+            conn.close()
+    except Exception as e:
+        return _success_payload("", str(e))
 
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
@@ -3081,47 +3378,25 @@ def execute_code():
     language = data.get('language', 'python').lower()
     if not code:
         return jsonify({"success": False, "message": "No code provided"}), 400
-    if language == 'javascript':
-        return jsonify({
-            "success": False,
-            "message": "JavaScript execution is disabled for security reasons",
-        }), 400
+
+    handlers = {
+        "javascript": _execute_javascript,
+        "python": _execute_python,
+        "java": _execute_java,
+        "cpp": _execute_cpp,
+        "c++": _execute_cpp,
+        "csharp": _execute_csharp,
+        "c#": _execute_csharp,
+        "go": _execute_go,
+        "rust": _execute_rust,
+        "typescript": _execute_typescript,
+        "sql": _execute_sql,
+    }
+    handler = handlers.get(language)
+    if not handler:
+        return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
     try:
-        if language == 'python':
-            return _run_code(['python3'], code, '.py')
-        elif language == 'java':
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as f:
-                f.write(code); path = f.name
-            try:
-                if _DANGER_PATTERNS.search(code):
-                    return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
-                c = subprocess.run(
-                    ['javac', path],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    preexec_fn=_sandbox_preexec,
-                    env={"PATH": "/usr/bin:/usr/local/bin"},
-                )
-                if c.returncode != 0:
-                    return jsonify({"success": True, "data": {"output": "", "error": c.stderr}})
-                cls = os.path.splitext(os.path.basename(path))[0]
-                r = subprocess.run(
-                    ['java', '-cp', os.path.dirname(path), cls],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    preexec_fn=_sandbox_preexec,
-                    env={"PATH": "/usr/bin:/usr/local/bin"},
-                )
-                return jsonify({"success": True, "data": {"output": r.stdout, "error": r.stderr or None}})
-            except subprocess.TimeoutExpired:
-                return jsonify({"success": False, "message": "Timed out"}), 408
-            finally:
-                for p in [path, path.replace('.java', '.class')]:
-                    if os.path.exists(p): os.unlink(p)
-        else:
-            return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
+        return handler(code)
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
