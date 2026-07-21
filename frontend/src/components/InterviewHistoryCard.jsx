@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw } from 'react-icons/fi';
+import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw, FiList } from 'react-icons/fi';
 import NoticeModal from './common/NoticeModal';
 import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
 
@@ -135,28 +135,39 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
   const hasCompletedInterviews = questionSet.interviews.some(interview => 
     interview.status === 'completed' || interview.status === 'ENDED'
   );
-  
 
+  const questionCount = Array.isArray(questionSet.questions)
+    ? questionSet.questions.length
+    : Number(questionSet.questionCount) || 0;
 
   return (
     <>
       <div className="bg-[var(--color-input-bg)] rounded-xl border border-[var(--color-border)] p-3 sm:p-4 md:p-6 shadow-md hover:shadow-lg transition-all duration-300">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 sm:mb-4 gap-3 sm:gap-0">
-          <div className="flex items-center space-x-2 sm:space-x-3">
-            <div className="bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white rounded-xl w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center shadow-lg">
+          <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+            <div className="bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white rounded-xl w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center shadow-lg shrink-0">
               <span className="text-sm sm:text-base md:text-lg font-bold">{questionSet.questionSetNumber}</span>
             </div>
-            <div>
-              <h4 className="text-sm sm:text-base font-semibold text-[var(--color-text-primary)]">
-                Question Set {questionSet.questionSetNumber}
-              </h4>
-              <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-sm sm:text-base font-semibold text-[var(--color-text-primary)]">
+                  Question Set {questionSet.questionSetNumber}
+                </h4>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_28%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] px-2 py-0.5 text-[10px] sm:text-xs font-semibold text-[var(--color-primary)]"
+                  title={`${questionCount} question${questionCount !== 1 ? 's' : ''} in this set`}
+                >
+                  <FiList size={11} className="opacity-80" />
+                  {questionCount} question{questionCount !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] mt-0.5">
                 {questionSet.total_attempts} attempt{questionSet.total_attempts !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
-          
+
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
             {/* Schedule Interview Button - Show when no interviews exist */}

@@ -17,15 +17,25 @@ def _region() -> str:
     return optional_env("BEDROCK_REGION", optional_env("AWS_REGION", "ap-south-1"))
 
 
-def _max_tokens() -> int:
+def _max_tokens(override: int | None = None) -> int:
+    if override is not None:
+        try:
+            return max(64, min(int(override), 8192))
+        except (TypeError, ValueError):
+            pass
     raw = optional_env("LLM_MAX_TOKENS", optional_env("OLLAMA_NUM_PREDICT", "384"))
     try:
-        return max(64, min(int(raw or 384), 4096))
+        return max(64, min(int(raw or 384), 8192))
     except (TypeError, ValueError):
         return 384
 
 
-def _temperature() -> float:
+def _temperature(override: float | None = None) -> float:
+    if override is not None:
+        try:
+            return max(0.0, min(float(override), 1.0))
+        except (TypeError, ValueError):
+            pass
     raw = optional_env("LLM_TEMPERATURE", "0.6")
     try:
         return max(0.0, min(float(raw), 1.0))
@@ -77,15 +87,22 @@ class BedrockLLMProvider:
     def __init__(self) -> None:
         self._client = _boto3().client("bedrock-runtime", region_name=_region())
 
-    def chat(self, *, model: str | None, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def chat(
+        self,
+        *,
+        model: str | None,
+        messages: list[dict[str, Any]],
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
         model_id = resolve_chat_model(model)
         system_blocks, converse_messages = _to_converse_messages(messages)
         kwargs: dict[str, Any] = {
             "modelId": model_id,
             "messages": converse_messages,
             "inferenceConfig": {
-                "maxTokens": _max_tokens(),
-                "temperature": _temperature(),
+                "maxTokens": _max_tokens(max_tokens),
+                "temperature": _temperature(temperature),
             },
         }
         if system_blocks:
@@ -95,17 +112,37 @@ class BedrockLLMProvider:
         except Exception as exc:
             raise RuntimeError(f"Bedrock converse failed: {exc}") from exc
         text = _extract_converse_text(response)
-        return {"message": {"content": text}, "model": model_id, "provider": self.name}
+        raw_usage = response.get("usage") or {}
+        usage = {
+            "input_tokens": int(raw_usage.get("inputTokens") or 0),
+            "output_tokens": int(raw_usage.get("outputTokens") or 0),
+            "total_tokens": int(raw_usage.get("totalTokens") or 0),
+        }
+        if not usage["total_tokens"]:
+            usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+        return {
+            "message": {"content": text},
+            "model": model_id,
+            "provider": self.name,
+            "usage": usage,
+        }
 
-    def chat_stream(self, *, model: str | None, messages: list[dict[str, Any]]) -> Iterator[str]:
+    def chat_stream(
+        self,
+        *,
+        model: str | None,
+        messages: list[dict[str, Any]],
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
         model_id = resolve_chat_model(model)
         system_blocks, converse_messages = _to_converse_messages(messages)
         kwargs: dict[str, Any] = {
             "modelId": model_id,
             "messages": converse_messages,
             "inferenceConfig": {
-                "maxTokens": _max_tokens(),
-                "temperature": _temperature(),
+                "maxTokens": _max_tokens(max_tokens),
+                "temperature": _temperature(temperature),
             },
         }
         if system_blocks:
