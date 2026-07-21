@@ -28,15 +28,12 @@ RUN apt-get update \
     && rm /tmp/packages-microsoft-prod.deb \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs dotnet-sdk-8.0 \
-    && node --version \
-    && npx --version \
-    && javac --version \
-    && java --version \
-    && g++ --version \
-    && go version \
-    && rustc --version \
-    && dotnet --version \
     && rm -rf /var/lib/apt/lists/*
+
+COPY docker/api/verify-runtime-toolchains.sh /usr/local/bin/verify-runtime-toolchains
+
+RUN chmod 0755 /usr/local/bin/verify-runtime-toolchains \
+    && verify-runtime-toolchains
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
 
