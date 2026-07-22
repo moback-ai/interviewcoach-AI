@@ -3422,11 +3422,13 @@ def overall_performance():
 _IS_WINDOWS = sys.platform == "win32"
 _CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
 _CODE_TIMEOUT = 10
-# interview snippets while concurrency limits protect the host under load.
-_CODE_RLIMIT_AS_BYTES = 1024 * 1024 * 1024
-_CODE_EXEC_MAX_CONCURRENT = 3
+# 1GB was still too low for Node/tsx, JVM, and .NET on Linux.
+# 2GB + max 2 concurrent runs balances heavier runtimes with host safety.
+_CODE_RLIMIT_AS_BYTES = 2 * 1024 * 1024 * 1024
+_CODE_EXEC_MAX_CONCURRENT = 2
 _CODE_EXEC_SLOT_WAIT_SECONDS = 2.0
 _CODE_EXEC_SEMAPHORE = threading.BoundedSemaphore(_CODE_EXEC_MAX_CONCURRENT)
+_CODE_RLIMIT_NPROC = 256
 _SANDBOX_PATH = (
     "/usr/bin:/bin:/usr/local/bin:/usr/lib/jvm/default-java/bin:"
     "/usr/local/go/bin:/root/.cargo/bin"
@@ -3454,8 +3456,8 @@ def _sandbox_preexec():
             (_CODE_RLIMIT_AS_BYTES, _CODE_RLIMIT_AS_BYTES),
         )
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        # Allow a few forks for compilers / npx / go run (0 breaks toolchains)
-        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+        # go run / npx / javac / dotnet need more than 64 threads under load
+        resource.setrlimit(resource.RLIMIT_NPROC, (_CODE_RLIMIT_NPROC, _CODE_RLIMIT_NPROC))
     except Exception:
         pass
 
@@ -3472,8 +3474,8 @@ def _subprocess_kwargs(timeout=_CODE_TIMEOUT):
             "PATH": _SANDBOX_PATH,
             "HOME": "/tmp",
             "LANG": "C.UTF-8",
-            # Cap JS heap; RLIMIT_AS still bounds total process VA.
-            "NODE_OPTIONS": "--max-old-space-size=256",
+            # npx tsx needs more heap than plain node; RLIMIT_AS still caps VA.
+            "NODE_OPTIONS": "--max-old-space-size=512",
             "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
             "DOTNET_NOLOGO": "1",
             "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
@@ -3488,12 +3490,15 @@ def _cap_output(text, limit=50_000):
 
 
 def _process_error(result):
-    """Surface failures even when stderr is empty (common after OOM/signal kills)."""
+    """Surface failures even when stderr is empty (javac often uses stdout; OOM may silence both)."""
     if result.returncode == 0:
         return None
     err = (result.stderr or "").strip()
     if err:
         return err
+    out = (result.stdout or "").strip()
+    if out:
+        return out
     return (
         f"Process exited with code {result.returncode} "
         "(no stderr; possible OOM/sandbox kill)"
