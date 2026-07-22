@@ -3422,6 +3422,11 @@ def overall_performance():
 _IS_WINDOWS = sys.platform == "win32"
 _CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
 _CODE_TIMEOUT = 10
+# interview snippets while concurrency limits protect the host under load.
+_CODE_RLIMIT_AS_BYTES = 1024 * 1024 * 1024
+_CODE_EXEC_MAX_CONCURRENT = 3
+_CODE_EXEC_SLOT_WAIT_SECONDS = 2.0
+_CODE_EXEC_SEMAPHORE = threading.BoundedSemaphore(_CODE_EXEC_MAX_CONCURRENT)
 _SANDBOX_PATH = (
     "/usr/bin:/bin:/usr/local/bin:/usr/lib/jvm/default-java/bin:"
     "/usr/local/go/bin:/root/.cargo/bin"
@@ -3444,7 +3449,10 @@ def _sandbox_preexec():
         import resource
         resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
         resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+        resource.setrlimit(
+            resource.RLIMIT_AS,
+            (_CODE_RLIMIT_AS_BYTES, _CODE_RLIMIT_AS_BYTES),
+        )
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
         # Allow a few forks for compilers / npx / go run (0 breaks toolchains)
         resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
@@ -3460,7 +3468,16 @@ def _subprocess_kwargs(timeout=_CODE_TIMEOUT):
     }
     if not _IS_WINDOWS:
         kwargs["preexec_fn"] = _sandbox_preexec
-        kwargs["env"] = {"PATH": _SANDBOX_PATH, "HOME": "/tmp", "LANG": "C.UTF-8"}
+        kwargs["env"] = {
+            "PATH": _SANDBOX_PATH,
+            "HOME": "/tmp",
+            "LANG": "C.UTF-8",
+            # Cap JS heap; RLIMIT_AS still bounds total process VA.
+            "NODE_OPTIONS": "--max-old-space-size=256",
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_NOLOGO": "1",
+            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+        }
     return kwargs
 
 
@@ -3468,6 +3485,19 @@ def _cap_output(text, limit=50_000):
     if not text:
         return text or ""
     return text[:limit]
+
+
+def _process_error(result):
+    """Surface failures even when stderr is empty (common after OOM/signal kills)."""
+    if result.returncode == 0:
+        return None
+    err = (result.stderr or "").strip()
+    if err:
+        return err
+    return (
+        f"Process exited with code {result.returncode} "
+        "(no stderr; possible OOM/sandbox kill)"
+    )
 
 
 def _validate_code(code):
@@ -3487,6 +3517,16 @@ def _success_payload(output="", error=None, test_results=None):
             "testResults": test_results,
         },
     })
+
+
+def _acquire_code_exec_slot():
+    """Limit simultaneous compiles/runs so multi-user load cannot OOM the host."""
+    if _CODE_EXEC_SEMAPHORE.acquire(timeout=_CODE_EXEC_SLOT_WAIT_SECONDS):
+        return None
+    return jsonify({
+        "success": False,
+        "message": "Code runner is busy. Please try again in a moment.",
+    }), 503
 
 
 def _write_temp(code, suffix):
@@ -3515,8 +3555,7 @@ def _run_interpreted(cmd, code, suffix, timeout=_CODE_TIMEOUT):
     path = _write_temp(code, suffix)
     try:
         result = subprocess.run(cmd + [path], **_subprocess_kwargs(timeout))
-        error = result.stderr if result.returncode != 0 else None
-        return _success_payload(result.stdout, error)
+        return _success_payload(result.stdout, _process_error(result))
     except FileNotFoundError as e:
         missing = cmd[0] if cmd else "runtime"
         return jsonify({
@@ -3538,10 +3577,9 @@ def _run_compile_then_exec(compile_cmd, run_cmd, code, suffix, extra_cleanup=Non
     try:
         compiled = subprocess.run(compile_cmd(path), **_subprocess_kwargs(timeout))
         if compiled.returncode != 0:
-            return _success_payload("", compiled.stderr)
+            return _success_payload("", _process_error(compiled))
         result = subprocess.run(run_cmd(path), **_subprocess_kwargs(timeout))
-        error = result.stderr if result.returncode != 0 else None
-        return _success_payload(result.stdout, error)
+        return _success_payload(result.stdout, _process_error(result))
     except FileNotFoundError as e:
         missing = getattr(e, "filename", None) or (compile_cmd(path)[0] if path else "compiler")
         return jsonify({
@@ -3612,11 +3650,10 @@ def _execute_csharp(code):
             ["dotnet", "run", "--project", csproj_path, "--nologo"],
             **run_kwargs,
         )
-        error = result.stderr if result.returncode != 0 else None
         # dotnet often writes build info to stderr even on success — only treat as error on failure
         if result.returncode == 0:
             return _success_payload(result.stdout, None)
-        return _success_payload(result.stdout, error or result.stderr)
+        return _success_payload(result.stdout, _process_error(result))
     except FileNotFoundError as e:
         missing = getattr(e, "filename", None) or "dotnet"
         return jsonify({
@@ -3679,14 +3716,13 @@ def _execute_java(code):
             **_subprocess_kwargs(_CODE_TIMEOUT),
         )
         if compiled.returncode != 0:
-            return _success_payload("", compiled.stderr)
+            return _success_payload("", _process_error(compiled))
 
         result = subprocess.run(
-            ["java", "-cp", work_dir, class_name],
+            ["java", "-Xms32m", "-Xmx256m", "-cp", work_dir, class_name],
             **_subprocess_kwargs(_CODE_TIMEOUT),
         )
-        error = result.stderr if result.returncode != 0 else None
-        return _success_payload(result.stdout, error)
+        return _success_payload(result.stdout, _process_error(result))
     except FileNotFoundError as e:
         missing = getattr(e, "filename", None) or "javac"
         return jsonify({
@@ -3778,6 +3814,7 @@ def _execute_sql(code):
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def execute_code():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3803,10 +3840,16 @@ def execute_code():
     handler = handlers.get(language)
     if not handler:
         return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
+
+    busy = _acquire_code_exec_slot()
+    if busy is not None:
+        return busy
     try:
         return handler(code)
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        _CODE_EXEC_SEMAPHORE.release()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING SOCKETIO
