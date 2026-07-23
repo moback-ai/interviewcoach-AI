@@ -3422,13 +3422,17 @@ def overall_performance():
 _IS_WINDOWS = sys.platform == "win32"
 _CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
 _CODE_TIMEOUT = 10
-# 1GB was still too low for Node/tsx, JVM, and .NET on Linux.
-# 2GB + max 2 concurrent runs balances heavier runtimes with host safety.
+# Default AS for most languages. .NET CoreCLR needs more (see _CODE_RLIMIT_AS_DOTNET).
 _CODE_RLIMIT_AS_BYTES = 2 * 1024 * 1024 * 1024
+# CoreCLR fails under 2–3GB AS (0x8007000E / exit 137); allow 4GB for csharp only.
+_CODE_RLIMIT_AS_DOTNET = 4 * 1024 * 1024 * 1024
+# 16MB FSIZE killed `dotnet run` (SIGXFSZ / exit -25); restore/build writes more.
+_CODE_RLIMIT_FSIZE_BYTES = 512 * 1024 * 1024
 _CODE_EXEC_MAX_CONCURRENT = 2
 _CODE_EXEC_SLOT_WAIT_SECONDS = 2.0
 _CODE_EXEC_SEMAPHORE = threading.BoundedSemaphore(_CODE_EXEC_MAX_CONCURRENT)
-_CODE_RLIMIT_NPROC = 256
+# go run / JVM / node under load need headroom beyond 256 (pthread_create EAGAIN).
+_CODE_RLIMIT_NPROC = 512
 _SANDBOX_PATH = (
     "/usr/bin:/bin:/usr/local/bin:/usr/lib/jvm/default-java/bin:"
     "/usr/local/go/bin:/root/.cargo/bin"
@@ -3445,37 +3449,49 @@ _DANGER_PATTERNS = re.compile(
 )
 
 
-def _sandbox_preexec():
-    """Apply resource limits before exec — Linux only."""
-    try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
-        resource.setrlimit(
-            resource.RLIMIT_AS,
-            (_CODE_RLIMIT_AS_BYTES, _CODE_RLIMIT_AS_BYTES),
-        )
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        # go run / npx / javac / dotnet need more than 64 threads under load
-        resource.setrlimit(resource.RLIMIT_NPROC, (_CODE_RLIMIT_NPROC, _CODE_RLIMIT_NPROC))
-    except Exception:
-        pass
+def _make_sandbox_preexec(as_bytes=_CODE_RLIMIT_AS_BYTES):
+    """Build a Linux preexec_fn with optional per-runtime address-space cap."""
+
+    def _sandbox_preexec():
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE,
+                (_CODE_RLIMIT_FSIZE_BYTES, _CODE_RLIMIT_FSIZE_BYTES),
+            )
+            if as_bytes is not None:
+                resource.setrlimit(resource.RLIMIT_AS, (as_bytes, as_bytes))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+            resource.setrlimit(
+                resource.RLIMIT_NPROC,
+                (_CODE_RLIMIT_NPROC, _CODE_RLIMIT_NPROC),
+            )
+        except Exception:
+            pass
+
+    return _sandbox_preexec
 
 
-def _subprocess_kwargs(timeout=_CODE_TIMEOUT):
+def _subprocess_kwargs(timeout=_CODE_TIMEOUT, as_bytes=_CODE_RLIMIT_AS_BYTES):
     kwargs = {
         "capture_output": True,
         "text": True,
         "timeout": timeout,
     }
     if not _IS_WINDOWS:
-        kwargs["preexec_fn"] = _sandbox_preexec
+        kwargs["preexec_fn"] = _make_sandbox_preexec(as_bytes=as_bytes)
         kwargs["env"] = {
             "PATH": _SANDBOX_PATH,
             "HOME": "/tmp",
             "LANG": "C.UTF-8",
-            # npx tsx needs more heap than plain node; RLIMIT_AS still caps VA.
             "NODE_OPTIONS": "--max-old-space-size=512",
+            # JVM default compressed class space (~1GB) blows RLIMIT_AS; shrink it.
+            "JAVA_TOOL_OPTIONS": (
+                "-XX:MaxMetaspaceSize=128m -XX:CompressedClassSpaceSize=64m"
+            ),
+            # Cap Go OS threads so pthread_create does not exhaust RLIMIT_NPROC.
+            "GOMAXPROCS": "2",
             "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
             "DOTNET_NOLOGO": "1",
             "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
@@ -3606,8 +3622,8 @@ def _execute_python(code):
 
 
 def _execute_typescript(code):
-    npx = "npx.cmd" if _IS_WINDOWS else "npx"
-    return _run_interpreted([npx, "--yes", "tsx"], code, ".ts")
+    # Avoid heavy `npx tsx` under RLIMIT_AS; Node 22+ can strip types natively.
+    return _run_interpreted(["node", "--experimental-strip-types"], code, ".ts")
 
 
 def _execute_csharp(code):
@@ -3639,15 +3655,16 @@ def _execute_csharp(code):
         with open(program_path, "w", encoding="utf-8") as f:
             f.write(code)
 
-        env = None
-        run_kwargs = _subprocess_kwargs(timeout)
-        # Ensure telemetry/first-run noise is off; merge with sandbox env on Linux
+        # CoreCLR needs higher AS than the default 2GB sandbox; FSIZE is already raised.
+        run_kwargs = _subprocess_kwargs(timeout, as_bytes=_CODE_RLIMIT_AS_DOTNET)
         base_env = run_kwargs.pop("env", None) or os.environ.copy()
         base_env = {
             **base_env,
             "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
             "DOTNET_NOLOGO": "1",
             "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+            # Soft-cap managed heap so CoreCLR stays within the raised AS limit.
+            "DOTNET_GCHeapHardLimit": hex(512 * 1024 * 1024),
         }
         run_kwargs["env"] = base_env
 
@@ -3723,6 +3740,7 @@ def _execute_java(code):
         if compiled.returncode != 0:
             return _success_payload("", _process_error(compiled))
 
+        # Heap caps on the command line; metaspace/class-space via JAVA_TOOL_OPTIONS.
         result = subprocess.run(
             ["java", "-Xms32m", "-Xmx256m", "-cp", work_dir, class_name],
             **_subprocess_kwargs(_CODE_TIMEOUT),
@@ -3787,6 +3805,30 @@ def _execute_rust(code):
     return _run_compile_then_exec(compile_cmd, run_cmd, code, ".rs", extra_cleanup=extras)
 
 
+def _friendly_sql_error(code, err):
+    """Map raw SQLite errors to clearer guidance for interview candidates."""
+    msg = str(err or "").strip()
+    lower_msg = msg.lower()
+    lower_code = (code or "").lower()
+
+    if "no such table" in lower_msg:
+        return (
+            "Please CREATE/INSERT the required table(s) in your script and run again. "
+            "Each SQL run starts with an empty database."
+        )
+
+    dialect_hint = re.search(
+        r"\binterval\b|\bilike\b|auto_increment|\bserial\b|::|`",
+        lower_code,
+    )
+    if "syntax error" in lower_msg or dialect_hint:
+        return (
+            "Please use SQLite syntax. Postgres/MySQL syntax is not supported in this editor."
+        )
+
+    return msg or "SQL execution failed"
+
+
 def _execute_sql(code):
     """Run SQL against an in-memory SQLite DB (no external binary required)."""
     rejected = _validate_code(code)
@@ -3814,7 +3856,7 @@ def _execute_sql(code):
         finally:
             conn.close()
     except Exception as e:
-        return _success_payload("", str(e))
+        return _success_payload("", _friendly_sql_error(code, e))
 
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
