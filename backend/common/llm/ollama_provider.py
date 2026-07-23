@@ -39,7 +39,11 @@ def _chat_options(max_tokens: int | None = None, temperature: float | None = Non
         except (TypeError, ValueError):
             temp = 0.6
     else:
-        temp = 0.6
+        raw_temp = optional_env("LLM_TEMPERATURE", "0.6")
+        try:
+            temp = max(0.0, min(float(raw_temp), 1.0))
+        except (TypeError, ValueError):
+            temp = 0.6
     return {"num_predict": num_predict, "temperature": temp}
 
 

@@ -62,8 +62,6 @@ class InterviewManager:
 
         # === Intro Flags ===
         self.intro_done = False
-        self.job_qna_done = False
-        self.job_description_shown = False
         self.intro_retry_count = 0
         self.max_intro_retries = 3
 
@@ -286,27 +284,19 @@ class InterviewManager:
         reply = result["message"]
         self.conversation_history.append({"role": "assistant", "content": reply})
 
-        if result["job_explained"]:
-            self.job_description_shown = True
-            self.intro_retry_count = 0
-            print("[DEBUG] Job explanation confirmed by LLM. Resetting retry count and setting job_description_shown = True")
-
-        if self.job_description_shown and not self.job_qna_done:
-            job_done_check = assess_intro_progress(self.conversation_history)
-            if job_done_check == "continue":
-                self.job_qna_done = True
-                print("[DEBUG] Job Q&A finished. Marking job_qna_done = True")
-
         intro_status = assess_intro_progress(self.conversation_history)
         print(f"[DEBUG] assess_intro_progress → {intro_status}")
 
         if intro_status == "continue":
             self.intro_done = True
-            self.intro_retry_count = 0
             self.stage = "icebreaker"
 
             # Immediately ask the icebreaker
-            question = generate_icebreaker_question(self.job_title, on_token=on_token)
+            question = generate_icebreaker_question(
+                self.job_title,
+                conversation_history=self.conversation_history,
+                on_token=on_token,
+            )
             self.current_icebreaker = question
             self.icebreaker_question_asked = True
             self.conversation_history.append({"role": "assistant", "content": question})
@@ -341,14 +331,22 @@ class InterviewManager:
         log("handle_icebreaker_stage")
 
         if not self.icebreaker_question_asked:
-            question = generate_icebreaker_question(self.job_title, on_token=on_token)
+            question = generate_icebreaker_question(
+                self.job_title,
+                conversation_history=self.conversation_history,
+                on_token=on_token,
+            )
             self.current_icebreaker = question
             self.conversation_history.append({"role": "assistant", "content": question})
             self.icebreaker_question_asked = True
             return {"stage": "icebreaker", "message": question}
 
         self.conversation_history.append({"role": "user", "content": user_input})
-        result = assess_icebreaker_response(user_input, self.current_icebreaker)   
+        result = assess_icebreaker_response(
+            user_input,
+            self.current_icebreaker,
+            conversation_history=self.conversation_history,
+        )
         print(f"[DEBUG] Icebreaker assessment → {result}")
 
         if result == "valid":
@@ -391,8 +389,12 @@ class InterviewManager:
                 "message": f"Let’s move on anyway. Thanks!\n\n{followup_q}"
             }
 
-
-        question = generate_icebreaker_question(self.job_title, on_token=on_token)
+        question = generate_icebreaker_question(
+            self.job_title,
+            conversation_history=self.conversation_history,
+            on_token=on_token,
+            is_retry=True,
+        )
         self.current_icebreaker = question
         self.conversation_history.append({"role": "assistant", "content": question})
         return {"stage": "icebreaker", "message": question}
@@ -419,7 +421,11 @@ class InterviewManager:
             # Candidate gave an answer → assess it
             self.conversation_history.append({"role": "user", "content": user_input})
             question = self.current_followup_question or "N/A"
-            result = assess_followup_response(question, user_input)
+            result = assess_followup_response(
+                question,
+                user_input,
+                conversation_history=self.conversation_history,
+            )
             print(f"[DEBUG] Follow-up Q: {question}")
             print(f"[DEBUG] Follow-up answer assessment → {result}")
 
@@ -467,12 +473,13 @@ class InterviewManager:
                     "message": "Thanks! Let’s continue with your resume."
                 }
 
-            # Retry with a new question
+            # Retry with a tighter follow-up based on what was missing
             question = generate_dynamic_question(
                 self.job_title,
                 self.job_description,
                 self.conversation_history,
                 on_token=on_token,
+                is_retry=True,
             )
             self.current_followup_question = question
             self.conversation_history.append({"role": "assistant", "content": question})

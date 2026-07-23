@@ -81,6 +81,7 @@ from common.storage import (
     user_owns_storage_path,
     safe_storage_file_path,
     send_storage_file,
+    storage_file_exists,
     validated_legacy_upload_folder,
 )
 from common.canonical_url import (
@@ -1911,7 +1912,7 @@ def check_resume_jd_pair():
 
     hash_resume_row = query_one(
         """
-        SELECT id, file_url, content_hash, file_name
+        SELECT id, file_url, stored_path, content_hash, file_name
         FROM resumes
         WHERE user_id=%s AND content_hash=%s
         ORDER BY uploaded_at DESC NULLS LAST
@@ -1920,9 +1921,29 @@ def check_resume_jd_pair():
         (user_id, resume_hash),
     ) if resume_hash else None
     if hash_resume_row:
-        content_match_resume = True
-        resume_id = str(hash_resume_row['id'])
-        resume_url = hash_resume_row.get('file_url')
+        candidate_url = hash_resume_row.get('file_url')
+        stored_path = (hash_resume_row.get('stored_path') or "").strip() or None
+        relative = None
+        if stored_path:
+            relative = validated_protected_relative_path(stored_path) or stored_path
+        if not relative and candidate_url:
+            relative = resolve_relative_path(candidate_url)
+
+        # Skills profiles are DB-only; file resumes must still exist in storage to reuse.
+        file_ok = True
+        if not skills_text:
+            file_ok = bool(relative and storage_file_exists(relative))
+            if not file_ok:
+                print(
+                    "[WARN] check-resume-jd-pair: matched resume "
+                    f"{hash_resume_row.get('id')} is missing from storage "
+                    f"(path={relative or stored_path or candidate_url!r}); forcing re-upload"
+                )
+
+        if file_ok:
+            content_match_resume = True
+            resume_id = str(hash_resume_row['id'])
+            resume_url = candidate_url
 
     jd_row = query_one(
         """
@@ -2506,7 +2527,17 @@ def generate_questions():
         if resume_url:
             relative = resolve_relative_path(resume_url)
             if relative:
-                resume_data = read_bytes(relative)
+                try:
+                    resume_data = read_bytes(relative)
+                except FileNotFoundError:
+                    return jsonify({
+                        "success": False,
+                        "code": "RESUME_FILE_MISSING",
+                        "message": (
+                            "The saved resume file is missing from storage. "
+                            "Please upload the resume again."
+                        ),
+                    }), 404
                 ext = relative.rsplit('.', 1)[-1]
             else:
                 resp = http_requests.get(resume_url)
