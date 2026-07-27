@@ -705,14 +705,36 @@ function UploadPage() {
 
         // Step 3: Generate questions using backend API
         devLog('[DEBUG] Step 3: Generating questions...');
-        const questionsResult = await generateQuestionsFromBackend({
-          resumeUrl: resumeUrl || undefined,
-          skillsText: isSkillsMode ? skillsTextForApi : undefined,
-          jobTitle,
-          jobDescription,
-          resumeId,
-          jdId,
-        });
+        let questionsResult;
+        try {
+          questionsResult = await generateQuestionsFromBackend({
+            resumeUrl: resumeUrl || undefined,
+            skillsText: isSkillsMode ? skillsTextForApi : undefined,
+            jobTitle,
+            jobDescription,
+            resumeId,
+            jdId,
+          });
+        } catch (genError) {
+          const missingFile =
+            !isSkillsMode &&
+            resume &&
+            (genError?.code === 'RESUME_FILE_MISSING' ||
+              /missing from storage/i.test(genError?.message || ''));
+          if (!missingFile) {
+            throw genError;
+          }
+          // Saved resume row exists in DB but the blob is gone — re-upload and retry once.
+          devWarn('[WARN] Resume file missing in storage; re-uploading and retrying generation...');
+          ({ resumeId, resumeUrl } = await uploadResume(resume));
+          questionsResult = await generateQuestionsFromBackend({
+            resumeUrl,
+            jobTitle,
+            jobDescription,
+            resumeId,
+            jdId,
+          });
+        }
       
         if (!questionsResult.success) {
           throw new Error(`Failed to generate questions: ${questionsResult.message}`);
@@ -880,7 +902,9 @@ function UploadPage() {
         } catch {
           errorData = {};
         }
-        throw new Error(errorData.message || `Backend API error: ${response.status}`);
+        const err = new Error(errorData.message || `Backend API error: ${response.status}`);
+        err.code = errorData.code || null;
+        throw err;
       }
 
       return await response.json();

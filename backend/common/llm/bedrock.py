@@ -53,19 +53,64 @@ def resolve_chat_model(model: str | None = None) -> str:
     ).strip() or "apac.amazon.nova-lite-v1:0"
 
 
+def _message_text(msg: dict[str, Any]) -> str:
+    content = msg.get("content")
+    if isinstance(content, list):
+        return " ".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        ).strip()
+    return str(content or "").strip()
+
+
+def _normalize_converse_messages(converse_messages: list[dict]) -> list[dict]:
+    """Bedrock Converse requires user-first turns and alternating roles."""
+    if not converse_messages:
+        return [{"role": "user", "content": [{"text": "Hello"}]}]
+
+    merged: list[dict] = []
+    for msg in converse_messages:
+        role = msg["role"]
+        text = _message_text(msg)
+        if not text:
+            continue
+        if merged and merged[-1]["role"] == role:
+            prev = _message_text(merged[-1])
+            merged[-1] = {
+                "role": role,
+                "content": [{"text": f"{prev}\n\n{text}".strip()}],
+            }
+        else:
+            merged.append({"role": role, "content": [{"text": text}]})
+
+    if not merged:
+        return [{"role": "user", "content": [{"text": "Hello"}]}]
+
+    # Converse rejects histories that begin with assistant (e.g. interview greeting).
+    if merged[0]["role"] == "assistant":
+        merged.insert(
+            0,
+            {
+                "role": "user",
+                "content": [{"text": "(Interview in progress — continue from the greeting.)"}],
+            },
+        )
+
+    # Generation turns should end on a user message.
+    if merged[-1]["role"] == "assistant":
+        merged.append(
+            {"role": "user", "content": [{"text": "Please continue."}]}
+        )
+
+    return merged
+
+
 def _to_converse_messages(messages: list[dict[str, Any]]) -> tuple[list[dict], list[dict]]:
     system_blocks: list[dict] = []
     converse_messages: list[dict] = []
     for msg in messages:
         role = (msg.get("role") or "user").strip().lower()
-        content = msg.get("content")
-        if isinstance(content, list):
-            text = " ".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
-            ).strip()
-        else:
-            text = str(content or "").strip()
+        text = _message_text(msg)
         if not text:
             continue
         if role == "system":
@@ -76,8 +121,7 @@ def _to_converse_messages(messages: list[dict[str, Any]]) -> tuple[list[dict], l
         converse_messages.append(
             {"role": role, "content": [{"text": text}]}
         )
-    if not converse_messages:
-        converse_messages = [{"role": "user", "content": [{"text": "Hello"}]}]
+    converse_messages = _normalize_converse_messages(converse_messages)
     return system_blocks, converse_messages
 
 
