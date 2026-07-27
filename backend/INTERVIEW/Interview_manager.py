@@ -18,8 +18,7 @@ from Interview_functions import (
     evaluate_custom_response,
     generate_custom_followup,
     generate_model_answer,
-    assess_candidate_has_question,
-    generate_candidate_qna_response,
+    run_candidate_qna_turn,
     sanitize_interviewer_display_text,
     # ✅ REMOVED: generate_key_strengths_and_improvements - no longer needed
 )
@@ -89,7 +88,7 @@ class InterviewManager:
         self.resume_followup_retry_count = 0
         self.max_resume_followup_retries = 3
 
-        # Custom Questions
+        # Custom Questions (disabled for now — resume goes straight to candidate Q&A)
         self.custom_qna_done = True
         self.required_questions = config.get("custom_questions", [])
         self.current_custom_question = ""
@@ -102,6 +101,7 @@ class InterviewManager:
         self.candidate_qna_done = False
         self.candidate_question_count = 0
         self.max_candidate_questions = 4  # Soft limit
+        self.awaiting_manual_end = False
 
         # Candidate evaluation
         self.evaluation_log = []
@@ -123,6 +123,8 @@ class InterviewManager:
             self.current_resume_question_obj = None
         if self.core_questions is None:
             self.core_questions = []
+        if not hasattr(self, "awaiting_manual_end"):
+            self.awaiting_manual_end = False
 
     def _has_asked_question(self, text):
         key = self._question_key(text)
@@ -230,11 +232,25 @@ class InterviewManager:
         # ✅ NEW: Handle manual interview end command
         if user_input.strip().upper() == "END_INTERVIEW":
             print("[INFO] Manual interview end requested by user")
+            self.awaiting_manual_end = False
             self.stage = "wrapup_evaluation"
             return {
                 "stage": "manual_end",
                 "message": "Thank you for completing the interview. Let me provide you with a comprehensive evaluation.",
+                "awaiting_manual_end": False,
                 **self.handle_wrapup_evaluation()  # ✅ This already includes "interview_done": True
+            }
+
+        # After candidate Q&A, lock further answers until End Interview is pressed.
+        if getattr(self, "awaiting_manual_end", False):
+            return {
+                "stage": "wrapup_evaluation",
+                "message": (
+                    "We've finished the interview questions. "
+                    "Please press the End Interview button for your feedback."
+                ),
+                "interview_done": False,
+                "awaiting_manual_end": True,
             }
 
         # Check time limit
@@ -257,13 +273,54 @@ class InterviewManager:
         if self.stage == "resume_discussion":
             return self.handle_resume_discussion_stage(user_input, on_token=on_token)
         if self.stage == "custom_questions":
-            return self.handle_custom_questions_stage(user_input, on_token=on_token)
+            # Legacy/compat: immediately skip into candidate Q&A.
+            return self._begin_candidate_questions_stage(on_token=on_token)
         if self.stage == "candidate_questions":
             return self.handle_candidate_questions_stage(user_input, on_token=on_token)
+        if self.stage == "wrapup_evaluation" or getattr(self, "awaiting_manual_end", False):
+            return {
+                "stage": "wrapup_evaluation",
+                "message": (
+                    "Please press the End Interview button to end the interview and get your feedback."
+                ),
+                "interview_done": False,
+                "awaiting_manual_end": True,
+            }
         return {
             "stage": "done",
             "message": "All stages complete. Please press the END Interview Button to end the interview.",
-            "interview_done": False  # ✅ So your app can differentiate
+            "interview_done": False,  # ✅ So your app can differentiate
+            "awaiting_manual_end": True,
+        }
+
+    def _begin_candidate_questions_stage(self, on_token=None, preface=""):
+        """Skip custom questions and open the candidate Q&A wrap-up prompt."""
+        self.custom_qna_done = True
+        self.stage = "candidate_questions"
+        self.awaiting_manual_end = False
+        prompt = (
+            "I think we’ve reached the end of this interview. "
+            "Do you have any questions for me before we wrap up?"
+        )
+        message = f"{preface}\n\n{prompt}".strip() if preface else prompt
+        self.conversation_history.append({"role": "assistant", "content": message})
+        return {
+            "stage": "candidate_questions",
+            "message": message,
+            "awaiting_manual_end": False,
+        }
+
+    def _prompt_manual_end(self, message):
+        """Lock further Q&A until the user presses End Interview."""
+        self.candidate_qna_done = True
+        self.awaiting_manual_end = True
+        self.stage = "wrapup_evaluation"
+        self.conversation_history.append({"role": "assistant", "content": message})
+        return {
+            "stage": "wrapup_evaluation",
+            "message": message,
+            "interview_done": False,
+            "awaiting_manual_end": True,
         }
 
 
@@ -497,8 +554,10 @@ class InterviewManager:
         # 1. No active question? Ask the next one.
         if not self.current_resume_question:
             if not self.core_questions:
-                self.stage = "custom_questions"
-                return {"stage": "custom_questions", "message": "Great, let’s move on to some custom questions now."}
+                return self._begin_candidate_questions_stage(
+                    on_token=on_token,
+                    preface="Thanks — that wraps up the resume discussion.",
+                )
 
             self._pop_next_resume_question()
             self.resume_followup_retry_count = 0  # Reset retry count for each question
@@ -557,21 +616,11 @@ class InterviewManager:
                     "requires_code": self.current_coding_requirement,
                 }
 
-            # If no more resume questions, move to custom stage
-            self.stage = "custom_questions"
-            if self.required_questions:
-                self.current_custom_question = self.required_questions.pop(0)
-                self.custom_followup_retry_count = 0
-                self.conversation_history.append({"role": "assistant", "content": self.current_custom_question})
-                return {
-                    "stage": "custom_questions",
-                    "message": "Thanks! That wraps up the resume part.\n\n" + self.current_custom_question
-                }
-
-            return {
-                "stage": "done",
-                "message": "Thanks! That wraps up the resume part. Appreciate your answers."
-            }
+            # If no more resume questions, skip custom and open candidate Q&A
+            return self._begin_candidate_questions_stage(
+                on_token=on_token,
+                preface="Thanks! That wraps up the resume part.",
+            )
 
 
         self.resume_followup_retry_count += 1
@@ -591,22 +640,11 @@ class InterviewManager:
                     "requires_code": self.current_coding_requirement,
                 }
 
-            # No more resume questions, move forward
-            self.stage = "custom_questions"
-            if self.required_questions:
-                self.current_custom_question = self.required_questions.pop(0)
-                self.custom_followup_retry_count = 0
-                self.custom_followup_evaluations = []
-                self.conversation_history.append({"role": "assistant", "content": self.current_custom_question})
-                return {
-                    "stage": "custom_questions",
-                    "message": "No worries — that wraps up the resume questions. Let’s move on\n" + self.current_custom_question
-                }
-            else:
-                return {
-                    "stage": "done",
-                    "message": "No worries — that wraps up the resume questions. Thanks for participating!"
-                }
+            # No more resume questions — skip custom and open candidate Q&A
+            return self._begin_candidate_questions_stage(
+                on_token=on_token,
+                preface="No worries — that wraps up the resume questions.",
+            )
 
 
 
@@ -623,13 +661,8 @@ class InterviewManager:
         # Step 1: Ask a new custom question if not in progress
         if not self.current_custom_question:
             if not self.required_questions:
-                # No more custom questions, move to candidate Q&A
-                self.custom_qna_done = True  #  mark custom QnA as complete
-                self.stage = "candidate_questions"
-                return {
-                    "stage": "candidate_questions",
-                    "message": "Thanks for the answers! Before we wrap up, do you have any questions for me?"
-                }
+                # Custom stage disabled / empty — go straight to candidate Q&A
+                return self._begin_candidate_questions_stage(on_token=on_token)
 
 
             self.current_custom_question = self.required_questions.pop(0)
@@ -686,11 +719,10 @@ class InterviewManager:
                 }
 
             # No more custom questions, move to candidate Q&A
-            self.stage = "candidate_questions"
-            return {
-                "stage": "candidate_questions",
-                "message": "Thanks for the clear answer! Before we wrap up, do you have any questions for me?"
-            }
+            return self._begin_candidate_questions_stage(
+                on_token=on_token,
+                preface="Thanks for the clear answer!",
+            )
 
 
         # Step 3: Retry logic for unclear answers
@@ -729,81 +761,96 @@ class InterviewManager:
                 "message": "I think we’ve reached the end of this interview. Do you have any questions for me before we wrap up?"
             }
 
-        # Step 2: If already hit max, re-check if valid question before wrapping
-        if self.candidate_question_count >= self.max_candidate_questions:
-            decision = assess_candidate_has_question(user_input)
-            if decision == "yes":
-                reply = generate_candidate_qna_response(
-                    user_question=user_input,
-                    conversation_history=self.conversation_history,
-                    evaluation_log=self.evaluation_log,
-                    job_title=self.job_title,
-                    last_chance=True,
-                    on_token=on_token,
-                )
-                self.conversation_history.append({"role": "assistant", "content": reply})
-                self.candidate_qna_done = True
-                self.stage = "wrapup_evaluation"
-                return {
-                    "stage": "wrapup_evaluation",
-                    "message": reply + "\n\nThanks again for your thoughtful questions — let me wrap up with a quick summary.",
-                    **self.handle_wrapup_evaluation()
-                }
+        at_max = self.candidate_question_count >= self.max_candidate_questions
+        remaining = max(self.max_candidate_questions - self.candidate_question_count, 0)
 
-            self.candidate_qna_done = True
-            self.stage = "wrapup_evaluation"
-            return self.handle_wrapup_evaluation()
-
-        # Step 3: Otherwise, check if it's a real question
         self.conversation_history.append({"role": "user", "content": user_input})
-        decision = assess_candidate_has_question(user_input)
-
-        if decision == "no":
-            self.candidate_qna_done = True
-            self.stage = "wrapup_evaluation"
-            # ✅ CHANGED: Show message instead of calling handle_wrapup_evaluation
-            return {
-                "stage": "wrapup_evaluation",
-                "message": "Please press the END interview button to end the interview.",
-                "interview_done": False  # Keep interview active until user manually ends
-            }
-
-        # Step 4: Answer the question
-        last_chance = self.candidate_question_count == self.max_candidate_questions - 2
-        reply = generate_candidate_qna_response(
-            user_question=user_input,
+        turn = run_candidate_qna_turn(
+            user_input=user_input,
             conversation_history=self.conversation_history,
             evaluation_log=self.evaluation_log,
             job_title=self.job_title,
-            last_chance=last_chance,
+            job_description=self.job_description,
+            questions_remaining=remaining,
+            last_chance=at_max or remaining <= 1,
             on_token=on_token,
         )
-        self.conversation_history.append({"role": "assistant", "content": reply})
-        self.candidate_question_count += 1
-        remaining = self.max_candidate_questions - self.candidate_question_count
-        print(f"[DEBUG] candidate_question_count: {self.candidate_question_count}/{self.max_candidate_questions} — remaining: {remaining}")
-       
-        if self.candidate_question_count == self.max_candidate_questions:
-            self.candidate_qna_done = True
-            self.stage = "wrapup_evaluation"
-            self.conversation_history.append({"role": "assistant", "content": reply})
-            # ✅ CHANGED: Show message instead of calling handle_wrapup_evaluation
-            return {
-                "stage": "wrapup_evaluation",
-                "message": reply + "\n\nPlease press the END interview button to end the interview.",
-                "interview_done": False  # Keep interview active until user manually ends
-            }
+        intent = turn.get("intent") or "unclear"
+        reply = (turn.get("reply") or "").strip()
+        print(
+            f"[DEBUG] candidate_qna intent={intent} "
+            f"count={self.candidate_question_count}/{self.max_candidate_questions} "
+            f"should_count={turn.get('should_count_as_question')} "
+            f"ready_to_end={turn.get('ready_to_end')}"
+        )
 
+        # Soft limit already hit: allow one last real question answer, otherwise lock.
+        if at_max:
+            if intent == "ask_question" and reply:
+                return self._prompt_manual_end(
+                    f"{reply}\n\n"
+                    "Thanks for your questions. Please press the End Interview button for your feedback."
+                )
+            if intent == "decline":
+                return self._prompt_manual_end(
+                    reply or "Please press the End Interview button for your feedback."
+                )
+            return self._prompt_manual_end(
+                "That's all the time we have for questions. "
+                "Please press the End Interview button for your feedback."
+            )
 
-        # Step 6: If only 1 question remains, show the final clear prompt
-        if self.candidate_question_count == self.max_candidate_questions - 1:
-            final_prompt = "Let us end the interview here , Thankyou for your time "
+        # Clear decline → Option B lock
+        if intent == "decline" or turn.get("ready_to_end"):
+            return self._prompt_manual_end(
+                reply or "Thanks — please press the End Interview button for your feedback."
+            )
+
+        # Greeting / unclear / wants_to_ask → stay open, do not consume a question slot
+        if intent in {"greeting_or_chitchat", "unclear", "wants_to_ask"}:
+            message = reply or "Sure — do you have any questions about the role before we wrap up?"
+            self.conversation_history.append({"role": "assistant", "content": message})
             return {
                 "stage": "candidate_questions",
-                "message": f"{reply}\n\n{final_prompt}"
+                "message": message,
+                "awaiting_manual_end": False,
             }
 
-        # Step 7: Otherwise, pick a friendly follow-up
+        # Real question answered
+        if not reply:
+            reply = "Happy to help — what would you like to know about the role?"
+            self.conversation_history.append({"role": "assistant", "content": reply})
+            return {
+                "stage": "candidate_questions",
+                "message": reply,
+                "awaiting_manual_end": False,
+            }
+
+        if turn.get("should_count_as_question", True):
+            self.candidate_question_count += 1
+        remaining = self.max_candidate_questions - self.candidate_question_count
+        print(
+            f"[DEBUG] candidate_question_count: "
+            f"{self.candidate_question_count}/{self.max_candidate_questions} — remaining: {remaining}"
+        )
+
+        if self.candidate_question_count >= self.max_candidate_questions:
+            return self._prompt_manual_end(
+                f"{reply}\n\n"
+                "That's all the time we have for your questions. "
+                "Please press the End Interview button for your feedback."
+            )
+
+        if self.candidate_question_count == self.max_candidate_questions - 1:
+            final_prompt = "You can ask one more question, or press End Interview when you're ready."
+            message = f"{reply}\n\n{final_prompt}"
+            self.conversation_history.append({"role": "assistant", "content": message})
+            return {
+                "stage": "candidate_questions",
+                "message": message,
+                "awaiting_manual_end": False,
+            }
+
         followups = [
             "Anything else you'd like to ask before we wrap up?",
             "Do you have any other questions for me?",
@@ -811,10 +858,12 @@ class InterviewManager:
             "Would you like to ask anything else before we conclude?",
         ]
         followup = random.choice(followups)
-
+        message = f"{reply}\n\n{followup}"
+        self.conversation_history.append({"role": "assistant", "content": message})
         return {
             "stage": "candidate_questions",
-            "message": f"{reply}\n\n{followup}"
+            "message": message,
+            "awaiting_manual_end": False,
         }
 
 

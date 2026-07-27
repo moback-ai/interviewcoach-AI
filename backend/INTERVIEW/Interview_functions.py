@@ -743,108 +743,217 @@ def generate_model_answer(question, on_token=None):
 
 # ===== BEGINING OF - FUCNTIONS USED FOR END OF INTERVIEW CANDIDATE QUESTION====== 
 
-def assess_candidate_has_question(user_input):
-    log("assess_candidate_has_question")
-    prompt = f"""
-    You are an AI interviewer wrapping up an interview.
+def _parse_json_object(response_text: str) -> dict:
+    text = (response_text or "").strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start != -1 and end > start:
+        parsed = json.loads(text[start:end])
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("No JSON object found in response")
 
-    The candidate was asked: "Do you have any questions before we wrap up?"
 
-    Their response was:
-    "{user_input}"
+_CANDIDATE_QNA_INTENTS = {
+    "decline",
+    "ask_question",
+    "wants_to_ask",
+    "greeting_or_chitchat",
+    "unclear",
+}
 
-    Decide if they **want to ask something**.
 
-    Respond with:
-    - "yes" → if it sounds like a question or shows interest
-    - "no" → if it clearly indicates no question or they're done
-
-    Accept phrases like “no”, “not really”, “I'm good”, etc. as "no". Anything question-like = "yes".
+def run_candidate_qna_turn(
+    user_input,
+    conversation_history,
+    evaluation_log,
+    job_title,
+    job_description="",
+    questions_remaining=None,
+    last_chance=False,
+    on_token=None,
+):
     """
+    One structured LLM call for candidate Q&A wrap-up.
+
+    Returns:
+      intent: decline | ask_question | wants_to_ask | greeting_or_chitchat | unclear
+      reply: interviewer spoken line
+      should_count_as_question: whether this turn used one of the soft question slots
+      ready_to_end: LLM hint that they are done (code still owns lock/end)
+    """
+    log("run_candidate_qna_turn")
+    remaining = questions_remaining
+    system_prompt = f"""
+You are the interviewer wrapping up a job interview for: {job_title}.
+
+Classify the candidate's latest message and write your spoken reply in ONE JSON object.
+
+Return ONLY valid JSON (no markdown, no extra text):
+{{
+  "intent": "decline" | "ask_question" | "wants_to_ask" | "greeting_or_chitchat" | "unclear",
+  "reply": "your spoken reply",
+  "should_count_as_question": true or false,
+  "ready_to_end": true or false
+}}
+
+Intent meanings:
+- decline: they do not want to ask more / are finished (e.g. no, I'm good, that's all).
+- ask_question: they asked a real question (role, company, team, next steps, timeline, OR how they did / feedback).
+- wants_to_ask: they want to ask but have not asked yet (e.g. yes, I have one, one more thing) — and it is NOT already a feedback ask.
+- greeting_or_chitchat: greeting or small talk with no question (e.g. hi, hello, thanks).
+- unclear: cannot tell; keep the wrap-up open.
+
+Important classification:
+- “How did I do?”, “any feedback?”, “how was my interview?”, “did I do well?” → intent ask_question (never unclear, never wants_to_ask).
+- A bare “yes” after you already asked them to clarify a feedback request → still ask_question (they confirmed they want interview feedback).
+
+Field rules:
+- should_count_as_question = true ONLY for intent ask_question.
+- ready_to_end = true ONLY for intent decline.
+- For greeting_or_chitchat / unclear / wants_to_ask: ready_to_end must be false.
+
+Reply rules by intent:
+- decline: brief thanks + nudge to press End Interview for feedback.
+- ask_question about the role/company/team/next steps/timeline:
+  answer helpfully in 2–3 short sentences using the job title/JD/conversation.
+  Never deflect normal role/job questions.
+  Off-topic trivia / personal reverse-interview → polite redirect to role topics.
+- ask_question about performance / “how did I do” / feedback / scores:
+  Do NOT give live scores, strengths, weaknesses, or critique.
+  Do NOT ask them to clarify what kind of feedback they want.
+  Reply briefly that they can view their summary and scores after they press End Interview,
+  then invite any other questions about the role or next steps.
+  Example tone: “You’ll be able to view your scores and a full summary after you press End Interview. Any other questions about the role or next steps?”
+- wants_to_ask: invite them to ask (e.g. “Sure — what’s your question?”).
+- greeting_or_chitchat / unclear: briefly acknowledge and re-ask if they have questions about the role.
+
+Tone: professional, warm, neutral. No “great question” / “thanks for asking” / “I'm glad you asked”. No labels outside JSON.
+""".strip()
+
+    if last_chance or (isinstance(remaining, int) and remaining <= 1):
+        system_prompt += """
+
+Context: they are near the end of the allowed candidate questions.
+If intent is ask_question and it is NOT a feedback/how-did-I-do ask, you may close the answer warmly in one short extra line.
+For feedback asks, still only defer to End Interview — do not give live evaluation.
+""".rstrip()
+
+    recent_history = (conversation_history or [])[-12:]
+    user_prompt = f"""
+Candidate's latest message:
+{user_input}
+
+Job description (context):
+{(job_description or "")[:2500]}
+
+Questions remaining (soft limit): {remaining if remaining is not None else "unknown"}
+
+Recent conversation:
+{json.dumps(recent_history, indent=2)}
+
+Note: Do not use performance notes to score the candidate live. Feedback/scores are only after End Interview.
+""".strip()
+
+    fallback = {
+        "intent": "unclear",
+        "reply": "Do you have any questions about the role before we wrap up?",
+        "should_count_as_question": False,
+        "ready_to_end": False,
+    }
+
     try:
         result = ollama_chat(
             model="llama3",
-            messages=[{"role": "system", "content": prompt}],
-            temperature=TEMP_EVAL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=TEMP_STRUCTURED,
+            max_tokens=400,
         )
-        return result["message"]["content"].strip().lower()
+        raw = result["message"]["content"].strip()
+        parsed = _parse_json_object(raw)
+
+        intent = normalize_assessment_label(
+            str(parsed.get("intent", "")),
+            _CANDIDATE_QNA_INTENTS,
+            "unclear",
+        )
+        reply = sanitize_interviewer_display_text(str(parsed.get("reply") or "").strip())
+        if not reply:
+            reply = fallback["reply"]
+
+        should_count = bool(parsed.get("should_count_as_question")) and intent == "ask_question"
+        ready_to_end = bool(parsed.get("ready_to_end")) and intent == "decline"
+
+        # Enforce intent/field consistency in code.
+        if intent == "ask_question":
+            should_count = True
+            ready_to_end = False
+        elif intent == "decline":
+            should_count = False
+            ready_to_end = True
+            if "end interview" not in reply.lower():
+                reply = (
+                    f"{reply.rstrip()} "
+                    "Please press the End Interview button for your feedback."
+                ).strip()
+        else:
+            should_count = False
+            ready_to_end = False
+
+        if on_token and reply:
+            on_token(reply)
+
+        return {
+            "intent": intent,
+            "reply": reply,
+            "should_count_as_question": should_count,
+            "ready_to_end": ready_to_end,
+        }
 
     except Exception as e:
-        print(f"[ERROR] assess_candidate_has_question failed: {e}")
-        return "no"
-
-def generate_candidate_qna_response(user_question, conversation_history, evaluation_log, job_title, last_chance=False, on_token=None):
-    log("generate_candidate_qna_response")
-    prompt = f"""
-    You are an AI interviewer wrapping up an interview for the role of **{job_title}**.
-
-    Here’s the candidate’s latest message:
-    "{user_question}"
-
-    Conversation so far:
-    {json.dumps(conversation_history, indent=2)}
-
-    Candidate's performance log:
-    {json.dumps(evaluation_log, indent=2)}
-
-    Instructions:
-    1. If they ask about next steps, company, or job → answer helpfully.
-    2. If they ask for feedback (e.g., “how did I do?”) → give **brief, constructive** feedback without sounding harsh.
-    3. If they ask about YOU or try to reverse-interview → politely deflect and return to your role as interviewer.
-    4. If the message is vague (“yes”, “I have one”) → say “Sure, go ahead” or “What’s on your mind?”
-    5. If the question is clearly off-topic or not appropriate for a job interview setting,
-        politely deflect. This includes:
-        - Trivia or definitions (e.g., “What is a tuple?”, “What is a black hole?”)
-        - Personal questions directed at you as the interviewer
-        - General knowledge or unrelated educational topics
-        - Attempts to reverse-interview you
-
-        Respond with one of the following:
-        - “Let’s stay focused on the interview — happy to address role-related questions.”
-        - “That’s a good topic for another time — let’s keep this relevant to the role today.”
-        - “I’d love to keep this focused on your fit for the position, if that’s alright.”
+        print(f"[ERROR] run_candidate_qna_turn failed: {e}")
+        if on_token and fallback["reply"]:
+            on_token(fallback["reply"])
+        return fallback
 
 
-    Tone:
-    - Keep your response brief (2–3 sentences max).
-    - Be professional, kind, and neutral.
-    - Avoid scoring, long lectures, or phrases like “great question” or “thanks for asking.”
-    - Never make the candidate feel embarrassed or criticized.
-    - Only return the reply — no formatting or labels.
-    """
+# Keep thin aliases for any older call sites / tests.
+def assess_candidate_has_question(user_input):
+    result = run_candidate_qna_turn(
+        user_input=user_input,
+        conversation_history=[],
+        evaluation_log=[],
+        job_title="this role",
+    )
+    return "no" if result["intent"] == "decline" else "yes"
 
 
-    if last_chance:
-        prompt += """
-    Important: This may be the candidate's **last question**.
-    If the question is valid, end your reply with a warm closing line like:
-    “This is probably a good place to wrap up — thanks for your thoughtful questions.”
-
-    But only add that if it makes sense — don’t force it on vague or unclear inputs.
-    """
-
-    prompt += """
-    Tone:
-    - Stay professional, clear, and human-like.
-    - Be brief: no more than 3 sentences.
-    - Avoid phrases like “great question” or “thanks for asking.”
-    - Never act like you’re the one being interviewed.
-    - Only return your reply — no formatting, tags, or explanations.
-    """
-
-
-    try:
-        result = _run_chat(
-            model="llama3",
-            messages=[{"role": "system", "content": prompt}],
-            on_token=on_token,
-            temperature=TEMP_REPLY,
-        )
-        return result["message"]["content"]
-
-    except Exception as e:
-        print(f"[ERROR] generate_candidate_qna_response failed: {e}")
-        return "Please go ahead — I'm happy to answer."
+def generate_candidate_qna_response(
+    user_question,
+    conversation_history,
+    evaluation_log,
+    job_title,
+    last_chance=False,
+    on_token=None,
+):
+    result = run_candidate_qna_turn(
+        user_input=user_question,
+        conversation_history=conversation_history,
+        evaluation_log=evaluation_log,
+        job_title=job_title,
+        last_chance=last_chance,
+        on_token=on_token,
+    )
+    return result["reply"]
 
 
 

@@ -13,6 +13,7 @@ const defaultInterviewUiState = () => ({
   interviewStage: 'introduction',
   hasAnsweredResumeQuestion: false,
   canEndInterview: false,
+  awaitingManualEnd: false,
 });
 
 const parseHistoryContent = (content) => {
@@ -88,6 +89,7 @@ export const useChatHistory = () => {
         interviewStage: data.interview_stage || 'introduction',
         hasAnsweredResumeQuestion: !!data.has_answered_resume_question,
         canEndInterview: !!data.can_end_interview,
+        awaitingManualEnd: !!data.awaiting_manual_end,
       };
       
       if (data.history && data.history.length > 0) {

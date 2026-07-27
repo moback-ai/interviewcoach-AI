@@ -2927,6 +2927,7 @@ def _interview_session_ui_state(interview_id: str, user_id: str) -> dict:
             "interview_stage": "introduction",
             "has_answered_resume_question": False,
             "can_end_interview": False,
+            "awaiting_manual_end": False,
         }
 
     stage = str(saved_state.get("stage") or "introduction")
@@ -2937,13 +2938,17 @@ def _interview_session_ui_state(interview_id: str, user_id: str) -> dict:
                 has_answered = True
                 break
 
-    can_end = stage in _END_INTERVIEW_LATER_STAGES or (
-        stage == "resume_discussion" and has_answered
+    awaiting_manual_end = bool(saved_state.get("awaiting_manual_end"))
+    can_end = (
+        awaiting_manual_end
+        or stage in _END_INTERVIEW_LATER_STAGES
+        or (stage == "resume_discussion" and has_answered)
     )
     return {
         "interview_stage": stage,
         "has_answered_resume_question": has_answered,
         "can_end_interview": can_end,
+        "awaiting_manual_end": awaiting_manual_end,
     }
 
 
@@ -3140,6 +3145,10 @@ def _build_generate_response_payload(user, data, on_token=None):
             "should_delete_audio": False,
             "requires_code": response.get("requires_code"),
             "code_language": response.get("code_language"),
+            "awaiting_manual_end": bool(
+                response.get("awaiting_manual_end")
+                or getattr(manager, "awaiting_manual_end", False)
+            ),
         },
     }, 200
 
