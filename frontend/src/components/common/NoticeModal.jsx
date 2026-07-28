@@ -17,7 +17,7 @@ const VARIANTS = {
   },
 };
 
-const NoticeModal = ({ isOpen, onClose, title, message, variant = 'error' }) => {
+const NoticeModal = ({ isOpen, onClose, title, message, variant = 'error', actionButton = null }) => {
   const styles = VARIANTS[variant] || VARIANTS.error;
   const Icon = styles.icon;
 
@@ -69,13 +69,26 @@ const NoticeModal = ({ isOpen, onClose, title, message, variant = 'error' }) => 
         </div>
         <div className="p-3 sm:p-4 md:p-6">
           <p className="text-sm sm:text-base text-[var(--color-text-secondary)] leading-relaxed">{message}</p>
-          <button
-            type="button"
-            onClick={onClose}
-            className={`mt-4 w-full py-2.5 px-4 rounded-lg text-white font-semibold transition-colors ${styles.button}`}
-          >
-            OK
-          </button>
+          {actionButton ? (
+            <div className="mt-4 flex flex-col sm:flex-row gap-2">
+              {actionButton}
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full sm:w-auto py-2.5 px-4 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              className={`mt-4 w-full py-2.5 px-4 rounded-lg text-white font-semibold transition-colors ${styles.button}`}
+            >
+              OK
+            </button>
+          )}
         </div>
       </div>
     </div>,

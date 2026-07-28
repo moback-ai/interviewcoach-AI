@@ -83,11 +83,12 @@ class TestInterviewHandlers(unittest.TestCase):
   def setUp(self):
     self.app = Flask(__name__)
 
+  @patch("common.interview_handlers.query_one", return_value=None)
   @patch("common.interview_handlers.create_started_interview", return_value=INTERVIEW_ID)
   @patch("common.interview_handlers.interview_quota")
   @patch("common.interview_handlers._verify_resume_jd_owned", return_value=True)
   def test_start_interview_returns_201_when_under_quota(
-    self, _mock_owned, mock_quota, mock_create
+    self, _mock_owned, mock_quota, mock_create, _mock_query_one
   ):
     mock_quota.return_value = {
       "started_count": 0,
@@ -114,11 +115,12 @@ class TestInterviewHandlers(unittest.TestCase):
     self.assertEqual(payload["interview_id"], INTERVIEW_ID)
     mock_create.assert_called_once()
 
+  @patch("common.interview_handlers.query_one", return_value=None)
   @patch("common.interview_handlers.create_started_interview")
   @patch("common.interview_handlers.interview_quota")
   @patch("common.interview_handlers._verify_resume_jd_owned", return_value=True)
   def test_start_interview_returns_402_at_quota(
-    self, _mock_owned, mock_quota, mock_create
+    self, _mock_owned, mock_quota, mock_create, _mock_query_one
   ):
     mock_quota.return_value = {
       "started_count": 2,
@@ -143,6 +145,27 @@ class TestInterviewHandlers(unittest.TestCase):
     self.assertEqual(status, 402)
     self.assertTrue(payload["payment_required"])
     mock_create.assert_not_called()
+
+  @patch("common.interview_handlers.query_one", return_value={"id": INTERVIEW_ID})
+  @patch("common.interview_handlers._verify_resume_jd_owned", return_value=True)
+  def test_start_interview_returns_400_when_active_exists(self, _mock_owned, _mock_query_one):
+    with self.app.test_request_context(
+      "/api/interviews/start",
+      method="POST",
+      json={
+        "resume_id": RESUME_ID,
+        "jd_id": JD_ID,
+        "question_set": 1,
+      },
+    ):
+      from flask import request
+
+      request.user = {"id": USER_A}
+      response, status = start_interview_handler()
+      payload = json.loads(response.get_data(as_text=True))
+    self.assertEqual(status, 400)
+    self.assertFalse(payload["success"])
+    self.assertIn("active interview in progress", payload["message"])
 
   @patch("common.interview_handlers.interview_quota")
   def test_interview_quota_handler(self, mock_quota):
