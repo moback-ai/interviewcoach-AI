@@ -714,11 +714,32 @@ export default function QuestionsPage() {
       });
     } catch (error) {
       console.error('Error scheduling interview:', error);
+      const isAlreadyActive =
+        error.message?.toLowerCase().includes('active interview') ||
+        error.message?.toLowerCase().includes('in progress') ||
+        error.message?.toLowerCase().includes('resume');
+
+      const activeInterview = interviewHistory.find(
+        (interview) => interview.status === 'STARTED' || interview.status === 'in_progress'
+      );
+
       setNoticeModal({
         isOpen: true,
-        title: retakeFrom ? 'Retake failed' : 'Payment failed',
-        message: error.message,
-        variant: 'error',
+        title: isAlreadyActive ? 'Active Interview In Progress' : (retakeFrom ? 'Retake Failed' : 'Payment Failed'),
+        message: error.message || 'An unexpected error occurred.',
+        variant: isAlreadyActive ? 'info' : 'error',
+        actionButton: (isAlreadyActive && activeInterview) ? (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ) : null,
       });
       setIsPaymentLoading(false);
     }
@@ -738,6 +759,32 @@ export default function QuestionsPage() {
   };
 
   const handleRetakeInterview = async () => {
+    const activeInterview = interviewHistory.find(
+      (interview) => interview.status === 'STARTED' || interview.status === 'in_progress'
+    );
+
+    if (activeInterview) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Active Interview In Progress',
+        message: 'You already have an active interview in progress for this question set. Please resume your current interview before starting a new retake.',
+        variant: 'info',
+        actionButton: (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ),
+      });
+      return;
+    }
+
     const originalInterview = interviewHistory.find(
       (interview) => interview.status === 'completed' || interview.status === 'ENDED'
     );
@@ -745,7 +792,7 @@ export default function QuestionsPage() {
     if (!originalInterview) {
       setNoticeModal({
         isOpen: true,
-        title: 'Retake unavailable',
+        title: 'Retake Unavailable',
         message: 'No completed interview found to retake from.',
         variant: 'info',
       });
@@ -1079,10 +1126,11 @@ export default function QuestionsPage() {
       </PageWavesShell>
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null })}
         title={noticeModal.title}
         message={noticeModal.message}
-        variant={noticeModal.variant}
+        variant={noticeModal.variant || 'error'}
+        actionButton={noticeModal.actionButton}
       />
     </>
   );

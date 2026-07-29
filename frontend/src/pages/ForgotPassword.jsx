@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiArrowLeft, FiKey, FiMail } from 'react-icons/fi';
+import { FiKey, FiMail } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
@@ -53,9 +53,9 @@ function ForgotPassword() {
         description="Enter the email tied to your account and we’ll send a secure reset link so you can get back into your interview workspace."
         footer={(
           <p className="text-sm text-center text-[var(--color-text-secondary)]">
-            Remembered it?{' '}
+            Remembered your password?{' '}
             <Link to="/login" className="auth-scene-link-inline">
-              Back to login
+              Return to sign in
             </Link>
           </p>
         )}
@@ -93,11 +93,6 @@ function ForgotPassword() {
             {loading ? 'Sending...' : 'Send reset link'}
           </button>
         </form>
-
-        <Link to="/login" className="auth-scene-link-row">
-          <FiArrowLeft size={15} />
-          <span>Return to sign in</span>
-        </Link>
       </AuthSceneShell>
     </>
   );

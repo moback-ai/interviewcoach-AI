@@ -44,6 +44,7 @@ const NoticeModal = ({
   secondaryLabel,
   onSecondary,
   details,
+  actionButton = null,
 }) => {
   const styles = VARIANTS[variant] || VARIANTS.error;
   const Icon = styles.icon;
@@ -171,28 +172,41 @@ const NoticeModal = ({
             </div>
           )}
 
-          <div
-            className={`mt-5 flex gap-2.5 sm:gap-3 ${
-              hasSecondary ? 'flex-col-reverse sm:flex-row' : 'flex-col'
-            }`}
-          >
-            {hasSecondary && (
+          {actionButton ? (
+            <div className="mt-4 flex flex-col sm:flex-row gap-2">
+              {actionButton}
               <button
                 type="button"
-                onClick={onSecondary}
-                className="w-full py-2.5 sm:py-3 px-4 rounded-xl border border-[var(--color-border)] text-[var(--color-text-primary)] font-semibold text-sm sm:text-base hover:bg-[var(--color-input-bg)] transition-colors"
+                onClick={onClose}
+                className="w-full sm:w-auto py-2.5 px-4 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-semibold hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
               >
-                {secondaryLabel}
+                Close
               </button>
-            )}
-            <button
-              type="button"
-              onClick={handlePrimary}
-              className={`w-full py-2.5 sm:py-3 px-4 rounded-xl text-white font-semibold text-sm sm:text-base shadow-lg transition-all hover:shadow-xl ${styles.button}`}
+            </div>
+          ) : (
+            <div
+              className={`mt-5 flex gap-2.5 sm:gap-3 ${
+                hasSecondary ? 'flex-col-reverse sm:flex-row' : 'flex-col'
+              }`}
             >
-              {primaryLabel}
-            </button>
-          </div>
+              {hasSecondary && (
+                <button
+                  type="button"
+                  onClick={onSecondary}
+                  className="w-full py-2.5 sm:py-3 px-4 rounded-xl border border-[var(--color-border)] text-[var(--color-text-primary)] font-semibold text-sm sm:text-base hover:bg-[var(--color-input-bg)] transition-colors"
+                >
+                  {secondaryLabel}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handlePrimary}
+                className={`w-full py-2.5 sm:py-3 px-4 rounded-xl text-white font-semibold text-sm sm:text-base shadow-lg transition-all hover:shadow-xl ${styles.button}`}
+              >
+                {primaryLabel}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>,

@@ -86,7 +86,32 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
     }
   };
 
+  const activeInterview = questionSet.interviews.find(
+    (interview) => interview.status === 'STARTED' || interview.status === 'in_progress'
+  );
+
   const handleRetakeClick = () => {
+    if (activeInterview) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Active Interview In Progress',
+        message: 'You already have an active interview in progress for this question set. Please resume your current interview before starting a new retake.',
+        variant: 'info',
+        actionButton: (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ),
+      });
+      return;
+    }
     setRetakeModalOpen(true);
   };
 
@@ -101,10 +126,28 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
       });
     } catch (error) {
       console.error('Error scheduling interview:', error);
+      const isAlreadyActive =
+        error.message?.toLowerCase().includes('active interview') ||
+        error.message?.toLowerCase().includes('in progress') ||
+        error.message?.toLowerCase().includes('resume');
+
       setNoticeModal({
         isOpen: true,
-        title: retakeFrom ? 'Could not start retake' : 'Could not schedule interview',
-        message: error.message,
+        title: isAlreadyActive ? 'Active Interview In Progress' : (retakeFrom ? 'Retake Unavailable' : 'Could Not Schedule Interview'),
+        message: error.message || 'An unexpected error occurred while scheduling your interview.',
+        variant: isAlreadyActive ? 'info' : 'error',
+        actionButton: (isAlreadyActive && activeInterview) ? (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ) : null,
       });
       setLoading(false);
     }
@@ -114,12 +157,35 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
 
   const handleRetakeConfirm = async () => {
     setRetakeModalOpen(false);
+    if (activeInterview) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Active Interview In Progress',
+        message: 'You already have an active interview in progress for this question set. Please resume your current interview before starting a new retake.',
+        variant: 'info',
+        actionButton: (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ),
+      });
+      return;
+    }
     const originalInterviewId = questionSet.interviews[0]?.id;
     if (!originalInterviewId) {
       setNoticeModal({
         isOpen: true,
-        title: 'Retake unavailable',
+        title: 'Retake Unavailable',
         message: 'No original interview found for retake',
+        variant: 'info',
+        actionButton: null,
       });
       return;
     }
@@ -367,10 +433,11 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
         )}
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '' })}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null })}
         title={noticeModal.title}
         message={noticeModal.message}
-        variant="error"
+        variant={noticeModal.variant || 'error'}
+        actionButton={noticeModal.actionButton}
       />
     </>
   );
