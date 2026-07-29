@@ -1169,7 +1169,7 @@ def initialize_whisper():
         return
     from faster_whisper import WhisperModel
 
-    model_size = optional_env("WHISPER_MODEL", "base")
+    model_size = optional_env("WHISPER_MODEL", "base.en")
     inference_device = get_inference_device()
     whisper_device = "cpu" if inference_device == "mps" else inference_device
     print(f"[INFO] Loading Whisper {model_size} on {whisper_device}...")
@@ -1217,7 +1217,8 @@ def is_blank_audio(audio_path, rms_threshold=0.005):
 
 def _transcribe(wav_path):
     beam_size = max(1, int(optional_env("WHISPER_BEAM_SIZE", "1")))
-    segs, info = whisper_model.transcribe(wav_path, beam_size=beam_size, language="en", task="transcribe")
+    whisper_lang = optional_env("WHISPER_LANGUAGE", "en")
+    segs, info = whisper_model.transcribe(wav_path, beam_size=beam_size, language=whisper_lang, task="transcribe")
     return " ".join(s.text for s in list(segs))
 
 def process_audio_file(file, auth_header=None, *, _local_only=False):
@@ -3654,7 +3655,10 @@ def _run_compile_then_exec(compile_cmd, run_cmd, code, suffix, extra_cleanup=Non
 
 
 def _execute_javascript(code):
-    return _run_interpreted(["node"], code, ".js")
+    return jsonify({
+        "success": False,
+        "message": "JavaScript execution is disabled for security reasons",
+    }), 400
 
 
 def _execute_python(code):
@@ -3907,9 +3911,12 @@ def execute_code():
         return jsonify({"message": "OK"}), 200
     data = request.get_json() or {}
     code = data.get('code', '').strip()
-    language = data.get('language', 'python').lower()
+    language = (data.get('language') or 'python').lower().strip()
     if not code:
         return jsonify({"success": False, "message": "No code provided"}), 400
+
+    if language in ("javascript", "js", "node", "nodejs"):
+        return jsonify({"success": False, "message": "JavaScript execution is disabled for security reasons"}), 400
 
     handlers = {
         "javascript": _execute_javascript,
