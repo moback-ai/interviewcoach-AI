@@ -1,7 +1,14 @@
-"""Tests for Whisper language and model configuration."""
 import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
+
+if "faster_whisper" not in sys.modules:
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError:
+        mock_fw = MagicMock()
+        sys.modules["faster_whisper"] = mock_fw
 
 import common.runtime_config as runtime_config
 
