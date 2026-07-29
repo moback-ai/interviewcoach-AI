@@ -9,14 +9,13 @@ def _get_whisper():
     global _whisper_model
     if _whisper_model is not None:
         return _whisper_model
-    from faster_whisper import WhisperModel
-
+    import faster_whisper
     from common.lazy_deps import get_inference_device
 
     model_size = optional_env("WHISPER_MODEL", "base.en")
     inference_device = get_inference_device()
     device = "cpu" if inference_device == "mps" else inference_device
-    _whisper_model = WhisperModel(model_size, device=device)
+    _whisper_model = faster_whisper.WhisperModel(model_size, device=device)
     return _whisper_model
 
 
