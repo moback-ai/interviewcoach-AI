@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
-import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings } from 'react-icons/fi';
+import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
@@ -15,10 +15,36 @@ import { getSession } from '../lib/authClient';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 import { devLog, devWarn } from '../utils/devLog';
 
+const JD_FETCH_ERROR_MESSAGE =
+  "We couldn't fetch this job description from the link. Please paste it manually or upload the JD file.";
+
+const JD_MANUAL_PASTE_MESSAGE =
+  "We couldn't fetch the job description from this link. " +
+  "Please paste it manually in the 'Paste Description' tab.";
+
+const MAX_SELECTED_SKILLS = 10;
+
+const SUGGESTED_SKILLS_POOL = [
+  'Java', 'JavaScript', 'Python', 'React', 'Node.js', 'SQL', 'Git', 'Agile', 'REST APIs',
+  'Microservices', 'AWS', 'Docker', 'Kubernetes', 'MySQL', 'MongoDB', 'TypeScript',
+  '.NET Framework', 'ASP.NET MVC', 'ASP.NET Core', 'C#', 'Spring Boot',
+  'Agile Testing', 'Web Development', 'Software Design', 'Troubleshooting', 'JDK',
+  'Display Advertising', 'Oracle Database', 'Project Management', 'Communication',
+  'Leadership', 'Problem Solving', 'Data Analysis', 'Machine Learning', 'DevOps',
+];
+
+const PLACEHOLDER_PROFILE_URL = 'https://app.skills-based/profile';
+
 function UploadPage() {
   const navigate = useNavigate();
   const { setIsOperationInProgress } = useOperation();
 
+  const [profileInputMode, setProfileInputMode] = useState('resume'); // 'resume' | 'skills'
+  const [selectedSkills, setSelectedSkills] = useState([]);
+  const [skillsInputValue, setSkillsInputValue] = useState('');
+  const [skillsError, setSkillsError] = useState('');
+  const [skillsDropdownOpen, setSkillsDropdownOpen] = useState(false);
+  const skillsSearchRef = useRef(null);
   const [resume, setResume] = useState(null);
   const [jobDesc, setJobDesc] = useState(null);
   const [resumeError, setResumeError] = useState('');
@@ -29,9 +55,22 @@ function UploadPage() {
   const [jobDescription, setJobDescription] = useState('');
   const [parsingJobDesc, setParsingJobDesc] = useState(false);
   const [jobDescParsed, setJobDescParsed] = useState(false);
+  const [jobDescInputMode, setJobDescInputMode] = useState('file'); // 'file' | 'paste' | 'link'
+  const [jobUrl, setJobUrl] = useState('');
+  const [jobUrlLoading, setJobUrlLoading] = useState(false);
   const [clearCounter, setClearCounter] = useState(0);
   const [successModal, setSuccessModal] = useState({ isOpen: false, title: '', message: '', details: null });
-  const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
+  const [noticeModal, setNoticeModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    variant: 'error',
+    primaryLabel: 'OK',
+    secondaryLabel: undefined,
+    onSecondary: undefined,
+    details: undefined,
+  });
+  const pendingPairContinueRef = useRef(null);
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
 
   // New state for question generation settings
@@ -45,10 +84,11 @@ function UploadPage() {
   const [blendMode, setBlendMode] = useState(false);
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
+  const [includeSampleAnswers, setIncludeSampleAnswers] = useState(false);
   const [, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
-  const GENERATE_QUESTIONS_TIMEOUT_MS = 180000;
+  const GENERATE_QUESTIONS_TIMEOUT_MS = 300000;
 
   // Removed debug useEffect for question counts and canGenerateQuestions
 
@@ -150,6 +190,11 @@ function UploadPage() {
   }, [jobTitle, jobDescription, jobDescParsed]); // Re-run when these change
 
   const handleClearAll = () => {
+    setProfileInputMode('resume');
+    setSelectedSkills([]);
+    setSkillsInputValue('');
+    setSkillsError('');
+    setSkillsDropdownOpen(false);
     setResume(null);
     setJobDesc(null);
     setResumeError('');
@@ -157,6 +202,9 @@ function UploadPage() {
     setJobTitle('');
     setJobDescription('');
     setJobDescParsed(false);
+    setJobDescInputMode('file');
+    setJobUrl('');
+    setJobUrlLoading(false);
     setIsTechnical(false);
     setCodingQuestions(0); // Add this line to reset coding questions
     setClearCounter(prev => prev + 1);
@@ -213,6 +261,138 @@ function UploadPage() {
     }
   };
 
+  const handleManualJobDescAccept = async () => {
+    const trimmedTitle = jobTitle.trim();
+    const trimmedDesc = jobDescription.trim();
+
+    if (!trimmedTitle || !trimmedDesc) {
+      setJobDescError('Job title and description are required.');
+      return;
+    }
+
+    setParsingJobDesc(true);
+    setIsOperationInProgress(true);
+    setJobDescError('');
+
+    try {
+      const backendUrl = getBackendOrigin();
+      const session = await getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const response = await fetch(`${backendUrl}/api/parse-job-description`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          job_title: trimmedTitle,
+          job_description: trimmedDesc
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to accept job description');
+      }
+
+      const result = await response.json();
+      if (result.success && result.data) {
+        setJobTitle(result.data.job_title || trimmedTitle);
+        setJobDescription(result.data.job_description || trimmedDesc);
+        setIsTechnical(result.data.is_technical || false);
+        classifiedFromFileRef.current = true;
+        setJobDescParsed(true);
+      } else {
+        throw new Error(result.message || 'Failed to accept job description');
+      }
+    } catch (error) {
+      console.error('Error accepting manual job description:', error);
+      const raw = error instanceof Error ? error.message : String(error || '');
+      setJobDescError(raw || 'Failed to accept job description');
+      setJobDescParsed(false);
+      setIsTechnical(false);
+    } finally {
+      setParsingJobDesc(false);
+      setIsOperationInProgress(false);
+    }
+  };
+
+  const handleFetchJobFromUrl = async () => {
+    const trimmedUrl = jobUrl.trim();
+    if (!trimmedUrl) {
+      setJobDescError('Please paste a job posting URL.');
+      return;
+    }
+
+    setJobDescError('');
+    setJobUrlLoading(true);
+    setIsOperationInProgress(true);
+
+    try {
+      const backendUrl = getBackendOrigin();
+      const session = await getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const response = await fetch(`${backendUrl}/api/extract-job-from-url`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ url: trimmedUrl })
+      });
+
+      if (!response.ok) {
+        throw new Error(JD_FETCH_ERROR_MESSAGE);
+      }
+
+      const result = await response.json();
+      if (result.success && result.data) {
+        const requiresManualPaste = Boolean(result.data.requires_manual_paste);
+
+        setJobTitle(result.data.job_title || '');
+        setIsTechnical(result.data.is_technical || false);
+
+        if (requiresManualPaste) {
+          setNoticeModal({
+            isOpen: true,
+            title: "Can't auto-fetch job description",
+            message: JD_MANUAL_PASTE_MESSAGE,
+            variant: 'info',
+          });
+          setJobDescInputMode('paste');
+          setJobDescription('');
+          setJobDescParsed(false);
+        } else {
+          setJobDescription(result.data.job_description || '');
+          classifiedFromFileRef.current = true;
+          setJobDescParsed(true);
+        }
+      } else {
+        throw new Error(JD_FETCH_ERROR_MESSAGE);
+      }
+    } catch (error) {
+      console.error('Error fetching job description from URL:', error);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Unable to fetch job description',
+        message: JD_FETCH_ERROR_MESSAGE,
+        variant: 'error',
+      });
+      setJobDescError('');
+      setJobDescParsed(false);
+      setIsTechnical(false);
+    } finally {
+      setJobUrlLoading(false);
+      setIsOperationInProgress(false);
+    }
+  };
+
   const uploadResume = async (file) => {
     const formData = new FormData();
     formData.append('file', file);
@@ -260,14 +440,116 @@ function UploadPage() {
     }
   };
 
+  const createSkillsResumeRecord = async (skillsText = '') => {
+    const session = await getSession();
+    if (!session) {
+      throw new Error('No active session');
+    }
+
+    const backendOrigin = getBackendOrigin();
+    const resumeResponse = await fetch(`${backendOrigin}/api/resumes`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        file_url: PLACEHOLDER_PROFILE_URL,
+        file_name: 'Skills-based profile',
+        skills_text: skillsText,
+      }),
+    });
+
+    if (!resumeResponse.ok) {
+      const errorData = await resumeResponse.json().catch(() => ({}));
+      throw new Error(errorData.message || 'Failed to create skills profile record');
+    }
+
+    const resumeData = await resumeResponse.json();
+    return resumeData.data.id;
+  };
+
+  const checkResumeJdPair = async ({ isSkillsMode, skillsTextForApi }) => {
+    const session = await getSession();
+    if (!session) {
+      throw new Error('No active session');
+    }
+    const backendOrigin = getBackendOrigin();
+    const formData = new FormData();
+    formData.append('job_title', jobTitle.trim());
+    formData.append('job_description', jobDescription.trim());
+    if (isSkillsMode) {
+      formData.append('skills_text', skillsTextForApi);
+    } else if (resume) {
+      formData.append('file', resume);
+      formData.append('file_name', resume.name || '');
+    }
+    const response = await fetch(`${backendOrigin}/api/check-resume-jd-pair`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: formData,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.success) {
+      throw new Error(payload.message || 'Failed to check existing resume/JD pair');
+    }
+    return payload.match || {};
+  };
+
+  const closeNoticeModal = () => {
+    pendingPairContinueRef.current = null;
+    setNoticeModal({
+      isOpen: false,
+      title: '',
+      message: '',
+      variant: 'error',
+      primaryLabel: 'OK',
+      secondaryLabel: undefined,
+      onSecondary: undefined,
+      details: undefined,
+    });
+  };
+
   const handleGenerateQuestions = async (e) => {
     e.preventDefault();
-    
-    if (!resume || !jobTitle.trim() || !jobDescription.trim()) {
+
+    const isSkillsMode = profileInputMode === 'skills';
+    const skillsTextForApi = selectedSkills.length ? selectedSkills.join(', ') : '';
+
+    if (isSkillsMode) {
+      if (selectedSkills.length === 0) {
+        setSkillsError('Skill is a required field');
+        return;
+      }
+    } else {
+      if (!resume || !jobTitle.trim() || !jobDescription.trim()) {
+        setNoticeModal({
+          isOpen: true,
+          title: 'Missing information',
+          message: 'Please upload a resume and ensure job title and description are filled.',
+          variant: 'info',
+        });
+        return;
+      }
+      const MIN_RESUME_BYTES = 100;
+      if (resume.size === 0 || resume.size < MIN_RESUME_BYTES) {
+        setNoticeModal({
+          isOpen: true,
+          title: 'Resume file is empty or too small',
+          message: 'The file appears to have no content. Please upload a proper resume with work experience, projects, or education.',
+          variant: 'error',
+        });
+        return;
+      }
+    }
+
+    if (!jobTitle.trim() || !jobDescription.trim()) {
       setNoticeModal({
         isOpen: true,
         title: 'Missing information',
-        message: 'Please upload a resume and ensure job title and description are filled.',
+        message: 'Job title and description are required.',
         variant: 'info',
       });
       return;
@@ -295,128 +577,270 @@ function UploadPage() {
     setLoading(true);
     setIsOperationInProgress(true); // ✅ Pause idle timeout during question generation
 
-    try {
-      devLog('[DEBUG] Starting complete workflow...');
+    const runWorkflow = async ({
+      reuseResumeId = null,
+      reuseJdId = null,
+      reuseResumeUrl = null,
+      forceNew = false,
+    } = {}) => {
+      try {
+        devLog('[DEBUG] Starting complete workflow...', isSkillsMode ? '(skills mode)' : '(resume mode)');
 
-      // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
-      devLog('[DEBUG] Step 1: Uploading resume file...');
-      const { resumeId, resumeUrl } = await uploadResume(resume);
+        let resumeId = reuseResumeId;
+        let jdId = reuseJdId;
+        let resumeUrl = reuseResumeUrl;
 
-      // Track resume upload
-      trackEvents.resumeUploaded({
-        file_name: resume.name,
-        file_size: resume.size,
-        file_type: resume.type,
-        upload_timestamp: new Date().toISOString()
-      });
+        if (!forceNew && !resumeId && !jdId) {
+          const match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
+          if (match.questions_exist) {
+            setLoading(false);
+            setIsOperationInProgress(false);
+            pendingPairContinueRef.current = () => {
+              closeNoticeModal();
+              setLoading(true);
+              setIsOperationInProgress(true);
+              runWorkflow({
+                reuseResumeId: match.resume_id,
+                reuseJdId: match.jd_id,
+                reuseResumeUrl: match.resume_url || null,
+                forceNew: true,
+              });
+            };
+            const setCount = match.question_set_count || 1;
+            const roleLabel = (match.job_title || jobTitle || '').trim();
+            setNoticeModal({
+              isOpen: true,
+              title: 'You already have questions for this pair',
+              message:
+                setCount === 1
+                  ? 'A question set is ready on your Dashboard. Jump there to practice, or create another set if you want fresh questions.'
+                  : `You already have ${setCount} question sets for this resume and job description. Open the Dashboard to practice, or generate another set.`,
+              variant: 'existing',
+              primaryLabel: 'Go to Dashboard',
+              secondaryLabel: 'Generate new set anyway',
+              details: [
+                ...(roleLabel ? [{ label: 'Role', value: roleLabel }] : []),
+                {
+                  label: 'Question sets',
+                  value: String(setCount),
+                },
+                ...(match.latest_question_set
+                  ? [{ label: 'Latest set', value: `#${match.latest_question_set}` }]
+                  : []),
+              ],
+              onSecondary: () => {
+                if (pendingPairContinueRef.current) pendingPairContinueRef.current();
+              },
+            });
+            return;
+          }
 
-      // Step 2: Save job description to database
-      devLog('[DEBUG] Step 2: Saving job description...');
-      const { jdId } = await saveJobDescription();
+          if (match.filename_match && !match.content_match_resume && !isSkillsMode) {
+            // Soft caution only — continue after user acknowledges once via console/devLog
+            devWarn('[WARN] Filename already used by this user; content differs — continuing.');
+          }
 
-      // Track job description save
-      trackEvents.jobDescriptionSaved({
-        job_title: jobTitle,
-        job_description_length: jobDescription.length,
-        resume_id: resumeId,
-        jd_id: jdId,
-        save_timestamp: new Date().toISOString()
-      });
-
-      // Step 3: Generate questions using backend API
-      devLog('[DEBUG] Step 3: Generating questions...');
-      const questionsResult = await generateQuestionsFromBackend(resumeUrl, jobTitle, jobDescription);
-      
-      if (!questionsResult.success) {
-        throw new Error(`Failed to generate questions: ${questionsResult.message}`);
-      }
-
-      const generationDebug = questionsResult.debug || {};
-      const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-      const generationWarning = fallbackAnswerCount > 0
-        ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-        : '';
-
-      // Step 4: Save questions to database via edge function
-      devLog('[DEBUG] Step 4: Saving questions to database...');
-      const questionsSaveResult = await saveQuestionsToDatabase(
-        resumeId, 
-        jdId, 
-        questionsResult.data.questions
-      );
-
-      if (!questionsSaveResult.success) {
-        throw new Error(`Failed to save questions: ${questionsSaveResult.message}`);
-      }
-
-      // Get the question set number from the saved questions
-      const savedQuestionSet = questionsSaveResult.data[0]?.question_set || 'unknown';
-
-      // Track questions generated
-      const uniqueQuestions = questionsSaveResult.data.reduce((acc, item) => {
-        if (!acc.has(item.question_text)) {
-          acc.add(item.question_text);
+          if (match.resume_id && match.jd_id && match.content_match) {
+            resumeId = match.resume_id;
+            jdId = match.jd_id;
+            resumeUrl = match.resume_url || null;
+            devLog('[DEBUG] Reusing existing resume_id/jd_id from content hash match');
+          } else {
+            if (match.resume_id && match.content_match_resume) {
+              resumeId = match.resume_id;
+              resumeUrl = match.resume_url || null;
+            }
+            if (match.jd_id && match.content_match_jd) {
+              jdId = match.jd_id;
+            }
+          }
         }
-        return acc;
-      }, new Set());
 
-      trackEvents.questionsGenerated({
-        resume_id: resumeId,
-        jd_id: jdId,
-        question_set: savedQuestionSet,
-        total_questions: uniqueQuestions.size,
-        job_title: jobTitle,
-        generation_timestamp: new Date().toISOString()
-      });
+        if (isSkillsMode) {
+          if (!resumeId) {
+            devLog('[DEBUG] Step 1: Creating skills profile record...');
+            resumeId = await createSkillsResumeRecord(skillsTextForApi);
+          }
+          if (!jdId) {
+            devLog('[DEBUG] Step 2: Saving job description...');
+            ({ jdId } = await saveJobDescription());
+          }
+          trackEvents.jobDescriptionSaved({
+            job_title: jobTitle,
+            job_description_length: jobDescription.length,
+            resume_id: resumeId,
+            jd_id: jdId,
+            save_timestamp: new Date().toISOString(),
+          });
+        } else {
+          if (!resumeId) {
+            // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
+            devLog('[DEBUG] Step 1: Uploading resume file...');
+            ({ resumeId, resumeUrl } = await uploadResume(resume));
 
-      // Step 5: Show success message and redirect
-      devLog('[DEBUG] Step 5: Process completed successfully!');
-      devLog('[DEBUG] Resume ID:', resumeId);
-      devLog('[DEBUG] Job Description ID:', jdId);
-      devLog('[DEBUG] Questions saved:', questionsSaveResult.data.length);
+            // Track resume upload
+            trackEvents.resumeUploaded({
+              file_name: resume.name,
+              file_size: resume.size,
+              file_type: resume.type,
+              upload_timestamp: new Date().toISOString(),
+            });
+          }
+
+          if (!jdId) {
+            // Step 2: Save job description to database
+            devLog('[DEBUG] Step 2: Saving job description...');
+            ({ jdId } = await saveJobDescription());
+          }
+
+          // Track job description save
+          trackEvents.jobDescriptionSaved({
+            job_title: jobTitle,
+            job_description_length: jobDescription.length,
+            resume_id: resumeId,
+            jd_id: jdId,
+            save_timestamp: new Date().toISOString(),
+          });
+        }
+
+        // Step 3: Generate questions using backend API
+        devLog('[DEBUG] Step 3: Generating questions...');
+        let questionsResult;
+        try {
+          questionsResult = await generateQuestionsFromBackend({
+            resumeUrl: resumeUrl || undefined,
+            skillsText: isSkillsMode ? skillsTextForApi : undefined,
+            jobTitle,
+            jobDescription,
+            resumeId,
+            jdId,
+          });
+        } catch (genError) {
+          const missingFile =
+            !isSkillsMode &&
+            resume &&
+            (genError?.code === 'RESUME_FILE_MISSING' ||
+              /missing from storage/i.test(genError?.message || ''));
+          if (!missingFile) {
+            throw genError;
+          }
+          // Saved resume row exists in DB but the blob is gone — re-upload and retry once.
+          devWarn('[WARN] Resume file missing in storage; re-uploading and retrying generation...');
+          ({ resumeId, resumeUrl } = await uploadResume(resume));
+          questionsResult = await generateQuestionsFromBackend({
+            resumeUrl,
+            jobTitle,
+            jobDescription,
+            resumeId,
+            jdId,
+          });
+        }
       
-      // Store the created IDs for navigation
-      setLastCreatedIds({
-        resumeId: resumeId,
-        jdId: jdId,
-        questionSet: savedQuestionSet
-      });
-      
-      // Show success modal instead of alert
-      setSuccessModal({
-        isOpen: true,
-        title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
-        message: generationWarning
-          ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
-          : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
-        details: [
-          `Question Set: ${savedQuestionSet}`,
-          `Total Questions: ${uniqueQuestions.size}`,
-          `Resume: ${resume.name}`,
-          `Job Title: ${jobTitle}`,
-          generationWarning
-            ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
-            : 'Status: Ready for interview preparation'
-        ]
-      });
+        if (!questionsResult.success) {
+          throw new Error(`Failed to generate questions: ${questionsResult.message}`);
+        }
 
-    } catch (error) {
-      console.error('Error in complete workflow:', error);
-      const msg = error instanceof Error ? error.message : String(error || '');
-      setNoticeModal({
-        isOpen: true,
-        title: 'Upload failed',
-        message: mapEmptyUploadFileError(msg),
-        variant: 'error',
-      });
-    } finally {
-      setLoading(false);
-      setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
-    }
+        const generationDebug = questionsResult.debug || {};
+        const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
+        const generationWarning = fallbackAnswerCount > 0
+          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+          : '';
+
+        // Step 4: Save questions to database via edge function
+        devLog('[DEBUG] Step 4: Saving questions to database...');
+        const questionsSaveResult = await saveQuestionsToDatabase(
+          resumeId, 
+          jdId, 
+          questionsResult.data.questions
+        );
+
+        if (!questionsSaveResult.success) {
+          throw new Error(`Failed to save questions: ${questionsSaveResult.message}`);
+        }
+
+        // Get the question set number from the saved questions
+        const savedQuestionSet = questionsSaveResult.data[0]?.question_set || 'unknown';
+
+        // Track questions generated
+        const uniqueQuestions = questionsSaveResult.data.reduce((acc, item) => {
+          if (!acc.has(item.question_text)) {
+            acc.add(item.question_text);
+          }
+          return acc;
+        }, new Set());
+
+        trackEvents.questionsGenerated({
+          resume_id: resumeId,
+          jd_id: jdId,
+          question_set: savedQuestionSet,
+          total_questions: uniqueQuestions.size,
+          job_title: jobTitle,
+          generation_timestamp: new Date().toISOString()
+        });
+
+        // Step 5: Show success message and redirect
+        devLog('[DEBUG] Step 5: Process completed successfully!');
+        devLog('[DEBUG] Resume ID:', resumeId);
+        devLog('[DEBUG] Job Description ID:', jdId);
+        devLog('[DEBUG] Questions saved:', questionsSaveResult.data.length);
+      
+        // Store the created IDs for navigation
+        setLastCreatedIds({
+          resumeId: resumeId,
+          jdId: jdId,
+          questionSet: savedQuestionSet
+        });
+      
+        // Show success modal instead of alert
+        setSuccessModal({
+          isOpen: true,
+          title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
+          message: generationWarning
+            ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
+            : isSkillsMode
+              ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
+              : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
+          details: [
+            `Question Set: ${savedQuestionSet}`,
+            `Total Questions: ${uniqueQuestions.size}`,
+            isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resume.name}`,
+            `Job Title: ${jobTitle}`,
+            generationWarning
+              ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
+              : 'Status: Ready for interview preparation',
+          ],
+        });
+
+      } catch (error) {
+        console.error('Error in complete workflow:', error);
+        const msg = error instanceof Error ? error.message : String(error || '');
+        setNoticeModal({
+          isOpen: true,
+          title: 'Upload failed',
+          message: mapEmptyUploadFileError(msg),
+          variant: 'error',
+          primaryLabel: 'OK',
+          secondaryLabel: undefined,
+          onSecondary: undefined,
+        });
+      } finally {
+        setLoading(false);
+        setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
+      }
+    };
+
+    await runWorkflow();
   };
 
   // Updated function to call backend API for question generation with new parameters
-  const generateQuestionsFromBackend = async (resumeUrl, jobTitle, jobDescription) => {
+  const generateQuestionsFromBackend = async ({
+    resumeUrl,
+    skillsText,
+    jobTitle,
+    jobDescription,
+    resumeId,
+    jdId,
+  }) => {
     try {
       const session = await getSession();
       if (!session) {
@@ -424,33 +848,42 @@ function UploadPage() {
       }
 
       const backendUrl = getBackendOrigin();
-      
+
+      const body = {
+        job_title: jobTitle,
+        job_description: jobDescription,
+        resume_id: resumeId,
+        jd_id: jdId,
+        question_counts: {
+          beginner: easyQuestions,
+          medium: mediumQuestions,
+          hard: hardQuestions,
+          coding: codingQuestions,
+        },
+        split: splitMode,
+        resume_pct: splitResumePercentage,
+        jd_pct: 100 - splitResumePercentage,
+        blend: blendMode,
+        blend_pct_resume: blendResumePercentage,
+        blend_pct_jd: 100 - blendResumePercentage,
+        include_answers: includeSampleAnswers,
+      };
+      if (skillsText) {
+        body.skills_text = skillsText;
+      } else if (resumeUrl) {
+        body.resume_url = resumeUrl;
+      }
+
       const response = await fetch(`${backendUrl}/api/generate-questions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
         signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
           ? AbortSignal.timeout(GENERATE_QUESTIONS_TIMEOUT_MS)
           : undefined,
-        body: JSON.stringify({
-          resume_url: resumeUrl,
-          job_title: jobTitle,
-          job_description: jobDescription,
-          question_counts: {
-            beginner: easyQuestions,
-            medium: mediumQuestions,
-            hard: hardQuestions,
-            coding: codingQuestions
-          },
-          split: splitMode,
-          resume_pct: splitResumePercentage,
-          jd_pct: 100 - splitResumePercentage,
-          blend: blendMode,
-          blend_pct_resume: blendResumePercentage,
-          blend_pct_jd: 100 - blendResumePercentage
-        })
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -469,7 +902,9 @@ function UploadPage() {
         } catch {
           errorData = {};
         }
-        throw new Error(errorData.message || `Backend API error: ${response.status}`);
+        const err = new Error(errorData.message || `Backend API error: ${response.status}`);
+        err.code = errorData.code || null;
+        throw err;
       }
 
       return await response.json();
@@ -549,7 +984,10 @@ function UploadPage() {
   };
 
   const canGenerateQuestions = useMemo(() => {
-    if (!resume || !jobTitle.trim() || !jobDescription.trim() || !jobDescParsed || loading || parsingJobDesc) {
+    const hasProfile = profileInputMode === 'resume'
+      ? !!resume
+      : selectedSkills.length > 0;
+    if (!hasProfile || !jobTitle.trim() || !jobDescription.trim() || !jobDescParsed || loading || parsingJobDesc || jobUrlLoading) {
       return false;
     }
 
@@ -560,12 +998,15 @@ function UploadPage() {
 
     return true;
   }, [
+    profileInputMode,
     resume,
+    selectedSkills,
     jobTitle,
     jobDescription,
     jobDescParsed,
     loading,
     parsingJobDesc,
+    jobUrlLoading,
     splitMode,
     blendMode,
     easyQuestions,
@@ -574,16 +1015,20 @@ function UploadPage() {
   ]);
 
   const getDisabledReason = () => {
-    if (loading || parsingJobDesc) {
+    if (loading || parsingJobDesc || jobUrlLoading) {
       return null; // Don't show message during loading/parsing
     }
     
-    if (!resume) {
+    if (profileInputMode === 'resume' && !resume) {
       return 'Please upload a resume to generate questions.';
     }
-    
+
+    if (profileInputMode === 'skills' && selectedSkills.length === 0) {
+      return 'Please add at least one skill to generate questions.';
+    }
+
     if (!jobDescParsed) {
-      return 'Please upload and parse a job description file.';
+      return 'Please provide a job description (upload, paste, or URL).';
     }
     
     if (!jobTitle.trim()) {
@@ -624,7 +1069,7 @@ function UploadPage() {
   };
 
   // Check if any critical operations are in progress
-  const isCriticalOperationInProgress = loading || parsingJobDesc;
+  const isCriticalOperationInProgress = loading || parsingJobDesc || jobUrlLoading;
 
   // Handle beforeunload event (page refresh/close) - only block during critical operations
   useEffect(() => {
@@ -643,6 +1088,50 @@ function UploadPage() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [isCriticalOperationInProgress]);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (skillsSearchRef.current && !skillsSearchRef.current.contains(e.target)) {
+        setSkillsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const skillsSuggestions = SUGGESTED_SKILLS_POOL.filter((s) => {
+    const normalized = s.toLowerCase();
+    const input = skillsInputValue.trim().toLowerCase();
+    const alreadySelected = selectedSkills.some((existing) => existing.toLowerCase() === normalized);
+    return !alreadySelected && (!input || normalized.includes(input));
+  });
+
+  const addSkill = (skill) => {
+    const trimmed = (skill || '').trim();
+    if (!trimmed) return;
+
+    if (selectedSkills.length >= MAX_SELECTED_SKILLS) {
+      setSkillsError(`You can add up to ${MAX_SELECTED_SKILLS} skills only.`);
+      setSkillsDropdownOpen(false);
+      return;
+    }
+
+    const normalizedNew = trimmed.toLowerCase();
+    const isDuplicate = selectedSkills.some(
+      (existing) => existing.toLowerCase() === normalizedNew
+    );
+
+    if (isDuplicate) {
+      setSkillsError('Skill already present/selected.');
+      setSkillsDropdownOpen(false);
+      return;
+    }
+
+    setSelectedSkills((prev) => [...prev, trimmed]);
+    setSkillsInputValue('');
+    setSkillsError('');
+    setSkillsDropdownOpen(false);
+  };
 
   // Helper function to get mode description
   const getModeDescription = () => {
@@ -675,37 +1164,315 @@ function UploadPage() {
           </div>
           
             <form onSubmit={handleGenerateQuestions} className="space-y-8">
-                        <UploadBox
-              key={`resume-${clearCounter}`}
-              label="Resume"
-              accept=".pdf,.doc,.docx"
-              file={resume}
-              setFile={setResume}
-              error={resumeError}
-              setError={setResumeError}
-              dragging={dragging}
-              setDragging={setDragging}
-              type="resume"
-              otherFileExists={!!jobDesc}
-              disabled={loading}
-            />
+              <div className="space-y-3">
+                <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                  Your profile
+                </label>
+                <div className="flex rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-input-bg)] p-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileInputMode('resume');
+                      setSkillsError('');
+                      setSelectedSkills([]);
+                      setSkillsInputValue('');
+                    }}
+                    className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition ${
+                      profileInputMode === 'resume'
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                  >
+                    Upload Resume
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileInputMode('skills');
+                      setResume(null);
+                      setResumeError('');
+                      setSkillsError('');
+                    }}
+                    className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition ${
+                      profileInputMode === 'skills'
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                  >
+                    Enter Skills
+                  </button>
+                </div>
+              </div>
 
-            <UploadBox
-                key={`jobdesc-${clearCounter}`}
-                label="Job Description File"
-                accept=".pdf,.txt,.doc,.docx"
-              file={jobDesc}
-                setFile={handleJobDescUpload}
-              error={jobDescError}
-                setError={setJobDescError}
-                dragging={dragging}
-                setDragging={setDragging}
-                type="job"
-                otherFileExists={!!resume}
-                multiple={false}
-                parsing={parsingJobDesc}
-                disabled={loading}
-              />
+              {profileInputMode === 'resume' ? (
+                <UploadBox
+                  key={`resume-${clearCounter}`}
+                  label="Resume"
+                  accept=".pdf,.doc,.docx"
+                  file={resume}
+                  setFile={setResume}
+                  error={resumeError}
+                  setError={setResumeError}
+                  dragging={dragging}
+                  setDragging={setDragging}
+                  type="resume"
+                  otherFileExists={!!jobDesc}
+                  disabled={loading}
+                />
+              ) : (
+                <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-5 sm:p-6 space-y-5">
+                  <div>
+                    <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">Add skill</h3>
+                    <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">* Indicates required</p>
+                  </div>
+
+                  {selectedSkills.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-[var(--color-text-secondary)]">
+                        Selected skills ({selectedSkills.length}/{MAX_SELECTED_SKILLS})
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedSkills.map((skill) => (
+                          <span
+                            key={skill}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm"
+                          >
+                            {skill}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedSkills((prev) => prev.filter((s) => s !== skill))}
+                              className="hover:bg-white/20 rounded-full p-0.5 transition"
+                              aria-label={`Remove ${skill}`}
+                            >
+                              <FiX className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2" ref={skillsSearchRef}>
+                    <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                      Skill <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={skillsInputValue}
+                        onChange={(e) => {
+                          if (selectedSkills.length >= MAX_SELECTED_SKILLS) return;
+                          setSkillsInputValue(e.target.value);
+                          setSkillsError('');
+                          setSkillsDropdownOpen(true);
+                        }}
+                        onFocus={() => {
+                          if (selectedSkills.length < MAX_SELECTED_SKILLS) {
+                            setSkillsDropdownOpen(true);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = skillsInputValue.trim();
+                            if (skillsSuggestions.length > 0) {
+                              addSkill(skillsSuggestions[0]);
+                            } else if (v) {
+                              addSkill(v);
+                            }
+                          }
+                          if (e.key === 'Escape') setSkillsDropdownOpen(false);
+                        }}
+                        placeholder={
+                          selectedSkills.length >= MAX_SELECTED_SKILLS
+                            ? `Maximum ${MAX_SELECTED_SKILLS} skills reached`
+                            : 'Search for a skill (e.g. Java, Project Management)'
+                        }
+                        disabled={loading || selectedSkills.length >= MAX_SELECTED_SKILLS}
+                        className={`w-full px-4 py-3 pr-10 border rounded-xl transition ${
+                          skillsError
+                            ? 'border-red-500 dark:border-red-500 focus:ring-2 focus:ring-red-500'
+                            : 'border-[var(--color-border)] focus:ring-2 focus:ring-[var(--color-primary)]'
+                        } bg-[var(--color-input-bg)] text-[var(--color-text-primary)] focus:outline-none`}
+                      />
+                      {skillsInputValue && (
+                        <button
+                          type="button"
+                          onClick={() => { setSkillsInputValue(''); setSkillsDropdownOpen(true); }}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-[var(--color-border)] text-[var(--color-text-secondary)]"
+                          aria-label="Clear search"
+                        >
+                          <FiX className="w-4 h-4" />
+                        </button>
+                      )}
+                      {skillsDropdownOpen && selectedSkills.length < MAX_SELECTED_SKILLS && (
+                        <div className="absolute z-20 left-0 right-0 mt-1 py-1 bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-lg max-h-60 overflow-auto">
+                          {skillsSuggestions.length > 0 ? (
+                            skillsSuggestions.map((skill) => (
+                              <button
+                                key={skill}
+                                type="button"
+                                onClick={() => addSkill(skill)}
+                                className="w-full text-left px-4 py-2.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-primary)]/10 transition"
+                              >
+                                {skill}
+                              </button>
+                            ))
+                          ) : skillsInputValue.trim() ? (
+                            <button
+                              type="button"
+                              onClick={() => addSkill(skillsInputValue.trim())}
+                              className="w-full text-left px-4 py-2.5 text-sm text-[var(--color-text-primary)] hover:bg-[var(--color-primary)]/10 transition"
+                            >
+                              Add &quot;{skillsInputValue.trim()}&quot;
+                            </button>
+                          ) : (
+                            <p className="px-4 py-3 text-sm text-[var(--color-text-secondary)]">Type to search skills</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {skillsError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{skillsError}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            {/* Job Description Input Modes */}
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-[var(--color-text-primary)]">
+                Job Description
+              </label>
+              <div className="flex rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-input-bg)] p-1">
+                {[
+                  { mode: 'file', label: 'Upload File' },
+                  { mode: 'paste', label: 'Paste Description' },
+                  { mode: 'link', label: 'Job URL' },
+                ].map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      setJobDescInputMode(mode);
+                      setJobDescError('');
+                    }}
+                    className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-lg transition ${
+                      jobDescInputMode === mode
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                    disabled={loading || parsingJobDesc || jobUrlLoading}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {jobDescInputMode === 'file' && (
+                <UploadBox
+                  key={`jobdesc-${clearCounter}`}
+                  label="Job Description File"
+                  accept=".pdf,.txt,.doc,.docx"
+                  file={jobDesc}
+                  setFile={handleJobDescUpload}
+                  error={jobDescError}
+                  setError={setJobDescError}
+                  dragging={dragging}
+                  setDragging={setDragging}
+                  type="job"
+                  otherFileExists={!!resume}
+                  multiple={false}
+                  parsing={parsingJobDesc}
+                  disabled={loading}
+                />
+              )}
+
+              {jobDescInputMode === 'paste' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                      Job Title
+                    </label>
+                    <input
+                      type="text"
+                      value={jobTitle}
+                      onChange={(e) => setJobTitle(e.target.value)}
+                      placeholder="e.g., Senior Software Engineer"
+                      disabled={loading || parsingJobDesc}
+                      className="w-full px-4 py-3 border rounded-xl bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                      Job Description
+                    </label>
+                    <textarea
+                      value={jobDescription}
+                      onChange={(e) => setJobDescription(e.target.value)}
+                      placeholder="Paste the full job description here..."
+                      rows={6}
+                      disabled={loading || parsingJobDesc}
+                      className="w-full px-4 py-3 border rounded-xl bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] resize-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    {jobDescError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">
+                        {jobDescError}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleManualJobDescAccept}
+                      disabled={loading || parsingJobDesc}
+                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm hover:bg-[var(--color-primary-dark)] disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {parsingJobDesc && (
+                        <FiLoader className="w-4 h-4 animate-spin" />
+                      )}
+                      <span>Accept Job Description</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {jobDescInputMode === 'link' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                      Job Posting URL
+                    </label>
+                    <input
+                      type="url"
+                      value={jobUrl}
+                      onChange={(e) => setJobUrl(e.target.value)}
+                      placeholder="Paste a public job posting link (e.g., LinkedIn, company careers page)"
+                      disabled={loading || jobUrlLoading}
+                      className="w-full px-4 py-3 border rounded-xl bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border-[var(--color-border)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    {jobDescError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">
+                        {jobDescError}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleFetchJobFromUrl}
+                      disabled={loading || jobUrlLoading}
+                      className="ml-auto inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-medium rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-primary)] focus:ring-offset-[var(--color-card)] bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white shadow-md hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {jobUrlLoading && (
+                        <FiLoader className="w-4 h-4 animate-spin" />
+                      )}
+                      <span>Fetch Job Description</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Job Title and Description Fields - Only show after parsing */}
               {jobDescParsed ? (
@@ -1038,6 +1805,34 @@ function UploadPage() {
                               </div>
                             ) : null}
                         </div>
+
+                        {/* Sample Answers Toggle */}
+                        <div className="pt-2 border-t border-[var(--color-border)]">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <label className="text-sm font-medium text-[var(--color-text-primary)]">
+                                Generate Sample Answers
+                              </label>
+                              <p className="text-xs text-[var(--color-text-secondary)]">
+                                Also create one sample answer for each question (uses more tokens)
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setIncludeSampleAnswers(!includeSampleAnswers)}
+                              disabled={loading}
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                includeSampleAnswers ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-gray-700'
+                              } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                  includeSampleAnswers ? 'translate-x-6' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
                       </div>
 
                     </div>
@@ -1100,10 +1895,22 @@ function UploadPage() {
       />
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        onClose={closeNoticeModal}
+        onPrimary={() => {
+          if (noticeModal.primaryLabel === 'Go to Dashboard') {
+            closeNoticeModal();
+            navigate('/dashboard');
+            return;
+          }
+          closeNoticeModal();
+        }}
         title={noticeModal.title}
         message={noticeModal.message}
         variant={noticeModal.variant}
+        primaryLabel={noticeModal.primaryLabel || 'OK'}
+        secondaryLabel={noticeModal.secondaryLabel}
+        onSecondary={noticeModal.onSecondary}
+        details={noticeModal.details}
       />
     </>
   );

@@ -7,8 +7,33 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg libsndfile1 curl \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        g++ \
+        gnupg \
+        golang-go \
+        libsndfile1 \
+        openjdk-17-jdk \
+        rustc \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && curl -fsSL https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
+        -o /tmp/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs dotnet-sdk-8.0 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY docker/api/verify-runtime-toolchains.sh /usr/local/bin/verify-runtime-toolchains
+
+RUN chmod 0755 /usr/local/bin/verify-runtime-toolchains \
+    && verify-runtime-toolchains
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /bin/
 

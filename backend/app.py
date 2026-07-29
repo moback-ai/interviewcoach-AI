@@ -59,6 +59,12 @@ from common.auth import (
     check_password,
 )
 from common.db import query_one, query_all, execute, execute_many
+from common.content_hash import (
+    hash_resume_bytes,
+    hash_skills_list,
+    hash_skills_text,
+    hash_job_description,
+)
 from common.email_utils import send_email, smtp_is_configured
 from common.storage import (
     save_bytes,
@@ -75,6 +81,7 @@ from common.storage import (
     user_owns_storage_path,
     safe_storage_file_path,
     send_storage_file,
+    storage_file_exists,
     validated_legacy_upload_folder,
 )
 from common.canonical_url import (
@@ -433,6 +440,46 @@ def ensure_questions_schema():
     )
 
 
+def ensure_dossier_and_content_hash_schema():
+    """Idempotent: content_hash columns + interview_dossiers table."""
+    execute("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS content_hash TEXT")
+    execute("ALTER TABLE job_descriptions ADD COLUMN IF NOT EXISTS content_hash TEXT")
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_resumes_user_content_hash
+        ON resumes(user_id, content_hash)
+        """
+    )
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_jd_user_content_hash
+        ON job_descriptions(user_id, content_hash)
+        """
+    )
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS interview_dossiers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+            jd_id UUID NOT NULL REFERENCES job_descriptions(id) ON DELETE CASCADE,
+            job_title TEXT,
+            source TEXT,
+            dossier JSONB NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            UNIQUE (resume_id, jd_id)
+        )
+        """
+    )
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_interview_dossiers_user_pair
+        ON interview_dossiers(user_id, resume_id, jd_id)
+        """
+    )
+
+
 def serialize_user(user):
     if not user:
         return None
@@ -524,6 +571,7 @@ def _ensure_app_schemas_once():
         return
     ensure_auth_schema()
     ensure_questions_schema()
+    ensure_dossier_and_content_hash_schema()
     _schemas_initialized = True
 
 
@@ -1279,13 +1327,8 @@ def extract_text_from_uploaded_document(file_path, ext):
     raise RuntimeError(f"Unsupported file type: {ext}")
 
 
-def summarize_job_description_text(raw_text):
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-    text = "\n".join(lines).strip()
-    if not text:
-        return {"job_title": "", "job_description": ""}
-
-    title = ""
+def _guess_job_title_from_lines(lines):
+    """Deterministic title guess from extracted JD lines (no LLM)."""
     for line in lines[:12]:
         normalized = line.lower()
         if 2 <= len(line) <= 120 and any(keyword in normalized for keyword in [
@@ -1293,18 +1336,48 @@ def summarize_job_description_text(raw_text):
             'architect', 'lead', 'qa', 'tester', 'intern', 'administrator', 'devops',
             'sre', 'support', 'designer', 'scientist'
         ]):
-            title = line
-            break
+            return line
+    return (lines[0][:120] if lines else "")
 
-    if not title:
-        title = lines[0][:120]
 
+def summarize_job_description_text(raw_text):
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    text = "\n".join(lines).strip()
+    if not text:
+        return {"job_title": "", "job_description": ""}
+
+    title = _guess_job_title_from_lines(lines)
     compact_description = " ".join(segment.strip() for segment in lines[:40])
     compact_description = compact_description[:4000].strip()
 
     return {
         "job_title": title,
         "job_description": compact_description,
+    }
+
+
+def extract_job_description_from_file_text(raw_text):
+    """
+    File-upload path: keep extracted text as-is (no LLM polish) so content_hash stays stable.
+    Only guess a title heuristically for the title tab.
+    """
+    text = (raw_text or "").strip()
+    if not text:
+        return {
+            "job_title": "",
+            "job_description": "",
+            "is_technical": False,
+            "parser": "extract",
+        }
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    job_title = _guess_job_title_from_lines(lines)
+    is_technical = classify_job_description_is_technical(job_title, text)
+    return {
+        "job_title": job_title,
+        "job_description": text,
+        "is_technical": is_technical,
+        "parser": "extract",
     }
 
 
@@ -1406,6 +1479,7 @@ def _env_int(name, default):
 
 
 QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS = _env_int("QUESTION_GEN_OLLAMA_TIMEOUT_SECONDS", 90)
+GENERATE_ANSWERS_TIMEOUT_SECONDS = _env_int("GENERATE_ANSWERS_TIMEOUT_SECONDS", 300)
 JD_PARSE_OLLAMA_TIMEOUT_SECONDS = _env_int("JD_PARSE_OLLAMA_TIMEOUT_SECONDS", 25)
 INTERVIEW_RESPONSE_TIMEOUT_SECONDS = _env_int("INTERVIEW_RESPONSE_TIMEOUT_SECONDS", 45)
 
@@ -1468,13 +1542,13 @@ def _run_callable_with_timeout(fn, timeout_seconds, label="operation"):
 
 
 def _parse_job_description_file(path, model=None):
-    from INTERVIEW.Resumeparser import parse_job_description_file
+    from INTERVIEW.jd_parser import parse_job_description_file
 
     return parse_job_description_file(path, model=model)
 
 
 def _classify_if_technical_role(job_title, job_description, model=None):
-    from INTERVIEW.Resumeparser import classify_if_technical_role
+    from INTERVIEW.jd_parser import classify_if_technical_role
 
     return classify_if_technical_role(job_title, job_description, model=model)
 
@@ -1722,18 +1796,22 @@ def upload_resume():
     if ext not in ['pdf', 'doc', 'docx', 'txt']:
         return jsonify({"success": False, "message": "File type not allowed"}), 400
     import uuid
+    file_bytes = file.read()
+    content_hash = hash_resume_bytes(file_bytes)
     filename = f"{uuid.uuid4()}.{ext}"
     folder = f"resumes/{user_id}"
-    result = save_bytes(file.read(), folder, filename)
+    result = save_bytes(file_bytes, folder, filename)
     resume = execute(
-        "INSERT INTO resumes (user_id, file_url, file_name, stored_path) VALUES (%s, %s, %s, %s) RETURNING id, file_url, file_name",
-        (user_id, result['public_url'], file.filename, result['relative_path'])
+        "INSERT INTO resumes (user_id, file_url, file_name, stored_path, content_hash) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id, file_url, file_name, content_hash",
+        (user_id, result['public_url'], file.filename, result['relative_path'], content_hash)
     )
     return jsonify({"success": True, "data": {
         "resume_id": str(resume['id']),
         "url": result['public_url'],
         "path": result['relative_path'],
-        "file_name": file.filename
+        "file_name": file.filename,
+        "content_hash": content_hash,
     }})
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1750,9 +1828,12 @@ def create_job_description():
     is_valid_jd, jd_validation_error = validate_job_description_text(jd_description)
     if not is_valid_jd:
         return jsonify({"success": False, "message": jd_validation_error}), 400
+    title = (data.get('title') or "").strip()
+    content_hash = hash_job_description(title, jd_description)
     jd = execute(
-        "INSERT INTO job_descriptions (user_id, title, description, technical) VALUES (%s,%s,%s,%s) RETURNING *",
-        (request.user['id'], data.get('title'), jd_description, data.get('technical', True))
+        "INSERT INTO job_descriptions (user_id, title, description, technical, content_hash) "
+        "VALUES (%s,%s,%s,%s,%s) RETURNING *",
+        (request.user['id'], title, jd_description, data.get('technical', True), content_hash)
     )
     return jsonify({"success": True, "data": dict(jd)}), 201
 
@@ -1763,6 +1844,158 @@ def get_job_descriptions():
     rows = query_all("SELECT * FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC",
                      (request.user['id'],))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
+
+
+@app.route('/api/check-resume-jd-pair', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def check_resume_jd_pair():
+    """
+    Detect existing resume+JD pair for this user via content hash (+ filename gate).
+    Multipart: file + job_title + job_description
+    JSON: skills_text + job_title + job_description (+ optional file_name)
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+
+    user_id = request.user['id']
+    job_title = (request.form.get('job_title') or (request.get_json(silent=True) or {}).get('job_title') or "").strip()
+    job_description = (
+        request.form.get('job_description')
+        or (request.get_json(silent=True) or {}).get('job_description')
+        or ""
+    ).strip()
+    if not job_title or not job_description:
+        return jsonify({
+            "success": False,
+            "message": "job_title and job_description are required",
+        }), 400
+
+    data_json = request.get_json(silent=True) or {}
+    skills_text = (request.form.get('skills_text') or data_json.get('skills_text') or "").strip()
+    incoming_file_name = (request.form.get('file_name') or data_json.get('file_name') or "").strip()
+
+    resume_hash = None
+    filename_match = False
+    content_match_resume = False
+    resume_id = None
+    resume_url = None
+
+    if 'file' in request.files and request.files['file'] and request.files['file'].filename:
+        upload = request.files['file']
+        file_bytes = upload.read()
+        resume_hash = hash_resume_bytes(file_bytes)
+        incoming_file_name = incoming_file_name or (upload.filename or "").strip()
+    elif skills_text:
+        resume_hash = hash_skills_text(skills_text)
+        incoming_file_name = ""
+    else:
+        return jsonify({
+            "success": False,
+            "message": "Provide a resume file or skills_text",
+        }), 400
+
+    jd_hash = hash_job_description(job_title, job_description)
+
+    if incoming_file_name:
+        name_row = query_one(
+            """
+            SELECT id, file_url, content_hash, file_name
+            FROM resumes
+            WHERE user_id=%s AND lower(file_name)=lower(%s)
+            ORDER BY uploaded_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (user_id, incoming_file_name),
+        )
+        if name_row:
+            filename_match = True
+
+    hash_resume_row = query_one(
+        """
+        SELECT id, file_url, stored_path, content_hash, file_name
+        FROM resumes
+        WHERE user_id=%s AND content_hash=%s
+        ORDER BY uploaded_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        (user_id, resume_hash),
+    ) if resume_hash else None
+    if hash_resume_row:
+        candidate_url = hash_resume_row.get('file_url')
+        stored_path = (hash_resume_row.get('stored_path') or "").strip() or None
+        relative = None
+        if stored_path:
+            relative = validated_protected_relative_path(stored_path) or stored_path
+        if not relative and candidate_url:
+            relative = resolve_relative_path(candidate_url)
+
+        # Skills profiles are DB-only; file resumes must still exist in storage to reuse.
+        file_ok = True
+        if not skills_text:
+            file_ok = bool(relative and storage_file_exists(relative))
+            if not file_ok:
+                print(
+                    "[WARN] check-resume-jd-pair: matched resume "
+                    f"{hash_resume_row.get('id')} is missing from storage "
+                    f"(path={relative or stored_path or candidate_url!r}); forcing re-upload"
+                )
+
+        if file_ok:
+            content_match_resume = True
+            resume_id = str(hash_resume_row['id'])
+            resume_url = candidate_url
+
+    jd_row = query_one(
+        """
+        SELECT id, title, content_hash
+        FROM job_descriptions
+        WHERE user_id=%s AND content_hash=%s
+        ORDER BY created_at DESC NULLS LAST
+        LIMIT 1
+        """,
+        (user_id, jd_hash),
+    )
+    jd_id = str(jd_row['id']) if jd_row else None
+    content_match_jd = bool(jd_row)
+    content_match = bool(content_match_resume and content_match_jd)
+
+    questions_exist = False
+    question_set_count = 0
+    latest_question_set = None
+    if resume_id and jd_id:
+        q_stats = query_one(
+            """
+            SELECT COUNT(DISTINCT question_set) AS set_count,
+                   MAX(question_set) AS latest_set
+            FROM questions
+            WHERE resume_id=%s AND jd_id=%s
+            """,
+            (resume_id, jd_id),
+        )
+        if q_stats:
+            question_set_count = int(q_stats.get('set_count') or 0)
+            latest_question_set = q_stats.get('latest_set')
+            questions_exist = question_set_count > 0
+
+    return jsonify({
+        "success": True,
+        "match": {
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "resume_url": resume_url,
+            "resume_hash": resume_hash,
+            "jd_hash": jd_hash,
+            "filename_match": filename_match,
+            "content_match": content_match,
+            "content_match_resume": content_match_resume,
+            "content_match_jd": content_match_jd,
+            "questions_exist": questions_exist and content_match,
+            "question_set_count": question_set_count,
+            "latest_question_set": latest_question_set,
+            "job_title": job_title,
+        },
+    }), 200
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  INTERVIEWS
@@ -2028,6 +2261,34 @@ def parse_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     if 'file' not in request.files:
+        data = request.get_json(silent=True) or {}
+        job_title = (data.get('job_title') or '').strip()
+        job_description = (data.get('job_description') or '').strip()
+        if job_title and job_description:
+            is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
+            if not is_valid_jd:
+                return jsonify({"success": False, "message": jd_validation_error}), 400
+            is_technical = classify_job_description_is_technical(job_title, job_description)
+            try:
+                is_technical = _run_callable_with_timeout(
+                    lambda: _classify_if_technical_role(
+                        job_title, job_description, model=get_ollama_model_name()
+                    ),
+                    30,
+                    label="Technical role classification",
+                )
+            except Exception as classify_error:
+                print(f"[WARN] LLM technical classification failed, using keyword fallback: {classify_error}")
+            return jsonify({
+                "success": True,
+                "message": "Job description accepted",
+                "data": {
+                    "job_title": job_title,
+                    "job_description": job_description,
+                    "is_technical": is_technical,
+                    "parser": "manual",
+                },
+            })
         return jsonify({"success": False, "message": "No file uploaded"}), 400
     file = request.files['file']
     ext = file.filename.rsplit('.', 1)[-1].lower()
@@ -2046,12 +2307,14 @@ def parse_job_description():
             if not is_valid_jd:
                 return jsonify({"success": False, "message": jd_validation_error}), 400
 
-            parsed = _parse_job_description_with_ollama(extracted_text, temp_path)
+            # File upload: raw extract only (no LLM polish) so JD content_hash is stable.
+            # Paste / URL flows keep their existing LLM paths.
+            parsed = extract_job_description_from_file_text(extracted_text)
             return jsonify({"success": True, "data": {
                 "job_title": parsed["job_title"],
                 "job_description": parsed["job_description"],
                 "is_technical": parsed["is_technical"],
-                "parser": parsed.get("parser", "local"),
+                "parser": parsed.get("parser", "extract"),
             }})
         finally:
             if os.path.exists(temp_path):
@@ -2059,6 +2322,96 @@ def parse_job_description():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/extract-job-from-url', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def extract_job_from_url_api():
+    """Fetch a job posting URL and extract job title + description."""
+    safe_error_message = (
+        "We couldn't fetch this job description from the link. "
+        "Please paste it manually or upload the JD file."
+    )
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+
+    try:
+        data = request.get_json() or {}
+        url = (data.get('url') or '').strip()
+
+        if not url:
+            return jsonify({
+                "success": False,
+                "message": safe_error_message
+            }), 400
+
+        print(f"[DEBUG] Extracting job from URL: {url}")
+
+        from INTERVIEW.jd_parser import extract_job_from_url
+
+        try:
+            result = extract_job_from_url(url, model=get_ollama_model_name())
+        except Exception as e:
+            print(f"[ERROR] URL extraction failed: {e}")
+            traceback.print_exc()
+            return jsonify({
+                "success": False,
+                "message": safe_error_message
+            }), 500
+
+        job_title = (result.get('job_title') or '').strip()
+        job_description = (result.get('job_description') or '').strip()
+        job_responsibilities = (result.get('job_responsibilities') or '').strip()
+        requires_manual_paste = bool(result.get("requires_manual_paste"))
+        warning_message = (result.get("warning_message") or "").strip()
+
+        if not job_title and not job_description and not job_responsibilities:
+            return jsonify({
+                "success": False,
+                "message": safe_error_message
+            }), 400
+
+        combined_description = job_description
+        if job_responsibilities:
+            if combined_description:
+                combined_description += "\n\nResponsibilities:\n" + job_responsibilities
+            else:
+                combined_description = "Responsibilities:\n" + job_responsibilities
+
+        is_technical = False
+        if job_title and combined_description:
+            is_technical = classify_job_description_is_technical(job_title, combined_description)
+            try:
+                is_technical = _run_callable_with_timeout(
+                    lambda: _classify_if_technical_role(
+                        job_title, combined_description, model=get_ollama_model_name()
+                    ),
+                    10,
+                    label="Technical role classification",
+                )
+            except Exception as classify_error:
+                print(f"[WARN] Failed to classify technical role for URL job: {classify_error}")
+
+        return jsonify({
+            "success": True,
+            "message": "Job extracted from URL successfully",
+            "data": {
+                "job_title": job_title,
+                "job_description": combined_description,
+                "responsibilities": job_responsibilities,
+                "is_technical": is_technical,
+                "requires_manual_paste": requires_manual_paste,
+                "warning_message": warning_message
+            }
+        })
+
+    except Exception as e:
+        print(f"[ERROR] General error in extract_job_from_url_api: {e}")
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "message": safe_error_message
+        }), 500
 
 
 @app.route('/api/classify-technical-role', methods=['POST', 'OPTIONS'])
@@ -2103,31 +2456,99 @@ def generate_questions():
     try:
         data = request.get_json() or {}
         resume_url = data.get('resume_url')
+        skills_text = data.get('skills_text')
         job_description = (data.get('job_description') or "").strip()
-        job_title = data.get('job_title')
-        if not all([resume_url, job_description, job_title]):
-            return jsonify({"success": False, "message": "resume_url, job_description, job_title required"}), 400
+        job_title = (data.get('job_title') or "").strip()
+        resume_id = data.get('resume_id')
+        jd_id = data.get('jd_id')
+
+        if not job_title or not job_description:
+            return jsonify({
+                "success": False,
+                "message": "Missing required fields: job_title and job_description",
+            }), 400
+        if resume_url and skills_text:
+            return jsonify({
+                "success": False,
+                "message": "Provide either resume_url or skills_text, not both",
+            }), 400
+        if not resume_url and not skills_text:
+            return jsonify({
+                "success": False,
+                "message": "Missing required field: provide either resume_url or skills_text (comma-separated skills)",
+            }), 400
+        if skills_text and (not resume_id or not jd_id):
+            return jsonify({
+                "success": False,
+                "message": "When using skills_text, resume_id and jd_id are required for saving questions",
+            }), 400
+
         is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
         if not is_valid_jd:
             return jsonify({"success": False, "message": jd_validation_error}), 400
 
-        # Load resume from local protected storage or external URL
-        relative = resolve_relative_path(resume_url)
-        if relative:
-            resume_data = read_bytes(relative)
-            ext = relative.rsplit('.', 1)[-1]
-        else:
-            resp = http_requests.get(resume_url)
-            resp.raise_for_status()
-            resume_data = resp.content
-            url_path = urlparse(resume_url).path
-            ext = url_path.rsplit('.', 1)[-1].lower() if '.' in url_path else 'pdf'
+        skills_list = None
+        if skills_text:
+            skills_list = [s.strip() for s in (skills_text or "").split(",") if s and s.strip()]
+            if not skills_list:
+                return jsonify({
+                    "success": False,
+                    "message": "Please provide at least one skill in skills_text (comma-separated)",
+                }), 400
+            if len(skills_list) > 10:
+                return jsonify({
+                    "success": False,
+                    "message": "Please provide at most 10 skills.",
+                }), 400
+            print(f"[DEBUG] Skills-based profile: {len(skills_list)} skills")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
-            tf.write(resume_data)
-            temp_resume = tf.name
+        question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
+        ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+        pipeline_kwargs = {
+            "resume_path": None,
+            "job_title": job_title,
+            "job_description": job_description,
+            "question_counts": question_counts,
+            "include_answers": data.get("include_answers", False),
+            "split": data.get("split", False),
+            "resume_pct": data.get("resume_pct", 50),
+            "jd_pct": data.get("jd_pct", 50),
+            "blend": data.get("blend", False),
+            "blend_pct_resume": data.get("blend_pct_resume", 50),
+            "blend_pct_jd": data.get("blend_pct_jd", 50),
+            "max_retries": 2,
+            "skills_list": skills_list,
+            "resume_id": resume_id,
+            "jd_id": jd_id,
+            "user_id": request.user["id"],
+        }
 
-        try:
+        temp_resume = None
+        if resume_url:
+            relative = resolve_relative_path(resume_url)
+            if relative:
+                try:
+                    resume_data = read_bytes(relative)
+                except FileNotFoundError:
+                    return jsonify({
+                        "success": False,
+                        "code": "RESUME_FILE_MISSING",
+                        "message": (
+                            "The saved resume file is missing from storage. "
+                            "Please upload the resume again."
+                        ),
+                    }), 404
+                ext = relative.rsplit('.', 1)[-1]
+            else:
+                resp = http_requests.get(resume_url)
+                resp.raise_for_status()
+                resume_data = resp.content
+                ext = resume_url.split('.')[-1].lower() or 'pdf'
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
+                tf.write(resume_data)
+                temp_resume = tf.name
+
             try:
                 resume_text = extract_text_from_uploaded_document(temp_resume, ext)
             except ValueError as ve:
@@ -2135,23 +2556,10 @@ def generate_questions():
             is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
             if not is_valid_resume:
                 return jsonify({"success": False, "message": resume_validation_error}), 400
-            question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
-            ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
-            pipeline_kwargs = {
-                "resume_path": temp_resume,
-                "job_title": job_title,
-                "job_description": job_description,
-                "question_counts": question_counts,
-                "include_answers": data.get("include_answers", True),
-                "split": data.get("split", False),
-                "resume_pct": data.get("resume_pct", 50),
-                "jd_pct": data.get("jd_pct", 50),
-                "blend": data.get("blend", False),
-                "blend_pct_resume": data.get("blend_pct_resume", 50),
-                "blend_pct_jd": data.get("blend_pct_jd", 50),
-                "max_retries": 2,
-            }
-            from INTERVIEW.Resumeparser import run_pipeline_from_api
+            pipeline_kwargs["resume_path"] = temp_resume
+
+        try:
+            from INTERVIEW.question_generation import run_pipeline_from_api
             try:
                 result = _run_callable_with_timeout(
                     lambda: run_pipeline_from_api(**pipeline_kwargs),
@@ -2195,11 +2603,202 @@ def generate_questions():
             }, "debug": {
                 "generator": result.get("generator", "unknown"),
                 "answer_generation": result.get("answer_generation", {}),
+                "token_usage": result.get("token_usage", {}),
                 "ollama": result.get("ollama_diagnostics", ollama_diagnostics),
             }})
         finally:
-            if os.path.exists(temp_resume):
+            if temp_resume and os.path.exists(temp_resume):
                 os.unlink(temp_resume)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
+@app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+def generate_answers_for_question_set():
+    """Generate one best sample answer per question (dossier-backed batch)."""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    try:
+        data = request.get_json() or {}
+        resume_id = data.get("resume_id")
+        jd_id = data.get("jd_id")
+        question_set = data.get("question_set")
+
+        if not resume_id or not jd_id or question_set is None:
+            return jsonify({
+                "success": False,
+                "message": "resume_id, jd_id, and question_set are required",
+            }), 400
+
+        user_id = request.user["id"]
+        resume_row = query_one(
+            "SELECT * FROM resumes WHERE id=%s AND user_id=%s",
+            (resume_id, user_id),
+        )
+        if not resume_row:
+            return jsonify({"success": False, "message": "Resume not found"}), 404
+
+        jd_row = query_one(
+            "SELECT * FROM job_descriptions WHERE id=%s AND user_id=%s",
+            (jd_id, user_id),
+        )
+        if not jd_row:
+            return jsonify({"success": False, "message": "Job description not found"}), 404
+
+        question_set = int(question_set)
+        existing = query_all(
+            """
+            SELECT * FROM questions
+            WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+            ORDER BY created_at ASC
+            """,
+            (resume_id, jd_id, question_set),
+        )
+        if not existing:
+            return jsonify({
+                "success": False,
+                "message": f"No questions found for question set {question_set}",
+            }), 404
+
+        job_title = (jd_row.get("title") or "").strip()
+
+        from INTERVIEW.dossier_store import load_dossier
+        from INTERVIEW.answer_generation import (
+            _dedupe_question_rows,
+            run_generate_answers_for_question_set,
+        )
+
+        dossier = load_dossier(resume_id, jd_id, user_id=user_id)
+        if not dossier:
+            return jsonify({
+                "success": False,
+                "message": (
+                    "Interview dossier not found for this resume and job description. "
+                    "Regenerate questions for this pair first, then generate sample answers."
+                ),
+            }), 404
+
+        dossier_cache = "hit"
+        existing_rows = [dict(row) for row in existing]
+        unique_rows = _dedupe_question_rows(existing_rows)
+        if not unique_rows:
+            return jsonify({
+                "success": False,
+                "message": "No questions found to generate answers for",
+            }), 404
+
+        ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+        try:
+            result = _run_callable_with_timeout(
+                lambda: run_generate_answers_for_question_set(
+                    dossier=dossier,
+                    question_rows=unique_rows,
+                    model=get_ollama_model_name(),
+                    job_title=job_title,
+                    dossier_cache=dossier_cache,
+                ),
+                GENERATE_ANSWERS_TIMEOUT_SECONDS,
+                label="Sample answer generation",
+            )
+        except Exception as pipeline_error:
+            print(
+                "[ERROR] Sample answer generation failed: "
+                f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
+            )
+            status = _question_generation_error_status(pipeline_error)
+            return jsonify({
+                "success": False,
+                "message": str(pipeline_error),
+                "debug": {"ollama": ollama_diagnostics},
+            }), status
+
+        if not result.get("success"):
+            return jsonify({
+                "success": False,
+                "message": result.get("error") or "Answer generation failed",
+            }), 500
+
+        generated = result.get("questions") or []
+        if not generated:
+            return jsonify({
+                "success": False,
+                "message": "Answer generation returned no questions",
+            }), 500
+
+        saved = []
+        for question in generated:
+            qid = question.get("id")
+            answer = question.get("expected_answer") or question.get("answer") or ""
+            q_text = (question.get("question_text") or question.get("question") or "").strip()
+            level = normalize_question_difficulty(
+                question.get("difficulty_category") or question.get("difficulty_level")
+            )
+            if not qid:
+                continue
+            row = execute(
+                """
+                UPDATE questions
+                SET expected_answer=%s
+                WHERE id=%s AND resume_id=%s AND jd_id=%s AND question_set=%s
+                RETURNING *
+                """,
+                (answer, qid, resume_id, jd_id, question_set),
+            )
+            if not row and q_text:
+                # Fallback: match by text+level if id was synthetic
+                row = execute(
+                    """
+                    UPDATE questions
+                    SET expected_answer=%s
+                    WHERE id = (
+                        SELECT id FROM questions
+                        WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                          AND lower(question_text)=lower(%s)
+                          AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                    )
+                    RETURNING *
+                    """,
+                    (answer, resume_id, jd_id, question_set, q_text, level),
+                )
+            if row:
+                saved.append(_serialize_question(row))
+
+                # Delete legacy duplicate rows (same text+level, different answer-depth rows)
+                execute(
+                    """
+                    DELETE FROM questions
+                    WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                      AND lower(question_text)=lower(%s)
+                      AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                      AND id <> %s
+                    """,
+                    (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
+                )
+
+        if not saved:
+            return jsonify({
+                "success": False,
+                "message": "Failed to save sample answers to the database",
+            }), 500
+
+        saved.sort(key=_question_sort_key)
+        return jsonify({
+            "success": True,
+            "data": {
+                "questions": saved,
+                "questions_count": len(saved),
+            },
+            "debug": {
+                "answer_generation": result.get("answer_generation", {}),
+                "ollama": ollama_diagnostics,
+                "dossier_cache": dossier_cache,
+            },
+        })
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
@@ -2328,6 +2927,7 @@ def _interview_session_ui_state(interview_id: str, user_id: str) -> dict:
             "interview_stage": "introduction",
             "has_answered_resume_question": False,
             "can_end_interview": False,
+            "awaiting_manual_end": False,
         }
 
     stage = str(saved_state.get("stage") or "introduction")
@@ -2338,13 +2938,17 @@ def _interview_session_ui_state(interview_id: str, user_id: str) -> dict:
                 has_answered = True
                 break
 
-    can_end = stage in _END_INTERVIEW_LATER_STAGES or (
-        stage == "resume_discussion" and has_answered
+    awaiting_manual_end = bool(saved_state.get("awaiting_manual_end"))
+    can_end = (
+        awaiting_manual_end
+        or stage in _END_INTERVIEW_LATER_STAGES
+        or (stage == "resume_discussion" and has_answered)
     )
     return {
         "interview_stage": stage,
         "has_answered_resume_question": has_answered,
         "can_end_interview": can_end,
+        "awaiting_manual_end": awaiting_manual_end,
     }
 
 
@@ -2541,6 +3145,10 @@ def _build_generate_response_payload(user, data, on_token=None):
             "should_delete_audio": False,
             "requires_code": response.get("requires_code"),
             "code_language": response.get("code_language"),
+            "awaiting_manual_end": bool(
+                response.get("awaiting_manual_end")
+                or getattr(manager, "awaiting_manual_end", False)
+            ),
         },
     }, 200
 
@@ -2851,68 +3459,449 @@ def overall_performance():
 #  CODE EXECUTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sandbox_preexec():
-    """Apply resource limits before exec — Linux only."""
-    try:
-        import resource
-        # Max CPU seconds
-        resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-        # Max output size 16 MB
-        resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024, 16 * 1024 * 1024))
-        # Max RAM 256 MB
-        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-        # Max open file descriptors
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        # No new processes
-        resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
-    except Exception:
-        pass  # Non-Linux platforms skip silently
-
-
+_IS_WINDOWS = sys.platform == "win32"
 _CODE_SIZE_LIMIT = 64 * 1024  # 64 KB
+_CODE_TIMEOUT = 10
+# Default AS for most languages. .NET CoreCLR needs more (see _CODE_RLIMIT_AS_DOTNET).
+_CODE_RLIMIT_AS_BYTES = 2 * 1024 * 1024 * 1024
+# CoreCLR fails under 2–3GB AS (0x8007000E / exit 137); allow 4GB for csharp only.
+_CODE_RLIMIT_AS_DOTNET = 4 * 1024 * 1024 * 1024
+# 16MB FSIZE killed `dotnet run` (SIGXFSZ / exit -25); restore/build writes more.
+_CODE_RLIMIT_FSIZE_BYTES = 512 * 1024 * 1024
+_CODE_EXEC_MAX_CONCURRENT = 2
+_CODE_EXEC_SLOT_WAIT_SECONDS = 2.0
+_CODE_EXEC_SEMAPHORE = threading.BoundedSemaphore(_CODE_EXEC_MAX_CONCURRENT)
+# go run / JVM / node under load need headroom beyond 256 (pthread_create EAGAIN).
+_CODE_RLIMIT_NPROC = 512
+_SANDBOX_PATH = (
+    "/usr/bin:/bin:/usr/local/bin:/usr/lib/jvm/default-java/bin:"
+    "/usr/local/go/bin:/root/.cargo/bin"
+)
 
-# Simple pattern blocklist for obviously dangerous code
-import re as _re
-_DANGER_PATTERNS = _re.compile(
+_DANGER_PATTERNS = re.compile(
     r'(import\s+os|import\s+subprocess|import\s+sys|'
     r'__import__|open\s*\(|exec\s*\(|eval\s*\(|'
     r'shutil|socket|requests|urllib|http\.client|'
     r'importlib|ctypes|threading|multiprocessing|'
     r'require\s*\(\s*[\'"]child_process|require\s*\(\s*[\'"]fs|'
-    r'require\s*\(\s*[\'"]net|process\.|global\.|Function\s*\()',
-    _re.IGNORECASE
+    r'require\s*\(\s*[\'"]net|process\.|global\.|globalThis\.|Function\s*\()',
+    re.IGNORECASE,
 )
 
 
-def _run_code(cmd, code, suffix, timeout=8):
+def _make_sandbox_preexec(as_bytes=_CODE_RLIMIT_AS_BYTES):
+    """Build a Linux preexec_fn with optional per-runtime address-space cap."""
+
+    def _sandbox_preexec():
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+            resource.setrlimit(
+                resource.RLIMIT_FSIZE,
+                (_CODE_RLIMIT_FSIZE_BYTES, _CODE_RLIMIT_FSIZE_BYTES),
+            )
+            if as_bytes is not None:
+                resource.setrlimit(resource.RLIMIT_AS, (as_bytes, as_bytes))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+            resource.setrlimit(
+                resource.RLIMIT_NPROC,
+                (_CODE_RLIMIT_NPROC, _CODE_RLIMIT_NPROC),
+            )
+        except Exception:
+            pass
+
+    return _sandbox_preexec
+
+
+def _subprocess_kwargs(timeout=_CODE_TIMEOUT, as_bytes=_CODE_RLIMIT_AS_BYTES):
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+    }
+    if not _IS_WINDOWS:
+        kwargs["preexec_fn"] = _make_sandbox_preexec(as_bytes=as_bytes)
+        kwargs["env"] = {
+            "PATH": _SANDBOX_PATH,
+            "HOME": "/tmp",
+            "LANG": "C.UTF-8",
+            "NODE_OPTIONS": "--max-old-space-size=512",
+            # JVM default compressed class space (~1GB) blows RLIMIT_AS; shrink it.
+            "JAVA_TOOL_OPTIONS": (
+                "-XX:MaxMetaspaceSize=128m -XX:CompressedClassSpaceSize=64m"
+            ),
+            # Cap Go OS threads so pthread_create does not exhaust RLIMIT_NPROC.
+            "GOMAXPROCS": "2",
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_NOLOGO": "1",
+            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+        }
+    return kwargs
+
+
+def _cap_output(text, limit=50_000):
+    if not text:
+        return text or ""
+    return text[:limit]
+
+
+def _process_error(result):
+    """Surface failures even when stderr is empty (javac often uses stdout; OOM may silence both)."""
+    if result.returncode == 0:
+        return None
+    err = (result.stderr or "").strip()
+    if err:
+        return err
+    out = (result.stdout or "").strip()
+    if out:
+        return out
+    return (
+        f"Process exited with code {result.returncode} "
+        "(no stderr; possible OOM/sandbox kill)"
+    )
+
+
+def _validate_code(code):
     if len(code) > _CODE_SIZE_LIMIT:
         return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
     if _DANGER_PATTERNS.search(code):
         return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
-    with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
+    return None
+
+
+def _success_payload(output="", error=None, test_results=None):
+    return jsonify({
+        "success": True,
+        "data": {
+            "output": _cap_output(output),
+            "error": _cap_output(error, 10_000) if error else None,
+            "testResults": test_results,
+        },
+    })
+
+
+def _acquire_code_exec_slot():
+    """Limit simultaneous compiles/runs so multi-user load cannot OOM the host."""
+    if _CODE_EXEC_SEMAPHORE.acquire(timeout=_CODE_EXEC_SLOT_WAIT_SECONDS):
+        return None
+    return jsonify({
+        "success": False,
+        "message": "Code runner is busy. Please try again in a moment.",
+    }), 503
+
+
+def _write_temp(code, suffix):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, encoding="utf-8") as f:
         f.write(code)
-        path = f.name
+        return f.name
+
+
+def _cleanup(*paths):
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _python_cmd():
+    return [sys.executable] if _IS_WINDOWS else ["python3"]
+
+
+def _run_interpreted(cmd, code, suffix, timeout=_CODE_TIMEOUT):
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+    path = _write_temp(code, suffix)
     try:
-        result = subprocess.run(
-            cmd + [path],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            preexec_fn=_sandbox_preexec,
-            env={"PATH": "/usr/bin:/usr/local/bin"}  # Stripped env
-        )
-        output = result.stdout[:50_000]  # Cap output at 50 KB
-        error = result.stderr[:10_000] if result.returncode != 0 else None
-        return jsonify({"success": True, "data": {"output": output, "error": error}})
+        result = subprocess.run(cmd + [path], **_subprocess_kwargs(timeout))
+        return _success_payload(result.stdout, _process_error(result))
+    except FileNotFoundError as e:
+        missing = cmd[0] if cmd else "runtime"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
     except subprocess.TimeoutExpired:
-        return jsonify({"success": False, "message": "Code execution timed out (8s limit)"}), 408
+        return jsonify({"success": False, "message": f"Code execution timed out ({timeout}s limit)"}), 408
     finally:
-        if os.path.exists(path):
-            os.unlink(path)
+        _cleanup(path)
+
+
+def _run_compile_then_exec(compile_cmd, run_cmd, code, suffix, extra_cleanup=None, timeout=_CODE_TIMEOUT):
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+    path = _write_temp(code, suffix)
+    extras = list(extra_cleanup(path) if callable(extra_cleanup) else (extra_cleanup or []))
+    try:
+        compiled = subprocess.run(compile_cmd(path), **_subprocess_kwargs(timeout))
+        if compiled.returncode != 0:
+            return _success_payload("", _process_error(compiled))
+        result = subprocess.run(run_cmd(path), **_subprocess_kwargs(timeout))
+        return _success_payload(result.stdout, _process_error(result))
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or (compile_cmd(path)[0] if path else "compiler")
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({"success": False, "message": f"Code execution timed out ({timeout}s limit)"}), 408
+    finally:
+        _cleanup(path, *extras)
+
+
+def _execute_javascript(code):
+    return _run_interpreted(["node"], code, ".js")
+
+
+def _execute_python(code):
+    return _run_interpreted(_python_cmd(), code, ".py")
+
+
+def _execute_typescript(code):
+    # Avoid heavy `npx tsx` under RLIMIT_AS; Node 22+ can strip types natively.
+    return _run_interpreted(["node", "--experimental-strip-types"], code, ".ts")
+
+
+def _execute_csharp(code):
+    """Run C# via `dotnet run` + temp project (SDK only; no dotnet-script)."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+
+    import shutil
+
+    work_dir = tempfile.mkdtemp(prefix="ic_csharp_")
+    csproj_path = os.path.join(work_dir, "CodeExec.csproj")
+    program_path = os.path.join(work_dir, "Program.cs")
+    # First run may restore packages; allow more time than simple scripts
+    timeout = max(_CODE_TIMEOUT, 30)
+    try:
+        with open(csproj_path, "w", encoding="utf-8") as f:
+            f.write(
+                """<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+"""
+            )
+        with open(program_path, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        # CoreCLR needs higher AS than the default 2GB sandbox; FSIZE is already raised.
+        run_kwargs = _subprocess_kwargs(timeout, as_bytes=_CODE_RLIMIT_AS_DOTNET)
+        base_env = run_kwargs.pop("env", None) or os.environ.copy()
+        base_env = {
+            **base_env,
+            "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+            "DOTNET_NOLOGO": "1",
+            "DOTNET_SKIP_FIRST_TIME_EXPERIENCE": "1",
+            # Soft-cap managed heap so CoreCLR stays within the raised AS limit.
+            "DOTNET_GCHeapHardLimit": hex(512 * 1024 * 1024),
+        }
+        run_kwargs["env"] = base_env
+
+        result = subprocess.run(
+            ["dotnet", "run", "--project", csproj_path, "--nologo"],
+            **run_kwargs,
+        )
+        # dotnet often writes build info to stderr even on success — only treat as error on failure
+        if result.returncode == 0:
+            return _success_payload(result.stdout, None)
+        return _success_payload(result.stdout, _process_error(result))
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or "dotnet"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "message": f"Code execution timed out ({timeout}s limit)",
+        }), 408
+    finally:
+        try:
+            shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _execute_go(code):
+    return _run_interpreted(["go", "run"], code, ".go")
+
+
+def _java_main_class(code):
+    """Pick the Java class to compile/run (must match the .java filename)."""
+    public = re.search(r"\bpublic\s+class\s+([A-Za-z_]\w*)", code)
+    if public:
+        return public.group(1)
+    with_main = re.search(
+        r"\bclass\s+([A-Za-z_]\w*)\s*(?:extends\s+\w+\s*)?(?:implements\s+[\w.,\s]+)?\{"
+        r"[\s\S]*?\bpublic\s+static\s+void\s+main\s*\(",
+        code,
+    )
+    if with_main:
+        return with_main.group(1)
+    first = re.search(r"\bclass\s+([A-Za-z_]\w*)", code)
+    if first:
+        return first.group(1)
+    return "Main"
+
+
+def _execute_java(code):
+    """Compile/run Java using ClassName.java so public classes work."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+
+    class_name = _java_main_class(code)
+    if not re.fullmatch(r"[A-Za-z_]\w*", class_name):
+        return jsonify({"success": False, "message": "Invalid Java class name"}), 400
+
+    work_dir = tempfile.mkdtemp(prefix="ic_java_")
+    source_path = os.path.join(work_dir, f"{class_name}.java")
+    class_path = os.path.join(work_dir, f"{class_name}.class")
+    try:
+        with open(source_path, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        compiled = subprocess.run(
+            ["javac", source_path],
+            **_subprocess_kwargs(_CODE_TIMEOUT),
+        )
+        if compiled.returncode != 0:
+            return _success_payload("", _process_error(compiled))
+
+        # Heap caps on the command line; metaspace/class-space via JAVA_TOOL_OPTIONS.
+        result = subprocess.run(
+            ["java", "-Xms32m", "-Xmx256m", "-cp", work_dir, class_name],
+            **_subprocess_kwargs(_CODE_TIMEOUT),
+        )
+        return _success_payload(result.stdout, _process_error(result))
+    except FileNotFoundError as e:
+        missing = getattr(e, "filename", None) or "javac"
+        return jsonify({
+            "success": False,
+            "message": f"Runtime not available: '{missing}' was not found on this server",
+        }), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            "success": False,
+            "message": f"Code execution timed out ({_CODE_TIMEOUT}s limit)",
+        }), 408
+    finally:
+        _cleanup(source_path, class_path)
+        try:
+            os.rmdir(work_dir)
+        except OSError:
+            # Remove leftover .class files from nested/inner classes if any
+            try:
+                for name in os.listdir(work_dir):
+                    _cleanup(os.path.join(work_dir, name))
+                os.rmdir(work_dir)
+            except OSError:
+                pass
+
+
+def _execute_cpp(code):
+    def binary_path(path):
+        base = path[:-4] if path.endswith(".cpp") else path
+        return base + (".exe" if _IS_WINDOWS else "")
+
+    def compile_cmd(path):
+        return ["g++", "-o", binary_path(path), path]
+
+    def run_cmd(path):
+        return [binary_path(path)]
+
+    def extras(path):
+        return [binary_path(path)]
+
+    return _run_compile_then_exec(compile_cmd, run_cmd, code, ".cpp", extra_cleanup=extras)
+
+
+def _execute_rust(code):
+    def binary_path(path):
+        base = path[:-3] if path.endswith(".rs") else path
+        return base + (".exe" if _IS_WINDOWS else "")
+
+    def compile_cmd(path):
+        return ["rustc", path, "-o", binary_path(path)]
+
+    def run_cmd(path):
+        return [binary_path(path)]
+
+    def extras(path):
+        return [binary_path(path)]
+
+    return _run_compile_then_exec(compile_cmd, run_cmd, code, ".rs", extra_cleanup=extras)
+
+
+def _friendly_sql_error(code, err):
+    """Map raw SQLite errors to clearer guidance for interview candidates."""
+    msg = str(err or "").strip()
+    lower_msg = msg.lower()
+    lower_code = (code or "").lower()
+
+    if "no such table" in lower_msg:
+        return (
+            "Please CREATE/INSERT the required table(s) in your script and run again. "
+            "Each SQL run starts with an empty database."
+        )
+
+    dialect_hint = re.search(
+        r"\binterval\b|\bilike\b|auto_increment|\bserial\b|::|`",
+        lower_code,
+    )
+    if "syntax error" in lower_msg or dialect_hint:
+        return (
+            "Please use SQLite syntax. Postgres/MySQL syntax is not supported in this editor."
+        )
+
+    return msg or "SQL execution failed"
+
+
+def _execute_sql(code):
+    """Run SQL against an in-memory SQLite DB (no external binary required)."""
+    rejected = _validate_code(code)
+    if rejected:
+        return rejected
+    try:
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        try:
+            cursor = conn.cursor()
+            statements = [s.strip() for s in code.split(";") if s.strip()]
+            chunks = []
+            for stmt in statements:
+                cursor.execute(stmt)
+                if cursor.description:
+                    cols = [d[0] for d in cursor.description]
+                    rows = cursor.fetchall()
+                    chunks.append("\t".join(cols))
+                    for row in rows:
+                        chunks.append("\t".join("" if v is None else str(v) for v in row))
+                else:
+                    chunks.append(f"OK ({cursor.rowcount} row(s) affected)")
+            conn.commit()
+            return _success_payload("\n".join(chunks) if chunks else "OK")
+        finally:
+            conn.close()
+    except Exception as e:
+        return _success_payload("", _friendly_sql_error(code, e))
 
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def execute_code():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2921,49 +3910,33 @@ def execute_code():
     language = data.get('language', 'python').lower()
     if not code:
         return jsonify({"success": False, "message": "No code provided"}), 400
-    if language == 'javascript':
-        return jsonify({
-            "success": False,
-            "message": "JavaScript execution is disabled for security reasons",
-        }), 400
+
+    handlers = {
+        "javascript": _execute_javascript,
+        "python": _execute_python,
+        "java": _execute_java,
+        "cpp": _execute_cpp,
+        "c++": _execute_cpp,
+        "csharp": _execute_csharp,
+        "c#": _execute_csharp,
+        "go": _execute_go,
+        "rust": _execute_rust,
+        "typescript": _execute_typescript,
+        "sql": _execute_sql,
+    }
+    handler = handlers.get(language)
+    if not handler:
+        return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
+
+    busy = _acquire_code_exec_slot()
+    if busy is not None:
+        return busy
     try:
-        if language == 'python':
-            return _run_code(['python3'], code, '.py')
-        elif language == 'java':
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.java', delete=False) as f:
-                f.write(code); path = f.name
-            try:
-                if _DANGER_PATTERNS.search(code):
-                    return jsonify({"success": False, "message": "Blocked: dangerous module or function detected"}), 400
-                c = subprocess.run(
-                    ['javac', path],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    preexec_fn=_sandbox_preexec,
-                    env={"PATH": "/usr/bin:/usr/local/bin"},
-                )
-                if c.returncode != 0:
-                    return jsonify({"success": True, "data": {"output": "", "error": c.stderr}})
-                cls = os.path.splitext(os.path.basename(path))[0]
-                r = subprocess.run(
-                    ['java', '-cp', os.path.dirname(path), cls],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    preexec_fn=_sandbox_preexec,
-                    env={"PATH": "/usr/bin:/usr/local/bin"},
-                )
-                return jsonify({"success": True, "data": {"output": r.stdout, "error": r.stderr or None}})
-            except subprocess.TimeoutExpired:
-                return jsonify({"success": False, "message": "Timed out"}), 408
-            finally:
-                for p in [path, path.replace('.java', '.class')]:
-                    if os.path.exists(p): os.unlink(p)
-        else:
-            return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
+        return handler(code)
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+    finally:
+        _CODE_EXEC_SEMAPHORE.release()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING SOCKETIO
@@ -3402,9 +4375,18 @@ def resumes_api():
     file_url = _serialize_file_url(data.get('file_url'))
     file_name = data.get('file_name') or 'resume'
     stored_path = data.get('stored_path')
+    content_hash = (data.get('content_hash') or "").strip() or None
+    if not content_hash and file_name.strip().lower() == 'skills-based profile':
+        # Prefer hash from skills_text when provided by client
+        skills_text = data.get('skills_text') or ""
+        if skills_text:
+            content_hash = hash_skills_text(skills_text)
+        else:
+            content_hash = hash_skills_list([])
     row = execute(
-        'INSERT INTO resumes (user_id, file_url, file_name, stored_path) VALUES (%s, %s, %s, %s) RETURNING *',
-        (user_id, file_url, file_name, stored_path),
+        'INSERT INTO resumes (user_id, file_url, file_name, stored_path, content_hash) '
+        'VALUES (%s, %s, %s, %s, %s) RETURNING *',
+        (user_id, file_url, file_name, stored_path, content_hash),
     )
     return jsonify({'success': True, 'data': dict(row)}), 201
 
