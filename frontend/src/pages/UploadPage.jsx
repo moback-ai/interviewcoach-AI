@@ -33,8 +33,6 @@ const SUGGESTED_SKILLS_POOL = [
   'Leadership', 'Problem Solving', 'Data Analysis', 'Machine Learning', 'DevOps',
 ];
 
-const PLACEHOLDER_PROFILE_URL = 'https://app.skills-based/profile';
-
 function UploadPage() {
   const navigate = useNavigate();
   const { setIsOperationInProgress } = useOperation();
@@ -71,6 +69,8 @@ function UploadPage() {
     details: undefined,
   });
   const pendingPairContinueRef = useRef(null);
+  const pendingDossierRetryRef = useRef(null);
+  const lastGenerateAttemptRef = useRef(null);
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
 
   // New state for question generation settings
@@ -454,7 +454,7 @@ function UploadPage() {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        file_url: PLACEHOLDER_PROFILE_URL,
+        file_url: '',
         file_name: 'Skills-based profile',
         skills_text: skillsText,
       }),
@@ -500,6 +500,7 @@ function UploadPage() {
 
   const closeNoticeModal = () => {
     pendingPairContinueRef.current = null;
+    pendingDossierRetryRef.current = null;
     setNoticeModal({
       isOpen: false,
       title: '',
@@ -589,6 +590,8 @@ function UploadPage() {
         let resumeId = reuseResumeId;
         let jdId = reuseJdId;
         let resumeUrl = reuseResumeUrl;
+        // "Generate new set anyway" → dossier-only (pair already has questions + dossier).
+        const dossierOnly = Boolean(forceNew);
 
         if (!forceNew && !resumeId && !jdId) {
           const match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
@@ -704,19 +707,32 @@ function UploadPage() {
         }
 
         // Step 3: Generate questions using backend API
-        devLog('[DEBUG] Step 3: Generating questions...');
+        devLog('[DEBUG] Step 3: Generating questions...', dossierOnly ? '(dossier-only reuse)' : '(first build)');
+        lastGenerateAttemptRef.current = {
+          resumeUrl: dossierOnly ? undefined : (resumeUrl || undefined),
+          skillsText: dossierOnly ? undefined : (isSkillsMode ? skillsTextForApi : undefined),
+          jobTitle,
+          jobDescription,
+          resumeId,
+          jdId,
+          isSkillsMode,
+          resumeName: resume?.name,
+          dossierOnly,
+        };
         let questionsResult;
         try {
           questionsResult = await generateQuestionsFromBackend({
-            resumeUrl: resumeUrl || undefined,
-            skillsText: isSkillsMode ? skillsTextForApi : undefined,
+            resumeUrl: dossierOnly ? undefined : (resumeUrl || undefined),
+            skillsText: dossierOnly ? undefined : (isSkillsMode ? skillsTextForApi : undefined),
             jobTitle,
             jobDescription,
             resumeId,
             jdId,
+            dossierOnly,
           });
         } catch (genError) {
           const missingFile =
+            !dossierOnly &&
             !isSkillsMode &&
             resume &&
             (genError?.code === 'RESUME_FILE_MISSING' ||
@@ -727,6 +743,12 @@ function UploadPage() {
           // Saved resume row exists in DB but the blob is gone — re-upload and retry once.
           devWarn('[WARN] Resume file missing in storage; re-uploading and retrying generation...');
           ({ resumeId, resumeUrl } = await uploadResume(resume));
+          lastGenerateAttemptRef.current = {
+            ...lastGenerateAttemptRef.current,
+            resumeId,
+            resumeUrl,
+            dossierOnly: false,
+          };
           questionsResult = await generateQuestionsFromBackend({
             resumeUrl,
             jobTitle,
@@ -737,92 +759,54 @@ function UploadPage() {
         }
       
         if (!questionsResult.success) {
-          throw new Error(`Failed to generate questions: ${questionsResult.message}`);
+          const err = new Error(
+            questionsResult.message || 'Failed to generate questions'
+          );
+          err.code = questionsResult.code || null;
+          throw err;
         }
 
-        const generationDebug = questionsResult.debug || {};
-        const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-        const generationWarning = fallbackAnswerCount > 0
-          ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-          : '';
-
-        // Step 4: Save questions to database via edge function
+        // Step 4–5: Save questions and show success
         devLog('[DEBUG] Step 4: Saving questions to database...');
-        const questionsSaveResult = await saveQuestionsToDatabase(
-          resumeId, 
-          jdId, 
-          questionsResult.data.questions
-        );
-
-        if (!questionsSaveResult.success) {
-          throw new Error(`Failed to save questions: ${questionsSaveResult.message}`);
-        }
-
-        // Get the question set number from the saved questions
-        const savedQuestionSet = questionsSaveResult.data[0]?.question_set || 'unknown';
-
-        // Track questions generated
-        const uniqueQuestions = questionsSaveResult.data.reduce((acc, item) => {
-          if (!acc.has(item.question_text)) {
-            acc.add(item.question_text);
-          }
-          return acc;
-        }, new Set());
-
-        trackEvents.questionsGenerated({
-          resume_id: resumeId,
-          jd_id: jdId,
-          question_set: savedQuestionSet,
-          total_questions: uniqueQuestions.size,
-          job_title: jobTitle,
-          generation_timestamp: new Date().toISOString()
-        });
-
-        // Step 5: Show success message and redirect
-        devLog('[DEBUG] Step 5: Process completed successfully!');
-        devLog('[DEBUG] Resume ID:', resumeId);
-        devLog('[DEBUG] Job Description ID:', jdId);
-        devLog('[DEBUG] Questions saved:', questionsSaveResult.data.length);
-      
-        // Store the created IDs for navigation
-        setLastCreatedIds({
-          resumeId: resumeId,
-          jdId: jdId,
-          questionSet: savedQuestionSet
-        });
-      
-        // Show success modal instead of alert
-        setSuccessModal({
-          isOpen: true,
-          title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
-          message: generationWarning
-            ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
-            : isSkillsMode
-              ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
-              : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
-          details: [
-            `Question Set: ${savedQuestionSet}`,
-            `Total Questions: ${uniqueQuestions.size}`,
-            isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resume.name}`,
-            `Job Title: ${jobTitle}`,
-            generationWarning
-              ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
-              : 'Status: Ready for interview preparation',
-          ],
+        await finishSuccessfulGeneration({
+          resumeId,
+          jdId,
+          questionsResult,
+          isSkillsMode,
+          resumeName: resume?.name,
+          jobTitle,
         });
 
       } catch (error) {
         console.error('Error in complete workflow:', error);
-        const msg = error instanceof Error ? error.message : String(error || '');
-        setNoticeModal({
-          isOpen: true,
-          title: 'Upload failed',
-          message: mapEmptyUploadFileError(msg),
-          variant: 'error',
-          primaryLabel: 'OK',
-          secondaryLabel: undefined,
-          onSecondary: undefined,
-        });
+        const isDossierFail = error?.code === 'DOSSIER_BUILD_FAILED';
+        if (isDossierFail && lastGenerateAttemptRef.current?.resumeId) {
+          pendingDossierRetryRef.current = () => {
+            void retryDossierAndQuestions();
+          };
+          setNoticeModal({
+            isOpen: true,
+            title: 'Could not build interview profile',
+            message:
+              error.message ||
+              'Failed to build the interview dossier from your profile. No questions were generated. Please retry.',
+            variant: 'error',
+            primaryLabel: 'Retry',
+            secondaryLabel: 'Cancel',
+            onSecondary: closeNoticeModal,
+          });
+        } else {
+          const msg = error instanceof Error ? error.message : String(error || '');
+          setNoticeModal({
+            isOpen: true,
+            title: 'Upload failed',
+            message: mapEmptyUploadFileError(msg),
+            variant: 'error',
+            primaryLabel: 'OK',
+            secondaryLabel: undefined,
+            onSecondary: undefined,
+          });
+        }
       } finally {
         setLoading(false);
         setIsOperationInProgress(false); // ✅ Resume idle timeout after generation
@@ -840,6 +824,7 @@ function UploadPage() {
     jobDescription,
     resumeId,
     jdId,
+    dossierOnly = false,
   }) => {
     try {
       const session = await getSession();
@@ -868,10 +853,13 @@ function UploadPage() {
         blend_pct_jd: 100 - blendResumePercentage,
         include_answers: includeSampleAnswers,
       };
-      if (skillsText) {
-        body.skills_text = skillsText;
-      } else if (resumeUrl) {
-        body.resume_url = resumeUrl;
+      // First build needs source; reuse/"new set anyway" is dossier-only.
+      if (!dossierOnly) {
+        if (skillsText) {
+          body.skills_text = skillsText;
+        } else if (resumeUrl) {
+          body.resume_url = resumeUrl;
+        }
       }
 
       const response = await fetch(`${backendUrl}/api/generate-questions`, {
@@ -916,6 +904,142 @@ function UploadPage() {
         );
       }
       throw error;
+    }
+  };
+
+  const finishSuccessfulGeneration = async ({
+    resumeId,
+    jdId,
+    questionsResult,
+    isSkillsMode,
+    resumeName,
+    jobTitle,
+  }) => {
+    const questionsSaveResult = await saveQuestionsToDatabase(
+      resumeId,
+      jdId,
+      questionsResult.data.questions
+    );
+
+    if (!questionsSaveResult.success) {
+      throw new Error(`Failed to save questions: ${questionsSaveResult.message}`);
+    }
+
+    const savedQuestionSet = questionsSaveResult.data[0]?.question_set || 'unknown';
+
+    const uniqueQuestions = questionsSaveResult.data.reduce((acc, item) => {
+      if (!acc.has(item.question_text)) {
+        acc.add(item.question_text);
+      }
+      return acc;
+    }, new Set());
+
+    trackEvents.questionsGenerated({
+      resume_id: resumeId,
+      jd_id: jdId,
+      question_set: savedQuestionSet,
+      total_questions: uniqueQuestions.size,
+      job_title: jobTitle,
+      generation_timestamp: new Date().toISOString()
+    });
+
+    const generationDebug = questionsResult.debug || {};
+    const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
+    const generationWarning = fallbackAnswerCount > 0
+      ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
+      : '';
+
+    setLastCreatedIds({
+      resumeId: resumeId,
+      jdId: jdId,
+      questionSet: savedQuestionSet
+    });
+
+    setSuccessModal({
+      isOpen: true,
+      title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
+      message: generationWarning
+        ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
+        : isSkillsMode
+          ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
+          : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
+      details: [
+        `Question Set: ${savedQuestionSet}`,
+        `Total Questions: ${uniqueQuestions.size}`,
+        isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resumeName || 'resume'}`,
+        `Job Title: ${jobTitle}`,
+        generationWarning
+          ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
+          : 'Status: Ready for interview preparation',
+      ],
+    });
+  };
+
+  const retryDossierAndQuestions = async () => {
+    const attempt = lastGenerateAttemptRef.current;
+    if (!attempt?.resumeId || !attempt?.jdId) {
+      return;
+    }
+    closeNoticeModal();
+    setLoading(true);
+    setIsOperationInProgress(true);
+    try {
+      const questionsResult = await generateQuestionsFromBackend({
+        resumeUrl: attempt.resumeUrl,
+        skillsText: attempt.skillsText,
+        jobTitle: attempt.jobTitle,
+        jobDescription: attempt.jobDescription,
+        resumeId: attempt.resumeId,
+        jdId: attempt.jdId,
+        dossierOnly: Boolean(attempt.dossierOnly),
+      });
+      if (!questionsResult.success) {
+        const err = new Error(questionsResult.message || 'Failed to generate questions');
+        err.code = questionsResult.code || null;
+        throw err;
+      }
+      await finishSuccessfulGeneration({
+        resumeId: attempt.resumeId,
+        jdId: attempt.jdId,
+        questionsResult,
+        isSkillsMode: attempt.isSkillsMode,
+        resumeName: attempt.resumeName,
+        jobTitle: attempt.jobTitle,
+      });
+    } catch (error) {
+      console.error('Error retrying dossier build:', error);
+      const isDossierFail = error?.code === 'DOSSIER_BUILD_FAILED';
+      if (isDossierFail) {
+        pendingDossierRetryRef.current = () => {
+          void retryDossierAndQuestions();
+        };
+        setNoticeModal({
+          isOpen: true,
+          title: 'Could not build interview profile',
+          message:
+            error.message ||
+            'Failed to build the interview dossier. No questions were generated. Please retry.',
+          variant: 'error',
+          primaryLabel: 'Retry',
+          secondaryLabel: 'Cancel',
+          onSecondary: closeNoticeModal,
+        });
+      } else {
+        setNoticeModal({
+          isOpen: true,
+          title: 'Upload failed',
+          message: mapEmptyUploadFileError(
+            error instanceof Error ? error.message : String(error || '')
+          ),
+          variant: 'error',
+          primaryLabel: 'OK',
+          secondaryLabel: undefined,
+          onSecondary: undefined,
+        });
+      }
+    } finally {
+      setLoading(false);
+      setIsOperationInProgress(false);
     }
   };
 
@@ -1900,6 +2024,10 @@ function UploadPage() {
           if (noticeModal.primaryLabel === 'Go to Dashboard') {
             closeNoticeModal();
             navigate('/dashboard');
+            return;
+          }
+          if (noticeModal.primaryLabel === 'Retry' && pendingDossierRetryRef.current) {
+            pendingDossierRetryRef.current();
             return;
           }
           closeNoticeModal();

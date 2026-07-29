@@ -258,10 +258,15 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error in regenerate questions workflow:', error);
+      const isDossierMissing = error?.code === 'DOSSIER_MISSING';
       setNoticeModal({
         isOpen: true,
-        title: 'Could not generate questions',
-        message: error.message,
+        title: isDossierMissing
+          ? 'Interview profile missing'
+          : 'Could not generate questions',
+        message: isDossierMissing
+          ? 'No saved interview dossier was found for this pair. Create questions again from Upload.'
+          : (error.message || 'Could not generate questions.'),
         variant: 'error',
       });
     } finally {
@@ -278,6 +283,22 @@ function DashboardPage() {
 
   const handleDownloadResume = async (pairing, e) => {
     e.stopPropagation(); // Prevent triggering the pairing selection
+
+    const resumeName = String(pairing.resumeName || '').trim().toLowerCase();
+    const resumeUrl = String(pairing.resumeUrl || '').trim();
+    const isSkillsProfile =
+      resumeName === 'skills-based profile' ||
+      !resumeUrl ||
+      /app\.skills-based/i.test(resumeUrl);
+    if (isSkillsProfile) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'No file to download',
+        message: 'This pairing uses a skills-based profile, so there is no resume file to download.',
+        variant: 'info',
+      });
+      return;
+    }
     
     // Prevent multiple clicks
     if (downloadingResume.has(pairing.id)) {
@@ -319,11 +340,11 @@ function DashboardPage() {
     }
   };
 
-  // Helper function to call backend API for question generation
+  // Regenerates from the cached dossier only (resume_id + jd_id).
+  // Never sends resume_url — first-build owns resume/skills + dossier creation.
   const generateQuestionsFromBackend = async (pairing, questionSettings = {}) => {
     try {
-      const response = await apiPost('/generate-questions', {
-        resume_url: pairing.resumeUrl,
+      const body = {
         resume_id: pairing.resume_id,
         jd_id: pairing.jd_id,
         job_title: pairing.jobTitle,
@@ -341,7 +362,9 @@ function DashboardPage() {
         blend_pct_resume: questionSettings.blendResumePercentage || 50,
         blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50),
         include_answers: questionSettings.includeSampleAnswers || false,
-      }, { timeoutMs: 300000 });
+      };
+
+      const response = await apiPost('/generate-questions', body, { timeoutMs: 300000 });
 
       return response;
     } catch (error) {

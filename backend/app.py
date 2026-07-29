@@ -2448,6 +2448,41 @@ def classify_technical_role():
 #  GENERATE QUESTIONS FROM RESUME
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_skills_placeholder_resume_url(url: str | None) -> bool:
+    """True for the skills-based stub URL that must never be HTTP-fetched."""
+    value = (url or "").strip().lower()
+    if not value:
+        return False
+    return "app.skills-based" in value or value.rstrip("/").endswith("skills-based/profile")
+
+
+def _pipeline_failure_response(result, ollama_diagnostics):
+    """Map pipeline soft-failures (dossier gate, etc.) to HTTP responses."""
+    error_message = result.get("error") or "Pipeline returned no questions"
+    code = (result.get("code") or "").strip()
+    print(
+        f"[ERROR] Question generation failed code={code or 'none'}: "
+        f"{error_message} | ollama={json.dumps(ollama_diagnostics)}"
+    )
+    if code == "DOSSIER_BUILD_FAILED":
+        status = 422
+    elif code == "DOSSIER_MISSING":
+        status = 404
+    else:
+        status = 500
+    payload = {
+        "success": False,
+        "message": error_message,
+        "debug": {
+            "generator": "ollama_failed",
+            "ollama": ollama_diagnostics,
+        },
+    }
+    if code:
+        payload["code"] = code
+    return jsonify(payload), status
+
+
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
@@ -2468,20 +2503,32 @@ def generate_questions():
                 "success": False,
                 "message": "Missing required fields: job_title and job_description",
             }), 400
+
+        # Never fetch the skills-based stub URL (DNS will fail).
+        if _is_skills_placeholder_resume_url(resume_url):
+            print(f"[INFO] Ignoring skills-based placeholder resume_url={resume_url!r}")
+            resume_url = None
+
+        has_ids = bool(str(resume_id or "").strip() and str(jd_id or "").strip())
         if resume_url and skills_text:
             return jsonify({
                 "success": False,
                 "message": "Provide either resume_url or skills_text, not both",
             }), 400
-        if not resume_url and not skills_text:
+        # Regenerate: resume_id + jd_id only (pipeline loads dossier once).
+        # First build: resume_url or skills_text (+ ids for save).
+        if not has_ids and not resume_url and not skills_text:
             return jsonify({
                 "success": False,
-                "message": "Missing required field: provide either resume_url or skills_text (comma-separated skills)",
+                "message": (
+                    "Missing required fields: provide resume_id and jd_id to regenerate "
+                    "from the cached dossier, or resume_url / skills_text for a new build"
+                ),
             }), 400
-        if skills_text and (not resume_id or not jd_id):
+        if not has_ids:
             return jsonify({
                 "success": False,
-                "message": "When using skills_text, resume_id and jd_id are required for saving questions",
+                "message": "resume_id and jd_id are required for saving questions",
             }), 400
 
         is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
@@ -2503,6 +2550,13 @@ def generate_questions():
                 }), 400
             print(f"[DEBUG] Skills-based profile: {len(skills_list)} skills")
 
+        is_regenerate = has_ids and not skills_list and not resume_url
+        if is_regenerate:
+            print(
+                f"[INFO] generate-questions regenerate mode "
+                f"resume_id={resume_id} jd_id={jd_id} (dossier-only, no pre-load)"
+            )
+
         question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         pipeline_kwargs = {
@@ -2522,9 +2576,12 @@ def generate_questions():
             "resume_id": resume_id,
             "jd_id": jd_id,
             "user_id": request.user["id"],
+            "resume_text": None,
         }
 
         temp_resume = None
+        # First build only: materialize resume file for dossier construction.
+        # Regenerate never downloads — pipeline loads the saved dossier once.
         if resume_url:
             relative = resolve_relative_path(resume_url)
             if relative:
@@ -2557,6 +2614,8 @@ def generate_questions():
             is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
             if not is_valid_resume:
                 return jsonify({"success": False, "message": resume_validation_error}), 400
+            # Pass extracted text so the pipeline does not parse the file again.
+            pipeline_kwargs["resume_text"] = resume_text
             pipeline_kwargs["resume_path"] = temp_resume
 
         try:
@@ -2582,19 +2641,7 @@ def generate_questions():
                     },
                 }), status
             if not result.get("success") or not result.get("questions"):
-                error_message = result.get("error") or "Pipeline returned no questions"
-                print(
-                    "[ERROR] Ollama question generation failed: "
-                    f"{error_message} | ollama={json.dumps(ollama_diagnostics)}"
-                )
-                return jsonify({
-                    "success": False,
-                    "message": error_message,
-                    "debug": {
-                        "generator": "ollama_failed",
-                        "ollama": ollama_diagnostics,
-                    },
-                }), 500
+                return _pipeline_failure_response(result, ollama_diagnostics)
             result.setdefault("generator", "ollama_pipeline")
             result["ollama_diagnostics"] = ollama_diagnostics
             return jsonify({"success": True, "data": {
