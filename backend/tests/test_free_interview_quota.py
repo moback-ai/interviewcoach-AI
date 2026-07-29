@@ -189,10 +189,11 @@ class TestCheckoutGuard(unittest.TestCase):
   def setUp(self):
     self.app = Flask(__name__)
 
+  @patch("common.payment_handlers.query_one", return_value=None)
   @patch("common.interview_start.interview_quota")
   @patch("common.payment_handlers._verify_resume_jd_owned", return_value=True)
   def test_create_checkout_rejected_when_free_slot_available(
-    self, _mock_owned, mock_quota
+    self, _mock_owned, mock_quota, _mock_query_one
   ):
     mock_quota.return_value = {
       "started_count": 0,

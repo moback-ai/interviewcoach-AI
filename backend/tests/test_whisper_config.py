@@ -13,6 +13,8 @@ class WhisperConfigTests(unittest.TestCase):
         runtime_config._SOURCE = "unset"
         os.environ.clear()
         os.environ["RUNTIME_CONFIG_ALLOW_ENV"] = "true"
+        import common.speech.local_whisper as local_whisper
+        local_whisper._whisper_model = None
 
     @patch("common.speech.local_whisper.WhisperModel")
     @patch("common.speech.local_whisper.get_inference_device", return_value="cpu")
