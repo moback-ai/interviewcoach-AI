@@ -17,7 +17,7 @@ class WhisperConfigTests(unittest.TestCase):
         local_whisper._whisper_model = None
 
     @patch("common.speech.local_whisper.WhisperModel")
-    @patch("common.speech.local_whisper.get_inference_device", return_value="cpu")
+    @patch("common.lazy_deps.get_inference_device", return_value="cpu")
     def test_local_whisper_language_defaults_to_english(self, _mock_dev, mock_model_cls):
         mock_instance = MagicMock()
         mock_model_cls.return_value = mock_instance
