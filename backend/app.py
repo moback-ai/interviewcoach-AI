@@ -2444,6 +2444,140 @@ def classify_technical_role():
     except Exception as e:
         return jsonify({"success": False, "message": str(e), "is_technical": False}), 500
 
+
+@app.route('/api/validate-upload-documents', methods=['POST', 'OPTIONS'])
+@verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
+def validate_upload_documents():
+    """
+    LLM (+ heuristic fallback) type checks before pair-check / question generation.
+    Multipart: optional resume file + job_title + job_description
+    JSON: skills_text (skills mode) + job_title + job_description
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+
+    from common.document_type_classification import (
+        classify_is_job_description,
+        classify_is_resume,
+    )
+
+    data_json = request.get_json(silent=True) or {}
+    job_title = (
+        request.form.get('job_title')
+        or data_json.get('job_title')
+        or ""
+    ).strip()
+    job_description = (
+        request.form.get('job_description')
+        or data_json.get('job_description')
+        or ""
+    ).strip()
+    skills_text = (
+        request.form.get('skills_text')
+        or data_json.get('skills_text')
+        or ""
+    ).strip()
+
+    if not job_title or not job_description:
+        return jsonify({
+            "success": False,
+            "code": "MISSING_JD",
+            "message": "job_title and job_description are required",
+        }), 400
+
+    model = get_ollama_model_name()
+    resume_ok = True
+    resume_message = ""
+
+    has_resume_file = (
+        'file' in request.files
+        and request.files['file']
+        and request.files['file'].filename
+    )
+
+    if has_resume_file:
+        upload = request.files['file']
+        ext = secure_filename(upload.filename).rsplit('.', 1)[-1].lower()
+        if ext not in ['pdf', 'doc', 'docx', 'txt']:
+            return jsonify({
+                "success": False,
+                "code": "INVALID_RESUME",
+                "message": "File type not allowed for resume",
+            }), 400
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
+                upload.save(tf.name)
+                temp_path = tf.name
+            try:
+                resume_text = extract_text_from_uploaded_document(temp_path, ext)
+            except ValueError as ve:
+                return jsonify({
+                    "success": False,
+                    "code": "INVALID_RESUME",
+                    "message": str(ve),
+                }), 400
+            try:
+                resume_ok, resume_message = _run_callable_with_timeout(
+                    lambda: classify_is_resume(resume_text, model=model),
+                    45,
+                    label="Resume type classification",
+                )
+            except Exception as classify_error:
+                print(f"[WARN] Resume type classification timed out/failed: {classify_error}")
+                # Fall back to existing heuristic-only validation
+                resume_ok, resume_message = validate_resume_text(resume_text)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+    elif skills_text:
+        # Skills profile mode — no resume document to classify.
+        resume_ok = True
+        resume_message = ""
+    else:
+        return jsonify({
+            "success": False,
+            "code": "MISSING_RESUME",
+            "message": "Provide a resume file or skills_text",
+        }), 400
+
+    if not resume_ok:
+        return jsonify({
+            "success": False,
+            "code": "INVALID_RESUME",
+            "message": resume_message or "The uploaded file does not look like a resume.",
+            "data": {"resume_ok": False, "jd_ok": None},
+        }), 400
+
+    try:
+        jd_ok, jd_message = _run_callable_with_timeout(
+            lambda: classify_is_job_description(job_title, job_description, model=model),
+            45,
+            label="JD type classification",
+        )
+    except Exception as classify_error:
+        print(f"[WARN] JD type classification timed out/failed: {classify_error}")
+        jd_ok, jd_message = validate_job_description_text(job_description)
+
+    if not jd_ok:
+        return jsonify({
+            "success": False,
+            "code": "INVALID_JD",
+            "message": jd_message or "The job description does not look like a job posting.",
+            "data": {"resume_ok": True, "jd_ok": False},
+        }), 400
+
+    return jsonify({
+        "success": True,
+        "message": "Documents look valid",
+        "data": {"resume_ok": True, "jd_ok": True},
+    })
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  GENERATE QUESTIONS FROM RESUME
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3039,6 +3173,11 @@ def _build_generate_response_payload(user, data, on_token=None):
     dynamic_config = _interview_dynamic_config(
         interview_row, interview_id, user_id, saved_state
     )
+    interviewer_name = (data.get("interviewer_name") or "").strip()
+    if interviewer_name:
+        dynamic_config["interviewer_name"] = interviewer_name
+    elif "interviewer_name" not in dynamic_config:
+        dynamic_config["interviewer_name"] = "Sadhan"
 
     manager = InterviewManager.from_config(dynamic_config)
     if saved_state:
@@ -3047,6 +3186,9 @@ def _build_generate_response_payload(user, data, on_token=None):
             if not callable(v) and k not in ('model', 'time_limit_seconds')
         })
     manager.time_limit_seconds = 0
+    manager.interviewer_name = (
+        (dynamic_config.get("interviewer_name") or "").strip() or "Sadhan"
+    )
 
     tracked_active_seconds = tick_interview_time(interview_id, user_id)
     manager.tracked_active_seconds = tracked_active_seconds
@@ -3084,6 +3226,14 @@ def _build_generate_response_payload(user, data, on_token=None):
         save_session(instance_key, serializable)
     except Exception as se:
         print(f"[WARN] Session save failed: {se}")
+
+    # Plain-text only for chat UI + Piper (no markdown asterisks).
+    if response.get("message"):
+        try:
+            from INTERVIEW.Interview_functions import sanitize_interviewer_display_text
+            response["message"] = sanitize_interviewer_display_text(response["message"])
+        except Exception as sanitize_error:
+            print(f"[WARN] Interviewer text sanitize failed: {sanitize_error}")
 
     chat_rows = [(interview_id, 'user', user_input)]
     if response.get("message"):
@@ -4813,11 +4963,29 @@ def legacy_chat_history():
     if not interview_id:
         return jsonify({'success': False, 'error': 'interview_id required'}), 400
     if request.method == 'GET':
-        rows = query_all('SELECT * FROM chat_history WHERE interview_id=%s ORDER BY created_at ASC', (interview_id,))
-        content = '\n'.join(f"{row['role']}:{row['content']}" for row in rows)
+        rows = query_all(
+            'SELECT role, content, created_at FROM chat_history '
+            'WHERE interview_id=%s ORDER BY created_at ASC',
+            (interview_id,),
+        )
+        messages = []
+        for row in rows:
+            role = (row.get('role') or '').strip()
+            content = row.get('content')
+            if content is None:
+                content = ''
+            created = row.get('created_at')
+            messages.append({
+                'role': role,
+                'content': str(content),
+                'created_at': created.isoformat() if hasattr(created, 'isoformat') else created,
+            })
+        # Legacy blob kept for older clients; structured messages are preferred.
+        content = '\n'.join(f"{m['role']}:{m['content']}" for m in messages)
         ui_state = _interview_session_ui_state(interview_id, request.user['id'])
         return jsonify({
             'success': True,
+            'messages': messages,
             'history': [{'content': content}] if content else [],
             **ui_state,
         })
@@ -4825,19 +4993,78 @@ def legacy_chat_history():
         execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
         return jsonify({'success': True})
     data = request.get_json() or {}
+
+    # Prefer structured messages so colons/newlines inside content cannot flip roles.
+    structured = data.get('messages')
+    append_only = bool(data.get('append'))
+    if isinstance(structured, list) and structured:
+        if not append_only:
+            execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
+        for item in structured:
+            if not isinstance(item, dict):
+                continue
+            speaker = str(item.get('role') or item.get('speaker') or '').strip().lower()
+            message = item.get('content') if item.get('content') is not None else item.get('message')
+            if message is None:
+                continue
+            message = str(message)
+            if speaker in {'assistant', 'interviewer', 'bot'}:
+                role = 'assistant'
+            elif speaker in {'user', 'candidate', 'you'}:
+                role = 'user'
+            elif speaker == 'system':
+                role = 'system'
+            else:
+                role = 'user'
+            execute(
+                'INSERT INTO chat_history (interview_id, role, content) VALUES (%s, %s, %s)',
+                (interview_id, role, message),
+            )
+        return jsonify({'success': True})
+
     content = data.get('content', '')
+    known_role_re = re.compile(
+        r'^(assistant|interviewer|bot|user|candidate|you|system)\s*:(.*)$',
+        re.IGNORECASE | re.DOTALL,
+    )
     if '\n' in content:
         execute('DELETE FROM chat_history WHERE interview_id=%s', (interview_id,))
-        lines = [line for line in content.splitlines() if line.strip()]
+        raw_lines = content.splitlines()
     else:
-        lines = [content] if content else []
-    for line in lines:
-        role = 'assistant'
-        message = line
-        if ':' in line:
-            speaker, message = line.split(':', 1)
-            role = 'assistant' if speaker.strip().lower() in {'assistant', 'interviewer'} else 'user'
-        execute('INSERT INTO chat_history (interview_id, role, content) VALUES (%s, %s, %s)', (interview_id, role, message.strip()))
+        raw_lines = [content] if content else []
+
+    pending_role = 'assistant'
+    pending_parts = []
+
+    def flush_pending():
+        nonlocal pending_parts
+        if not pending_parts:
+            return
+        message = '\n'.join(pending_parts).strip()
+        pending_parts = []
+        if not message:
+            return
+        execute(
+            'INSERT INTO chat_history (interview_id, role, content) VALUES (%s, %s, %s)',
+            (interview_id, pending_role, message),
+        )
+
+    for line in raw_lines:
+        match = known_role_re.match(line.strip()) if line.strip() else None
+        if match:
+            flush_pending()
+            speaker = match.group(1).lower()
+            if speaker in {'assistant', 'interviewer', 'bot'}:
+                pending_role = 'assistant'
+            elif speaker in {'user', 'candidate', 'you'}:
+                pending_role = 'user'
+            else:
+                pending_role = 'system'
+            pending_parts = [match.group(2).lstrip()]
+        else:
+            # Continuation of previous message (colons inside body stay in body).
+            pending_parts.append(line)
+    flush_pending()
     return jsonify({'success': True})
 
 
