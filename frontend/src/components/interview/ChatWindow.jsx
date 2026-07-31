@@ -51,7 +51,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const [canEndInterview, setCanEndInterview] = useState(false); // Start disabled
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
 
-  const { loadChatHistory, deleteChatHistory } = useChatHistory();
+  const { loadChatHistory } = useChatHistory();
 
   const buildGenerateResponsePayload = useCallback((message) => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -571,16 +571,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       const urlParams = new URLSearchParams(window.location.search);
       const interviewId = urlParams.get('interview_id');
 
-      if (interviewId) {
-        try {
-          devLog('🗑️ Deleting chat history for interview:', interviewId);
-          await deleteChatHistory(interviewId);
-          devLog('✅ Chat history deleted successfully');
-        } catch (error) {
-          console.error('❌ Failed to delete chat history:', error);
-        }
-      }
-      
+      // Keep chat_history so the full transcript can be saved on completion.
+      // (Deleting here previously left only END_INTERVIEW + thank-you in the download.)
+
       setIsEndingInterview(true);
       setAwaitingManualEnd(false);
       

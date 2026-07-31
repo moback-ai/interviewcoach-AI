@@ -413,6 +413,30 @@ def normalize_feedback_row(row):
     normalized['interview_duration_minutes'] = (
         max(1, round(active / 60)) if active > 0 else None
     )
+    metrics = normalized.get('metrics') if isinstance(normalized.get('metrics'), dict) else {}
+    responses_count = metrics.get('responses_count')
+    if responses_count is None and normalized.get('interview_id'):
+        try:
+            visible = _visible_interview_transcript(normalized['interview_id'])
+            if visible:
+                responses_count = _count_candidate_responses_from_transcript(visible)
+            else:
+                transcript_row = query_one(
+                    'SELECT full_transcript FROM transcripts WHERE interview_id=%s',
+                    (normalized['interview_id'],),
+                )
+                raw = (transcript_row or {}).get('full_transcript')
+                if raw:
+                    parsed = json.loads(raw) if isinstance(raw, str) else raw
+                    if isinstance(parsed, list):
+                        responses_count = _count_candidate_responses_from_transcript(parsed)
+        except Exception:
+            responses_count = None
+    if responses_count is not None:
+        try:
+            normalized['responses_count'] = int(responses_count)
+        except (TypeError, ValueError):
+            normalized['responses_count'] = 0
     return normalized
 
 
@@ -2208,7 +2232,21 @@ def get_feedback(interview_id):
 @app.route('/api/chat-history/<interview_id>', methods=['GET'])
 @verify_auth_token
 def get_chat_history(interview_id):
-    rows = query_all("SELECT * FROM chat_history WHERE interview_id=%s ORDER BY created_at", (interview_id,))
+    rows = query_all(
+        """
+        SELECT * FROM chat_history
+        WHERE interview_id=%s
+        ORDER BY created_at ASC,
+                 CASE lower(coalesce(role, ''))
+                   WHEN 'user' THEN 0
+                   WHEN 'candidate' THEN 0
+                   WHEN 'assistant' THEN 1
+                   WHEN 'interviewer' THEN 1
+                   ELSE 2
+                 END ASC
+        """,
+        (interview_id,),
+    )
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3018,13 +3056,13 @@ def transcribe_audio():
         return jsonify({"success": False, "message": result.get('error')}), 500
     transcription = result.get('transcription', '')
 
-    # Optionally save audio file
+    # Optionally save audio file (ms precision + user_ prefix for stable merge order)
     if transcription:
         try:
             user_id = request.user['id']
             interview_id = request.args.get('interview_id') or request.form.get('interview_id')
             if user_id and interview_id:
-                ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+                ts = datetime.now().strftime("%Y%m%dT%H%M%S%f")
                 file.seek(0)
                 save_bytes(file.read(), f"audio/{user_id}/{interview_id}", f"user_{ts}.wav")
         except Exception as e:
@@ -3235,13 +3273,18 @@ def _build_generate_response_payload(user, data, on_token=None):
         except Exception as sanitize_error:
             print(f"[WARN] Interviewer text sanitize failed: {sanitize_error}")
 
-    chat_rows = [(interview_id, 'user', user_input)]
+    # Persist visible turns only — never store internal control tokens like END_INTERVIEW.
+    chat_rows = []
+    if user_input and not _is_internal_interview_control_message(user_input):
+        chat_rows.append((interview_id, 'user', user_input))
     if response.get("message"):
         chat_rows.append((interview_id, 'assistant', response["message"]))
-    execute_many(
-        "INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
-        chat_rows,
-    )
+    # Insert sequentially so created_at ordering stays user → assistant on the same turn.
+    for row in chat_rows:
+        execute(
+            "INSERT INTO chat_history (interview_id, role, content) VALUES (%s,%s,%s)",
+            row,
+        )
 
     # Generate Piper audio for interviewer response (Classic server voice only)
     audio_url = None
@@ -3253,7 +3296,7 @@ def _build_generate_response_payload(user, data, on_token=None):
     ):
         try:
             response_text = response["message"]
-            ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+            ts = datetime.now().strftime("%Y%m%dT%H%M%S%f")
             text_hash = hashlib.sha256(response_text.encode()).hexdigest()[:8]
             filename = f"interviewer_{text_hash}_{ts}.wav"
             folder = f"audio/{user_id}/{interview_id}"
@@ -3288,13 +3331,27 @@ def _build_generate_response_payload(user, data, on_token=None):
             print(f"[WARN] Audio merge failed; saving text feedback without merged audio: {audio_exc}")
 
         try:
-            # Save transcript directly
+            # Canonical transcript = UI-visible chat turns (not internal conversation_history,
+            # which can include stage-transition assistant lines the candidate never saw).
+            # Prefer the longer cleaned source so we never save only the closing thank-you.
+            visible_transcript = _build_interview_transcript_for_save(
+                interview_id,
+                getattr(manager, "conversation_history", None) or [],
+            )
+
+            responses_count = sum(
+                1 for m in visible_transcript
+                if str((m or {}).get("role") or "").strip().lower() in ("user", "candidate")
+            )
+            metrics_payload = dict(getattr(manager, "metrics", None) or {})
+            metrics_payload["responses_count"] = responses_count
+
             execute(
                 "INSERT INTO transcripts (interview_id, full_transcript, evaluation_data) "
                 "VALUES (%s, %s, %s) ON CONFLICT (interview_id) DO UPDATE "
                 "SET full_transcript=EXCLUDED.full_transcript, evaluation_data=EXCLUDED.evaluation_data",
                 (interview_id,
-                 json.dumps(manager.conversation_history),
+                 json.dumps(visible_transcript),
                  json.dumps(getattr(manager, 'final_evaluation_log', None)))
             )
 
@@ -3308,7 +3365,7 @@ def _build_generate_response_payload(user, data, on_token=None):
                  getattr(manager, 'final_summary', None),
                  format_feedback_text(getattr(manager, 'key_strengths', [])),
                  format_feedback_text(getattr(manager, 'improvement_areas', [])),
-                 json.dumps(getattr(manager, 'metrics', {})),
+                 json.dumps(metrics_payload),
                  merged_url)
             )
 
@@ -3451,9 +3508,106 @@ def generate_response_stream():
 #  AUDIO MERGE HELPER
 # ─────────────────────────────────────────────────────────────────────────────
 def _audio_turn_timestamp(filename):
-    """Extract YYYYMMDDTHHMMSS from user_* or interviewer_*_*.wav for chronological merge."""
-    match = re.search(r'(\d{8}T\d{6})', filename or '')
-    return match.group(1) if match else filename
+    """Extract YYYYMMDDTHHMMSS[.ffffff] from user_* / interviewer_* filenames."""
+    match = re.search(r'(\d{8}T\d{6}(?:\d{1,6})?)', filename or '')
+    return match.group(1) if match else (filename or '')
+
+
+def _audio_clip_sort_key(filename):
+    """
+    Chronological merge key. Pads second-only stamps to microseconds.
+    On ties: candidate (user_) before interviewer_ so Q→A order stays correct.
+    """
+    name = filename or ''
+    ts = _audio_turn_timestamp(name)
+    if re.fullmatch(r'\d{8}T\d{6}', ts or ''):
+        ts = f"{ts}000000"
+    elif ts and len(ts) < 21 and re.match(r'\d{8}T\d{6}', ts):
+        ts = ts.ljust(21, '0')
+    if name.startswith('user_'):
+        role_order = 0
+    elif name.startswith('interviewer_'):
+        role_order = 1
+    else:
+        role_order = 2
+    return (ts, role_order, name)
+
+
+def _is_internal_interview_control_message(content):
+    """True for synthetic client/server control tokens that must not appear in transcripts."""
+    text = str(content or "").strip()
+    if not text:
+        return False
+    # Exact token only — do not match natural phrases like "I'd like to end interview".
+    return text.upper() in {
+        "END_INTERVIEW",
+        "ENDINTERVIEW",
+        "/END_INTERVIEW",
+        "/END",
+    }
+
+
+def _normalize_transcript_turns(turns):
+    """Drop blanks + internal control tokens; keep interviewer closing thank-you."""
+    transcript = []
+    for item in turns or []:
+        if not isinstance(item, dict):
+            continue
+        role = (item.get("role") or "").strip()
+        content = item.get("content")
+        if content is None:
+            content = ""
+        content = str(content)
+        if not role and not content.strip():
+            continue
+        if _is_internal_interview_control_message(content):
+            continue
+        transcript.append({"role": role or "assistant", "content": content})
+    return transcript
+
+
+def _visible_interview_transcript(interview_id):
+    """UI-visible turns from chat_history (stable user→assistant on timestamp ties)."""
+    rows = query_all(
+        """
+        SELECT role, content
+        FROM chat_history
+        WHERE interview_id=%s
+        ORDER BY created_at ASC,
+                 CASE lower(coalesce(role, ''))
+                   WHEN 'user' THEN 0
+                   WHEN 'candidate' THEN 0
+                   WHEN 'assistant' THEN 1
+                   WHEN 'interviewer' THEN 1
+                   ELSE 2
+                 END ASC
+        """,
+        (interview_id,),
+    )
+    return _normalize_transcript_turns(
+        [{"role": (row.get("role") or "").strip(), "content": row.get("content")} for row in (rows or [])]
+    )
+
+
+def _build_interview_transcript_for_save(interview_id, conversation_history=None):
+    """
+    Prefer chat_history (what the candidate saw). If session history is longer
+    (e.g. after a bad wipe), use that instead. Always strip END_INTERVIEW tokens.
+    """
+    from_chat = _visible_interview_transcript(interview_id)
+    from_session = _normalize_transcript_turns(conversation_history or [])
+    if len(from_session) > len(from_chat):
+        return from_session
+    return from_chat or from_session
+
+
+def _count_candidate_responses_from_transcript(transcript):
+    return sum(
+        1
+        for m in (transcript or [])
+        if str((m or {}).get('role') or '').strip().lower() in ('user', 'candidate')
+    )
+
 
 def _merge_interview_audio(user_id, interview_id):
     folder = build_protected_storage_path("audio", user_id, interview_id)
@@ -3465,7 +3619,7 @@ def _merge_interview_audio(user_id, interview_id):
     audio_files = [f for f in files if f['name'].startswith(('interviewer_', 'user_'))]
     if not audio_files:
         return None
-    audio_files.sort(key=lambda x: _audio_turn_timestamp(x['name']))
+    audio_files.sort(key=lambda x: _audio_clip_sort_key(x['name']))
     segments = []
     temp_files = []
     try:
@@ -4964,8 +5118,18 @@ def legacy_chat_history():
         return jsonify({'success': False, 'error': 'interview_id required'}), 400
     if request.method == 'GET':
         rows = query_all(
-            'SELECT role, content, created_at FROM chat_history '
-            'WHERE interview_id=%s ORDER BY created_at ASC',
+            """
+            SELECT role, content, created_at FROM chat_history
+            WHERE interview_id=%s
+            ORDER BY created_at ASC,
+                     CASE lower(coalesce(role, ''))
+                       WHEN 'user' THEN 0
+                       WHEN 'candidate' THEN 0
+                       WHEN 'assistant' THEN 1
+                       WHEN 'interviewer' THEN 1
+                       ELSE 2
+                     END ASC
+            """,
             (interview_id,),
         )
         messages = []

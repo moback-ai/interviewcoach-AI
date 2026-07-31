@@ -598,6 +598,68 @@ export default function QuestionsPage() {
 
   const sampleAnswersMissing = displayQuestions.some((q) => q.missing);
 
+  const closeNoticeModal = () => {
+    setNoticeModal({
+      isOpen: false,
+      title: '',
+      message: '',
+      variant: 'error',
+      actionButton: null,
+      primaryLabel: undefined,
+      onPrimary: undefined,
+      secondaryLabel: undefined,
+      onSecondary: undefined,
+    });
+  };
+
+  const sampleAnswersErrorCopy = (rawMessage = '') => {
+    const msg = String(rawMessage || '').trim();
+    const lower = msg.toLowerCase();
+
+    if (
+      lower.includes('timeout') ||
+      lower.includes('timed out') ||
+      lower.includes('aborted')
+    ) {
+      return {
+        title: 'Generation took too long',
+        message:
+          'Sample answer generation timed out before finishing. Your questions are unchanged — retry when you are ready.',
+        retryable: true,
+      };
+    }
+
+    if (
+      lower.includes('complete sample answer') ||
+      lower.includes('did not return') ||
+      lower.includes('incomplete')
+    ) {
+      const countMatch = msg.match(/(\d+)\s*question/i);
+      const countLabel = countMatch ? `${countMatch[1]} question(s)` : 'one or more questions';
+      return {
+        title: 'Sample answers incomplete',
+        message: `We couldn't finish sample answers for ${countLabel}. This usually clears on a second try — nothing on your question set was lost.`,
+        retryable: true,
+      };
+    }
+
+    if (lower.includes('dossier') || lower.includes('missing')) {
+      return {
+        title: 'Could not generate sample answers',
+        message: msg || 'Sample answers could not be generated for this question set.',
+        retryable: false,
+      };
+    }
+
+    return {
+      title: 'Could not generate sample answers',
+      message:
+        msg ||
+        'Something went wrong while generating sample answers. You can retry, or dismiss and try again later.',
+      retryable: true,
+    };
+  };
+
   const handleGenerateSampleAnswers = async () => {
     if (!currentResumeId || !currentJdId || !currentQuestionSet) {
       setNoticeModal({
@@ -605,6 +667,7 @@ export default function QuestionsPage() {
         title: 'Missing data',
         message: 'Resume, job description, and question set are required to generate sample answers.',
         variant: 'info',
+        primaryLabel: 'OK',
       });
       return;
     }
@@ -662,6 +725,7 @@ export default function QuestionsPage() {
         title: 'Sample answers ready',
         message: `Generated sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`,
         variant: 'info',
+        primaryLabel: 'OK',
       });
     } catch (error) {
       console.error('Error generating sample answers:', error);
@@ -669,15 +733,25 @@ export default function QuestionsPage() {
         redirectToExpiredLogin();
         return;
       }
-      const msg =
+      const rawMessage =
         error?.name === 'TimeoutError' || error?.name === 'AbortError'
           ? 'Sample answer generation timed out. Please try again.'
           : error.message;
+      const copy = sampleAnswersErrorCopy(rawMessage);
       setNoticeModal({
         isOpen: true,
-        title: 'Could not generate sample answers',
-        message: msg,
-        variant: 'error',
+        title: copy.title,
+        message: copy.message,
+        variant: copy.retryable ? 'warning' : 'error',
+        primaryLabel: copy.retryable ? 'Retry' : 'OK',
+        onPrimary: copy.retryable
+          ? () => {
+              closeNoticeModal();
+              handleGenerateSampleAnswers();
+            }
+          : undefined,
+        secondaryLabel: copy.retryable ? 'Dismiss' : undefined,
+        onSecondary: copy.retryable ? closeNoticeModal : undefined,
       });
     } finally {
       setIsGeneratingAnswers(false);
@@ -720,7 +794,10 @@ export default function QuestionsPage() {
         error.message?.toLowerCase().includes('resume');
 
       const activeInterview = interviewHistory.find(
-        (interview) => interview.status === 'STARTED' || interview.status === 'in_progress'
+        (interview) =>
+          interview.status === 'STARTED' ||
+          interview.status === 'ACTIVE' ||
+          interview.status === 'in_progress'
       );
 
       setNoticeModal({
@@ -760,7 +837,10 @@ export default function QuestionsPage() {
 
   const handleRetakeInterview = async () => {
     const activeInterview = interviewHistory.find(
-      (interview) => interview.status === 'STARTED' || interview.status === 'in_progress'
+      (interview) =>
+        interview.status === 'STARTED' ||
+        interview.status === 'ACTIVE' ||
+        interview.status === 'in_progress'
     );
 
     if (activeInterview) {
@@ -1126,12 +1206,15 @@ export default function QuestionsPage() {
       </PageWavesShell>
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null })}
+        onClose={closeNoticeModal}
         title={noticeModal.title}
         message={noticeModal.message}
         variant={noticeModal.variant || 'error'}
         actionButton={noticeModal.actionButton}
-      />
-    </>
+        primaryLabel={noticeModal.primaryLabel}
+        onPrimary={noticeModal.onPrimary}
+        secondaryLabel={noticeModal.secondaryLabel}
+        onSecondary={noticeModal.onSecondary}
+      />    </>
   );
 }
