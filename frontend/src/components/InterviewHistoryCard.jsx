@@ -74,6 +74,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
       case 'ENDED':
         return 'Completed';
       case 'in_progress':
+      case 'ACTIVE':
         return 'In Progress';
       case 'scheduled':
         return 'Scheduled';
@@ -86,8 +87,11 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
     }
   };
 
-  const activeInterview = questionSet.interviews.find(
-    (interview) => interview.status === 'STARTED' || interview.status === 'in_progress'
+  const isResumableStatus = (status) =>
+    status === 'STARTED' || status === 'ACTIVE' || status === 'in_progress';
+
+  const activeInterview = questionSet.interviews.find((interview) =>
+    isResumableStatus(interview.status)
   );
 
   const handleRetakeClick = () => {
@@ -299,7 +303,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
                 <div className="flex items-center space-x-1 sm:space-x-2">
                   <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                     interview.status === 'completed' || interview.status === 'ENDED' ? 'bg-green-100 text-green-800' :
-                    interview.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                    interview.status === 'in_progress' || interview.status === 'ACTIVE' ? 'bg-yellow-100 text-yellow-800' :
                     interview.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
                     interview.status === 'STARTED' ? 'bg-orange-100 text-orange-800' :
                     'bg-gray-100 text-gray-800'
@@ -311,8 +315,8 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
                       Retake
                     </span>
                   )}
-                  {/* Resume Interview Button - Only show for started interviews */}
-                  {interview.status === 'STARTED' && (
+                  {/* Resume Interview Button - in-progress interviews (STARTED / ACTIVE) */}
+                  {isResumableStatus(interview.status) && (
                     <button
                       onClick={() => window.location.href = `/interview?interview_id=${interview.id}`}
                       disabled={isDisabled}

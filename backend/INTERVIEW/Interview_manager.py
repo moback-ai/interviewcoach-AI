@@ -46,6 +46,7 @@ class InterviewManager:
         self.job_title = config.get("job_title", "this role")
         self.job_description = config.get("job_description", "")
         self.interview_style = config.get("interview_style", "conversational")
+        self.interviewer_name = (config.get("interviewer_name") or "Sadhan").strip() or "Sadhan"
         self.required_questions = config.get("custom_questions", [])
         self.core_questions = config.get("core_questions", [])
         self.coding_requirement = config.get("coding_requirement", "")
@@ -453,8 +454,21 @@ class InterviewManager:
             is_retry=True,
         )
         self.current_icebreaker = question
-        self.conversation_history.append({"role": "assistant", "content": question})
-        return {"stage": "icebreaker", "message": question}
+        from Interview_functions import (
+            _is_greeting_or_farewell,
+            _looks_like_candidate_question,
+        )
+        if _looks_like_candidate_question(user_input):
+            message = (
+                "We'll get to technical topics later. "
+                f"For now — {question}"
+            )
+        elif _is_greeting_or_farewell(user_input):
+            message = f"We're still in the interview. {question}"
+        else:
+            message = question
+        self.conversation_history.append({"role": "assistant", "content": message})
+        return {"stage": "icebreaker", "message": message}
 
 # ===== BEGGINING OF - INTRO FOLLOW-UP STAGE  =====
 
@@ -774,6 +788,7 @@ class InterviewManager:
             questions_remaining=remaining,
             last_chance=at_max or remaining <= 1,
             on_token=on_token,
+            interviewer_name=getattr(self, "interviewer_name", None) or "Sadhan",
         )
         intent = turn.get("intent") or "unclear"
         reply = (turn.get("reply") or "").strip()
@@ -806,8 +821,8 @@ class InterviewManager:
                 reply or "Thanks — please press the End Interview button for your feedback."
             )
 
-        # Greeting / unclear / wants_to_ask → stay open, do not consume a question slot
-        if intent in {"greeting_or_chitchat", "unclear", "wants_to_ask"}:
+        # Greeting / unclear / wants_to_ask / personal_or_meta → stay open, do not consume a question slot
+        if intent in {"greeting_or_chitchat", "unclear", "wants_to_ask", "personal_or_meta"}:
             message = reply or "Sure — do you have any questions about the role before we wrap up?"
             self.conversation_history.append({"role": "assistant", "content": message})
             return {

@@ -11,6 +11,7 @@ import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaD
 import { devLog } from '../../utils/devLog';
 import { createAuthenticatedAudioElement } from '../../hooks/useAuthenticatedBlobUrl';
 import { revokeBlobUrl } from '../../utils/protectedFiles';
+import { stripMarkdownForDisplay } from '../../utils/stripMarkdown';
 
 const GENERATE_RESPONSE_TIMEOUT_MS = 120000;
 
@@ -50,7 +51,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const [canEndInterview, setCanEndInterview] = useState(false); // Start disabled
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
 
-  const { loadChatHistory, deleteChatHistory } = useChatHistory();
+  const { loadChatHistory } = useChatHistory();
 
   const buildGenerateResponsePayload = useCallback((message) => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -58,6 +59,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     return {
       message,
       interview_id: interviewId,
+      // Matches the interviewer persona shown on InterviewPage.
+      interviewer_name: 'Sadhan',
     };
   }, []);
 
@@ -568,16 +571,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       const urlParams = new URLSearchParams(window.location.search);
       const interviewId = urlParams.get('interview_id');
 
-      if (interviewId) {
-        try {
-          devLog('🗑️ Deleting chat history for interview:', interviewId);
-          await deleteChatHistory(interviewId);
-          devLog('✅ Chat history deleted successfully');
-        } catch (error) {
-          console.error('❌ Failed to delete chat history:', error);
-        }
-      }
-      
+      // Keep chat_history so the full transcript can be saved on completion.
+      // (Deleting here previously left only END_INTERVIEW + thank-you in the download.)
+
       setIsEndingInterview(true);
       setAwaitingManualEnd(false);
       
@@ -1242,7 +1238,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                         : 'bg-white/20 text-white'
                     }`}
                   >
-                    {message.speaker === 'interviewer' ? 'INTERVIEWER' : 'YOU'}
+                    {message.speaker === 'interviewer'
+                      ? 'INTERVIEWER'
+                      : message.speaker === 'system'
+                        ? 'SYSTEM'
+                        : 'YOU'}
                   </span>
                   <span 
                     className="text-xs font-medium opacity-70"
@@ -1251,7 +1251,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                     {message.timestamp}
                   </span>
                 </div>
-                <p className="text-xs sm:text-sm md:text-base leading-relaxed font-medium">{message.message}</p>
+                <p className="text-xs sm:text-sm md:text-base leading-relaxed font-medium">
+                  {message.speaker === 'interviewer'
+                    ? stripMarkdownForDisplay(message.message)
+                    : message.message}
+                </p>
               </div>
             </motion.div>
           ))}

@@ -43,13 +43,51 @@ def ollama_chat(*, model, messages, temperature=None, max_tokens=None):
 
 
 def sanitize_interviewer_display_text(text: str, *, streaming: bool = False) -> str:
-    content = (text or "").strip()
-    content = content.replace("[[job_explained]]", "").strip()
+    """
+    Clean interviewer text for chat UI and TTS.
+    Strips markdown so Piper does not speak 'asterisk' and the UI stays plain.
+    """
+    content = text or ""
+    if not streaming:
+        content = content.strip()
+
+    content = content.replace("[[job_explained]]", "")
+
+    # Fenced code blocks → inner text only
+    content = re.sub(r"```[\w+-]*\n?([\s\S]*?)```", r"\1", content)
+
+    # Bold / italic (complete pairs). Repeat a few times for nesting edge cases.
+    for _ in range(3):
+        updated = re.sub(r"\*\*(.+?)\*\*", r"\1", content, flags=re.DOTALL)
+        updated = re.sub(r"__(.+?)__", r"\1", updated, flags=re.DOTALL)
+        updated = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", updated, flags=re.DOTALL)
+        updated = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"\1", updated, flags=re.DOTALL)
+        if updated == content:
+            break
+        content = updated
+
+    # Inline code
+    content = re.sub(r"`([^`]+)`", r"\1", content)
+
+    # Headings / bold markers left as leftovers
+    content = re.sub(r"^#{1,6}\s*", "", content, flags=re.MULTILINE)
+    content = content.replace("**", "").replace("__", "")
+
+    # While streaming, hold back trailing unclosed markdown openers so "*" does not flash.
+    if streaming:
+        content = re.sub(r"(\*{1,2}|_{1,2}|`)$", "", content)
+    else:
+        content = content.strip()
+
     if len(content) >= 2 and content[0] == content[-1] and content[0] in "\"'":
         content = content[1:-1].strip()
     elif streaming and content and content[0] in "\"'":
-        content = content[1:].strip()
-    return content
+        content = content[1:].strip() if not streaming else content[1:]
+
+    # Collapse odd whitespace from stripped markers; keep intentional newlines.
+    content = re.sub(r"[ \t]{2,}", " ", content)
+    content = re.sub(r" ?\n ?", "\n", content)
+    return content.strip() if not streaming else content
 
 
 def _run_chat(*, model, messages, on_token=None, temperature=None, max_tokens=None):
@@ -142,9 +180,106 @@ def _is_non_answer(text):
     return len(normalized.split()) <= 2 and normalized in {"no", "yes", "ok", "okay"}
 
 
+def _is_greeting_or_farewell(text: str) -> bool:
+    """True for hi/hello/bye-style turns with little else (not a real intro)."""
+    normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").strip().lower()).strip()
+    if not normalized:
+        return True
+    words = normalized.split()
+    farewell = {
+        "bye", "goodbye", "good bye", "bye bye", "see you", "see ya", "later",
+        "take care", "have a good day", "have a nice day", "gotta go", "im leaving",
+        "i am leaving", "end interview", "stop interview", "quit",
+    }
+    greeting = {
+        "hi", "hello", "hey", "hiya", "yo", "sup", "good morning", "good afternoon",
+        "good evening", "howdy",
+    }
+    # Repeated hi/bye only: "bye bye bye", "hi hi hi"
+    if words and all(w in {"hi", "hello", "hey", "bye", "goodbye", "yo", "sup"} for w in words):
+        return True
+    compact = " ".join(words)
+    if compact in farewell or compact in greeting:
+        return True
+    # Short farewell/greeting with filler only
+    if len(words) <= 6:
+        if any(phrase in compact for phrase in farewell):
+            return True
+        if compact in greeting or all(w in greeting or w in {"there", "again"} for w in words):
+            return True
+    return False
+
+
+def _looks_like_candidate_question(text: str) -> bool:
+    """
+    Candidate asking the interviewer something (tech, meta, reverse interview)
+    instead of answering / introducing themselves.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    normalized = re.sub(r"[^a-z0-9?]+", " ", raw.lower()).strip()
+    words = normalized.replace("?", " ").split()
+    if not words:
+        return False
+
+    question_starters = (
+        "what", "whats", "what s", "why", "how", "when", "where", "who", "whom",
+        "which", "can you", "could you", "would you", "do you", "are you",
+        "is there", "tell me", "explain", "define",
+    )
+    compact = " ".join(words)
+    starts_like_question = any(compact.startswith(s) for s in question_starters)
+    has_qmark = "?" in raw
+    tech_ask = any(
+        term in compact
+        for term in (
+            "vector database", "what is a", "what are", "how does", "how do",
+            "difference between", "explain", "define", "mean by",
+        )
+    )
+    # "Hi hi hi what is a vector database?" → question even with greeting prefix
+    for starter in ("what ", "whats ", "why ", "how ", "explain ", "define ", "tell me "):
+        if starter in compact:
+            starts_like_question = True
+            break
+
+    if has_qmark and (starts_like_question or tech_ask or len(words) >= 4):
+        return True
+    if starts_like_question and (tech_ask or len(words) >= 5):
+        return True
+    return False
+
+
+def _is_intro_off_script(text: str) -> bool:
+    """Greeting/farewell or reverse/tech question — not a self-introduction."""
+    if _looks_like_self_intro(text):
+        return False
+    return _is_greeting_or_farewell(text) or _looks_like_candidate_question(text)
+
+
+def _intro_off_script_redirect(user_input: str) -> str:
+    if _looks_like_candidate_question(user_input):
+        return (
+            "We'll cover that later in the interview. "
+            "For now, please introduce yourself — your name, education, and background."
+        )
+    if _is_greeting_or_farewell(user_input):
+        return (
+            "We're just getting started. "
+            "Please introduce yourself briefly — your name, education, and background."
+        )
+    return (
+        "Please introduce yourself briefly — your name, education, and background."
+    )
+
+
 def _is_substantive_response(text):
     normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").strip().lower()).strip()
     if _is_non_answer(normalized):
+        return False
+    # Do not treat reverse questions / farewells as "substantive answers".
+    if _is_greeting_or_farewell(text) or _looks_like_candidate_question(text):
         return False
     words = normalized.split()
     if len(words) >= 6:
@@ -166,6 +301,8 @@ def _looks_like_self_intro(text: str) -> bool:
     """Heuristic: name/education/background signals that count as a real intro."""
     normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").strip().lower()).strip()
     if not normalized or _is_non_answer(normalized):
+        return False
+    if _is_greeting_or_farewell(text) or _looks_like_candidate_question(text):
         return False
     words = normalized.split()
     if len(words) < 5:
@@ -212,20 +349,34 @@ def _conversation_has_sufficient_intro(conversation_history) -> bool:
 def generate_contextual_intro_reply(job_title, job_description, conversation_history, user_input, on_token=None):
     log("generate_contextual_intro_reply")
 
+    # Hard redirect for bye/hi/tech/reverse questions — do not let the LLM free-chat.
+    if _is_intro_off_script(user_input):
+        redirect = _intro_off_script_redirect(user_input)
+        if on_token:
+            on_token(redirect)
+        return {"message": redirect}
+
     prompt = f"""
 You are an AI interviewer mid-introduction for the role of: {job_title}.
 
-Job description (only use if they explicitly ask about the role):
-{job_description}
+Your ONLY job in this stage is to collect a short self-introduction from the candidate
+(name, education, background). The interview is still running — never end or wrap up.
 
-Your only job in this stage is to help them introduce themselves.
-- If they have not introduced themselves yet, ask briefly for a short intro (name, education, background).
-- If they already shared an intro, acknowledge briefly in one short sentence and ask at most one light clarifying question — or simply encourage them to continue if needed.
-- If they explicitly ask what the role involves, answer briefly in your own words (1–2 sentences). Do not volunteer a job explanation otherwise.
+Hard rules (never break these):
+- NEVER say goodbye, thank them for their time, wish them a great day, or end the interview.
+- NEVER answer technical questions, definitions, how-to questions, or reverse-interview questions.
+- If they say hi/bye/goodbye or go off-topic, briefly redirect them to introduce themselves.
+- If they ask about the role or tech topics, say you will cover that later and ask for their intro.
+- Do NOT act like a tutor or chatbot that answers their questions.
 - Do NOT append any special tags or markers.
 
-Rules:
+What to do when they are on-script:
+- If they have not introduced themselves yet, ask briefly for a short intro (name, education, background).
+- If they already shared an intro, acknowledge briefly in one short sentence and ask at most one light clarifying question — or simply encourage them to continue if needed.
+
+Style:
 - 1–2 well-formed sentences only.
+- Plain spoken text only — no markdown, no **bold**, no bullet markers meant for documents.
 - No headings, labels, or formatting.
 - Do not restart with Welcome / Nice to meet you / Hi there.
 - Never invent that they asked about the job when they did not.
@@ -248,7 +399,34 @@ Rules:
             on_token=on_token,
             temperature=TEMP_REPLY,
         )
-        return {"message": response["message"]["content"]}
+        reply = (response["message"]["content"] or "").strip()
+        # Safety net if the model still slips into goodbye / tutoring.
+        reply_l = reply.lower()
+        goodbye_markers = (
+            "have a great day",
+            "have a nice day",
+            "thank you for your time",
+            "thanks for your time",
+            "goodbye",
+            "good bye",
+            "interview is over",
+            "end of the interview",
+            "we've reached the end",
+        )
+        tutoring_markers = (
+            "a vector database is",
+            "is a type of",
+            "is designed to",
+            "in machine learning",
+            "let me explain",
+        )
+        if any(m in reply_l for m in goodbye_markers) or any(m in reply_l for m in tutoring_markers):
+            redirect = _intro_off_script_redirect(user_input)
+            if on_token and redirect != reply:
+                # Stream path already may have emitted bad text; still return the safe reply.
+                pass
+            return {"message": redirect}
+        return {"message": reply}
 
     except Exception as e:
         print(f"[ERROR] contextual_intro_reply failed: {e}")
@@ -267,8 +445,8 @@ Conversation so far:
 
 Return exactly one word:
 - continue → they already shared a real intro (e.g. name + education, or education/background with enough detail)
-- wait → only a greeting / tiny fragment so far, and they seem about to say more
-- retry → trolling, gibberish, or clearly refusing to introduce themselves
+- wait → only a greeting / tiny fragment / farewell / off-topic so far, and they still need to introduce themselves
+- retry → trolling, gibberish, clearly refusing to introduce themselves, OR asking the interviewer questions instead of introducing themselves
 
 Examples that MUST be continue:
 - "My name is Neeraj. I did BTech in ECE at MIT Manipal and graduated in 2024."
@@ -279,15 +457,23 @@ Examples that are wait:
 - "hi"
 - "hello"
 - "sure"
+- "bye"
+- "bye bye bye"
+- "goodbye"
 
 Examples that are retry:
 - "idk"
 - "whatever"
 - "asdfgh"
+- "what is a vector database?"
+- "can you explain React hooks?"
+- "tell me about yourself" (asking the interviewer)
+- any technical / reverse question instead of a self-intro
 
 Important:
 - Denying projects/internships after an intro is still continue (intro is done).
-- Prefer continue when in doubt if any user turn already has name + education/background.
+- Greetings, goodbyes, and questions to the interviewer are NEVER continue.
+- Prefer continue only when a user turn already has name + education/background.
 - Only one word. No explanation.
     """
 
@@ -299,10 +485,15 @@ Important:
         ]
         if _conversation_has_sufficient_intro(conversation_history):
             return "continue"
+        latest = user_messages[-1] if user_messages else ""
+        if _looks_like_candidate_question(latest) or _is_non_answer(latest):
+            return "retry"
+        if _is_greeting_or_farewell(latest):
+            return "wait"
+        if any(_looks_like_self_intro(message) for message in user_messages):
+            return "continue"
         if any(_is_substantive_response(message) for message in user_messages):
             return "continue"
-        if user_messages and _is_non_answer(user_messages[-1]):
-            return "retry"
         return "wait"
 
     try:
@@ -317,6 +508,16 @@ Important:
         # Heuristic override: never keep them stuck if a solid intro already happened.
         if _conversation_has_sufficient_intro(conversation_history):
             return "continue"
+        latest_user = ""
+        for item in reversed(conversation_history or []):
+            if item.get("role") == "user":
+                latest_user = item.get("content") or ""
+                break
+        # Never advance on bye / tech questions even if the LLM says continue.
+        if _is_intro_off_script(latest_user):
+            if _looks_like_candidate_question(latest_user) or _is_non_answer(latest_user):
+                return "retry"
+            return "wait"
         if normalized in allowed:
             return normalized
         return _fallback_label()
@@ -333,6 +534,10 @@ Important:
 def assess_icebreaker_response(user_response, question, conversation_history=None):
     log("assess_icebreaker_response")
 
+    # Hard reject bye / reverse tech questions — stay on icebreaker.
+    if _is_greeting_or_farewell(user_response) or _looks_like_candidate_question(user_response):
+        return "retry"
+
     history = conversation_history or []
     system_prompt = """
 You classify whether an icebreaker answer is enough to move on in a job interview.
@@ -341,13 +546,14 @@ Reply with exactly one word: valid or retry
 
 Decision rule (keep the bar low):
 - valid = the candidate gave any real personal content about themselves in response to the question: a like, dislike, preference, habit, interest, or honest “I don’t do X”. Spelling and grammar do not matter. Length does not matter.
-- retry = only when there is no personal content to work with: empty, gibberish, or a pure shutdown with nothing about them (e.g. only “idk” / “whatever” / random characters).
+- retry = no personal content: empty, gibberish, pure shutdown (e.g. only “idk” / “whatever”), greetings/goodbyes, OR asking the interviewer a technical/meta question instead of answering.
 
 Important:
 - Judge ONLY the latest icebreaker question and latest answer.
 - Earlier intro refusals must NOT push you to retry a good icebreaker answer.
+- Never mark bye/goodbye/hi or reverse questions as valid.
 - If the answer could reasonably count as personal engagement, choose valid.
-- When unsure, choose valid.
+- When unsure between valid personal content and empty noise, choose valid.
 """.strip()
 
     user_prompt = f"""
@@ -386,11 +592,13 @@ def generate_icebreaker_question(job_title, conversation_history=None, on_token=
     retry_guidance = ""
     if is_retry:
         retry_guidance = """
-This is a retry: the previous icebreaker answer was not usable.
+This is a retry: the previous icebreaker answer was not usable
+(empty, bye/hi, off-topic, or they asked YOU a question).
 Ask either:
 - a short follow-up that helps them answer more concretely, OR
 - a fresh icebreaker on a different light theme
 Use the conversation history so you do not repeat the same question.
+Do NOT answer their technical question. Do NOT say goodbye. Do NOT end the interview.
 """
     else:
         retry_guidance = """
@@ -401,6 +609,7 @@ Ask one new light personal question.
     prompt = f"""
 You are an AI interviewer mid-interview for the role of {job_title}.
 The introduction stage is done. Stay in the icebreaker stage.
+The interview is still running — never wrap up or thank them for their time.
 
 Conversation so far:
 {json.dumps(history, indent=2)}
@@ -420,6 +629,8 @@ Rules:
 - Return ONLY the question text — one sentence.
 - Do NOT greet or reopen the conversation (no Hi, Hello, Hey, Thanks, Welcome).
 - Do NOT add transition filler before the question.
+- Do NOT answer candidate questions or explain technical topics.
+- Do NOT say goodbye or end the interview.
 - Keep it simple, human, and non-technical — not studies or job skills.
 - Do not repeat a question already asked in the conversation.
             """
@@ -444,6 +655,9 @@ Rules:
 def assess_followup_response(question, user_response, conversation_history=None):
     log("assess_followup_response")
 
+    if _is_greeting_or_farewell(user_response) or _looks_like_candidate_question(user_response):
+        return "weak"
+
     history = conversation_history or []
     system_prompt = """
 You classify whether a candidate's answer is good enough to leave the intro follow-up stage.
@@ -456,12 +670,13 @@ How to read the question:
 
 Decision rule (be fair to informal answers):
 - strong = the candidate engages the main topic with some real personal/professional content: a project, role, experience, motivation, or concrete detail. Typos, informal wording, and partial coverage are fine. They do NOT need to hit every keyword in the question.
-- weak = almost no usable signal for that ask: blank, "no idea" / "idk", pure refusal, gibberish, or an answer that is clearly about something else with no connection to the ask.
+- weak = almost no usable signal for that ask: blank, "no idea" / "idk", pure refusal, gibberish, greetings/goodbyes, asking the interviewer a question instead, or an answer that is clearly about something else with no connection to the ask.
 
 Examples of intent (do not overfit wording):
 - Asked about HTTP APIs / backend work, and they describe a web/API project they built → strong
 - Asked about Python + Postgres, and they describe a Python project (even if Postgres is missing) → strong if it is still clearly about relevant experience
 - Asked a technical follow-up and they say "no idea" → weak
+- "bye bye" or "what is a vector database?" → weak
 
 When the answer is roughly on-topic and shares something real, choose strong.
 When unsure, prefer strong if there is any on-topic personal/professional content; choose weak only if the ask was basically unanswered.
@@ -529,6 +744,8 @@ Rules:
 - Return ONLY the question text — one concise sentence.
 - Do NOT greet. Do NOT thank them. Do NOT comment on the icebreaker (food, music, hobbies, etc.).
 - Do NOT add filler like "That's interesting", "Burgers are a classic", or "Moving back to your experience".
+- Do NOT answer the candidate's technical questions or act like a tutor.
+- Do NOT say goodbye or end the interview — the session is still in progress.
 - Do not repeat something already fully answered.
 - Light experience / project / motivation questions are allowed; keep it conversational, not a deep technical grill.
 
@@ -765,8 +982,19 @@ _CANDIDATE_QNA_INTENTS = {
     "ask_question",
     "wants_to_ask",
     "greeting_or_chitchat",
+    "personal_or_meta",
     "unclear",
 }
+
+_PLACEHOLDER_NAME_RE = re.compile(r"\[(?:your\s+)?name\]", re.IGNORECASE)
+
+
+def _scrub_interviewer_name_placeholders(text: str, interviewer_name: str) -> str:
+    name = (interviewer_name or "").strip() or "your interviewer"
+    scrubbed = _PLACEHOLDER_NAME_RE.sub(name, text or "")
+    # Common template leftovers models invent when no name was provided.
+    scrubbed = scrubbed.replace("[Your Name]", name).replace("[your name]", name)
+    return scrubbed
 
 
 def run_candidate_qna_turn(
@@ -778,26 +1006,32 @@ def run_candidate_qna_turn(
     questions_remaining=None,
     last_chance=False,
     on_token=None,
+    interviewer_name="Sadhan",
 ):
     """
     One structured LLM call for candidate Q&A wrap-up.
 
     Returns:
-      intent: decline | ask_question | wants_to_ask | greeting_or_chitchat | unclear
+      intent: decline | ask_question | wants_to_ask | greeting_or_chitchat | personal_or_meta | unclear
       reply: interviewer spoken line
       should_count_as_question: whether this turn used one of the soft question slots
       ready_to_end: LLM hint that they are done (code still owns lock/end)
     """
     log("run_candidate_qna_turn")
     remaining = questions_remaining
+    persona = (interviewer_name or "").strip() or "Sadhan"
     system_prompt = f"""
-You are the interviewer wrapping up a job interview for: {job_title}.
+You are {persona}, the interviewer wrapping up a job interview for: {job_title}.
+
+Your name is {persona}. Never invent a different name. Never use placeholders like [Your Name], [Name], or similar.
+
+This wrap-up is for the CANDIDATE's questions about the role, process, next steps, or their interview experience — not a reverse interview about your personal life or whether you are an AI.
 
 Classify the candidate's latest message and write your spoken reply in ONE JSON object.
 
 Return ONLY valid JSON (no markdown, no extra text):
 {{
-  "intent": "decline" | "ask_question" | "wants_to_ask" | "greeting_or_chitchat" | "unclear",
+  "intent": "decline" | "ask_question" | "wants_to_ask" | "greeting_or_chitchat" | "personal_or_meta" | "unclear",
   "reply": "your spoken reply",
   "should_count_as_question": true or false,
   "ready_to_end": true or false
@@ -805,32 +1039,43 @@ Return ONLY valid JSON (no markdown, no extra text):
 
 Intent meanings:
 - decline: they do not want to ask more / are finished (e.g. no, I'm good, that's all).
-- ask_question: they asked a real question (role, company, team, next steps, timeline, OR how they did / feedback).
+- ask_question: they asked a real candidate-facing question (role, company, team, next steps, timeline, hiring process, OR how they did / feedback), OR a brief identity ask (your name / who you are as the interviewer).
 - wants_to_ask: they want to ask but have not asked yet (e.g. yes, I have one, one more thing) — and it is NOT already a feedback ask.
 - greeting_or_chitchat: greeting or small talk with no question (e.g. hi, hello, thanks).
+- personal_or_meta: personal questions about you (hobbies, age, hometown, favorites, family, dating, etc.) OR meta questions about being an AI / bot / model / real person / how you work.
 - unclear: cannot tell; keep the wrap-up open.
 
 Important classification:
 - “How did I do?”, “any feedback?”, “how was my interview?”, “did I do well?” → intent ask_question (never unclear, never wants_to_ask).
+- “What’s your name?”, “who are you?” → intent ask_question (identity only).
+- “What’s your favorite food?”, “are you an AI?”, “tell me about yourself” (personal) → intent personal_or_meta.
 - A bare “yes” after you already asked them to clarify a feedback request → still ask_question (they confirmed they want interview feedback).
 
 Field rules:
 - should_count_as_question = true ONLY for intent ask_question.
 - ready_to_end = true ONLY for intent decline.
-- For greeting_or_chitchat / unclear / wants_to_ask: ready_to_end must be false.
+- For greeting_or_chitchat / personal_or_meta / unclear / wants_to_ask: ready_to_end must be false.
+- personal_or_meta must NOT count as a question slot.
 
 Reply rules by intent:
 - decline: brief thanks + nudge to press End Interview for feedback.
-- ask_question about the role/company/team/next steps/timeline:
+- ask_question about the role/company/team/next steps/timeline/process:
   answer helpfully in 2–3 short sentences using the job title/JD/conversation.
   Never deflect normal role/job questions.
-  Off-topic trivia / personal reverse-interview → polite redirect to role topics.
+- ask_question about your name / who you are:
+  answer in ONE short line using your real name ({persona}), then invite a candidate/role question.
+  Example: “I’m {persona}, the interviewer for this session. Happy to cover the role, next steps, or the process — what would you like to know?”
+  Do not add a personal bio.
 - ask_question about performance / “how did I do” / feedback / scores:
   Do NOT give live scores, strengths, weaknesses, or critique.
   Do NOT ask them to clarify what kind of feedback they want.
   Reply briefly that they can view their summary and scores after they press End Interview,
   then invite any other questions about the role or next steps.
   Example tone: “You’ll be able to view your scores and a full summary after you press End Interview. Any other questions about the role or next steps?”
+- personal_or_meta:
+  Do NOT answer personal details or debate whether you are an AI.
+  Politely decline in one short line and redirect to candidate-facing topics (role, team, next steps, process, or how they can get feedback after End Interview).
+  Example: “I’d rather keep this focused on you and the role. Happy to talk about the position, next steps, or the interview process, what would help most?”
 - wants_to_ask: invite them to ask (e.g. “Sure — what’s your question?”).
 - greeting_or_chitchat / unclear: briefly acknowledge and re-ask if they have questions about the role.
 
@@ -843,12 +1088,15 @@ Tone: professional, warm, neutral. No “great question” / “thanks for askin
 Context: they are near the end of the allowed candidate questions.
 If intent is ask_question and it is NOT a feedback/how-did-I-do ask, you may close the answer warmly in one short extra line.
 For feedback asks, still only defer to End Interview — do not give live evaluation.
+For personal_or_meta, still redirect without answering personal details.
 """.rstrip()
 
     recent_history = (conversation_history or [])[-12:]
     user_prompt = f"""
 Candidate's latest message:
 {user_input}
+
+Interviewer name (use exactly this if asked): {persona}
 
 Job description (context):
 {(job_description or "")[:2500]}
@@ -859,6 +1107,7 @@ Recent conversation:
 {json.dumps(recent_history, indent=2)}
 
 Note: Do not use performance notes to score the candidate live. Feedback/scores are only after End Interview.
+Keep the conversation candidate- and role-focused. Do not open a personal reverse interview about yourself.
 """.strip()
 
     fallback = {
@@ -887,6 +1136,7 @@ Note: Do not use performance notes to score the candidate live. Feedback/scores 
             "unclear",
         )
         reply = sanitize_interviewer_display_text(str(parsed.get("reply") or "").strip())
+        reply = _scrub_interviewer_name_placeholders(reply, persona)
         if not reply:
             reply = fallback["reply"]
 
@@ -905,6 +1155,27 @@ Note: Do not use performance notes to score the candidate live. Feedback/scores 
                     f"{reply.rstrip()} "
                     "Please press the End Interview button for your feedback."
                 ).strip()
+        elif intent == "personal_or_meta":
+            should_count = False
+            ready_to_end = False
+            # Safety net if the model still engages personally.
+            personal_leak_markers = (
+                "i'm an ai",
+                "i am an ai",
+                "as an ai",
+                "language model",
+                "favorite",
+                "i live",
+                "my hobby",
+                "my hobbies",
+            )
+            reply_l = reply.lower()
+            if any(marker in reply_l for marker in personal_leak_markers):
+                reply = (
+                    "I'd rather keep this focused on you and the role. "
+                    "Happy to talk about the position, next steps, or the interview process — "
+                    "what would help most?"
+                )
         else:
             should_count = False
             ready_to_end = False
@@ -944,6 +1215,7 @@ def generate_candidate_qna_response(
     job_title,
     last_chance=False,
     on_token=None,
+    interviewer_name="Sadhan",
 ):
     result = run_candidate_qna_turn(
         user_input=user_question,
@@ -952,6 +1224,7 @@ def generate_candidate_qna_response(
         job_title=job_title,
         last_chance=last_chance,
         on_token=on_token,
+        interviewer_name=interviewer_name,
     )
     return result["reply"]
 

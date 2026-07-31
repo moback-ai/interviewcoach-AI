@@ -11,6 +11,10 @@ import NoticeModal from '../components/common/NoticeModal';
 import { trackEvents } from '../services/mixpanel';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { mapEmptyUploadFileError } from '../utils/uploadErrors';
+import {
+  filesHaveSameContent,
+  SAME_RESUME_JD_FILE_MESSAGE,
+} from '../utils/fileIdentity';
 import { getSession } from '../lib/authClient';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 import { devLog, devWarn } from '../utils/devLog';
@@ -84,7 +88,6 @@ function UploadPage() {
   const [blendMode, setBlendMode] = useState(false);
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
-  const [includeSampleAnswers, setIncludeSampleAnswers] = useState(false);
   const [, setQuestionValidationError] = useState('');
   const classifyAbortRef = useRef(null);
   const classifiedFromFileRef = useRef(false);
@@ -210,11 +213,35 @@ function UploadPage() {
     setClearCounter(prev => prev + 1);
   };
 
+  const handleResumeUpload = async (file) => {
+    if (!file) {
+      setResume(null);
+      setResumeError('');
+      return;
+    }
+    if (jobDesc && (await filesHaveSameContent(file, jobDesc))) {
+      setResumeError(SAME_RESUME_JD_FILE_MESSAGE);
+      return;
+    }
+    setResume(file);
+    setResumeError('');
+  };
+
   const handleJobDescUpload = async (file) => {
+    if (!file) {
+      setJobDesc(null);
+      setJobDescError('');
+      setJobDescParsed(false);
+      return;
+    }
+    if (resume && (await filesHaveSameContent(resume, file))) {
+      setJobDescError(SAME_RESUME_JD_FILE_MESSAGE);
+      return;
+    }
     setJobDesc(file);
     setJobDescError('');
     setJobDescParsed(false);
-    
+
     // Automatically parse the job description file
     await parseJobDescriptionFile(file);
   };
@@ -498,6 +525,39 @@ function UploadPage() {
     return payload.match || {};
   };
 
+  const validateUploadDocuments = async ({ isSkillsMode, skillsTextForApi }) => {
+    const session = await getSession();
+    if (!session) {
+      throw new Error('No active session');
+    }
+    const backendOrigin = getBackendOrigin();
+    const formData = new FormData();
+    formData.append('job_title', jobTitle.trim());
+    formData.append('job_description', jobDescription.trim());
+    if (isSkillsMode) {
+      formData.append('skills_text', skillsTextForApi);
+    } else if (resume) {
+      formData.append('file', resume);
+    }
+    const response = await fetch(`${backendOrigin}/api/validate-upload-documents`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: formData,
+      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(90000)
+        : undefined,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.success) {
+      const err = new Error(payload.message || 'Document validation failed');
+      err.code = payload.code || 'INVALID_DOCUMENT';
+      throw err;
+    }
+    return payload.data || {};
+  };
+
   const closeNoticeModal = () => {
     pendingPairContinueRef.current = null;
     pendingDossierRetryRef.current = null;
@@ -540,6 +600,15 @@ function UploadPage() {
           isOpen: true,
           title: 'Resume file is empty or too small',
           message: 'The file appears to have no content. Please upload a proper resume with work experience, projects, or education.',
+          variant: 'error',
+        });
+        return;
+      }
+      if (jobDesc && (await filesHaveSameContent(resume, jobDesc))) {
+        setNoticeModal({
+          isOpen: true,
+          title: 'Same file for resume and job description',
+          message: SAME_RESUME_JD_FILE_MESSAGE,
           variant: 'error',
         });
         return;
@@ -594,6 +663,10 @@ function UploadPage() {
         const dossierOnly = Boolean(forceNew);
 
         if (!forceNew && !resumeId && !jdId) {
+          // 1) Resume/JD type checks (LLM + heuristic fallback)
+          await validateUploadDocuments({ isSkillsMode, skillsTextForApi });
+
+          // 2) Existing pair / question-set check
           const match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
           if (match.questions_exist) {
             setLoading(false);
@@ -797,9 +870,15 @@ function UploadPage() {
           });
         } else {
           const msg = error instanceof Error ? error.message : String(error || '');
+          const code = error?.code || '';
+          const isDocTypeFail =
+            code === 'INVALID_RESUME' ||
+            code === 'INVALID_JD' ||
+            code === 'INVALID_DOCUMENT' ||
+            /does not look like a (resume|job)/i.test(msg);
           setNoticeModal({
             isOpen: true,
-            title: 'Upload failed',
+            title: isDocTypeFail ? 'Invalid document' : 'Upload failed',
             message: mapEmptyUploadFileError(msg),
             variant: 'error',
             primaryLabel: 'OK',
@@ -851,7 +930,6 @@ function UploadPage() {
         blend: blendMode,
         blend_pct_resume: blendResumePercentage,
         blend_pct_jd: 100 - blendResumePercentage,
-        include_answers: includeSampleAnswers,
       };
       // First build needs source; reuse/"new set anyway" is dossier-only.
       if (!dossierOnly) {
@@ -943,12 +1021,6 @@ function UploadPage() {
       generation_timestamp: new Date().toISOString()
     });
 
-    const generationDebug = questionsResult.debug || {};
-    const fallbackAnswerCount = generationDebug.answer_generation?.fallback_count || 0;
-    const generationWarning = fallbackAnswerCount > 0
-      ? `${fallbackAnswerCount} sample answers used fallback content instead of AI-generated answers.`
-      : '';
-
     setLastCreatedIds({
       resumeId: resumeId,
       jdId: jdId,
@@ -957,20 +1029,16 @@ function UploadPage() {
 
     setSuccessModal({
       isOpen: true,
-      title: generationWarning ? 'Generation Completed With Warning' : 'Upload & Generation Complete!',
-      message: generationWarning
-        ? `Question Set ${savedQuestionSet} was created, but the AI generation pipeline reported a fallback. ${generationWarning}`
-        : isSkillsMode
-          ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
-          : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
+      title: 'Upload & Generation Complete!',
+      message: isSkillsMode
+        ? `Skills profile, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`
+        : `Resume, job description, and questions generated successfully! Question Set ${savedQuestionSet} has been created with ${uniqueQuestions.size} questions.`,
       details: [
         `Question Set: ${savedQuestionSet}`,
         `Total Questions: ${uniqueQuestions.size}`,
         isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resumeName || 'resume'}`,
         `Job Title: ${jobTitle}`,
-        generationWarning
-          ? 'Status: Review AI Diagnostics or backend logs before trusting the sample answers.'
-          : 'Status: Ready for interview preparation',
+        'Status: Ready for interview preparation',
       ],
     });
   };
@@ -1334,13 +1402,12 @@ function UploadPage() {
                   label="Resume"
                   accept=".pdf,.doc,.docx"
                   file={resume}
-                  setFile={setResume}
+                  setFile={handleResumeUpload}
                   error={resumeError}
                   setError={setResumeError}
                   dragging={dragging}
                   setDragging={setDragging}
                   type="resume"
-                  otherFileExists={!!jobDesc}
                   disabled={loading}
                 />
               ) : (
@@ -1928,34 +1995,6 @@ function UploadPage() {
                                 </div>
                               </div>
                             ) : null}
-                        </div>
-
-                        {/* Sample Answers Toggle */}
-                        <div className="pt-2 border-t border-[var(--color-border)]">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <label className="text-sm font-medium text-[var(--color-text-primary)]">
-                                Generate Sample Answers
-                              </label>
-                              <p className="text-xs text-[var(--color-text-secondary)]">
-                                Also create one sample answer for each question (uses more tokens)
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setIncludeSampleAnswers(!includeSampleAnswers)}
-                              disabled={loading}
-                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                                includeSampleAnswers ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-gray-700'
-                              } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                            >
-                              <span
-                                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                                  includeSampleAnswers ? 'translate-x-6' : 'translate-x-1'
-                                }`}
-                              />
-                            </button>
-                          </div>
                         </div>
                       </div>
 

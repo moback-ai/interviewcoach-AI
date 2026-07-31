@@ -69,7 +69,6 @@ function DashboardPage() {
   // ✅ ADD: Split and Blend mode percentage sliders
   const [splitResumePercentage, setSplitResumePercentage] = useState(50);
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
-  const [includeSampleAnswers, setIncludeSampleAnswers] = useState(false);
   const [, setQuestionValidationError] = useState('');
   // Add state for loading overall performance
 
@@ -148,7 +147,6 @@ function DashboardPage() {
     setBlendMode(false);
     setSplitResumePercentage(50);
     setBlendResumePercentage(50);
-    setIncludeSampleAnswers(false);
     setQuestionValidationError('');
     setShowQuestionModal(true);
   };
@@ -204,7 +202,6 @@ function DashboardPage() {
         blendMode,
         splitResumePercentage,
         blendResumePercentage,
-        includeSampleAnswers,
       });
       
       // ... rest of the existing logic
@@ -361,7 +358,6 @@ function DashboardPage() {
         blend: questionSettings.blendMode || false,
         blend_pct_resume: questionSettings.blendResumePercentage || 50,
         blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50),
-        include_answers: questionSettings.includeSampleAnswers || false,
       };
 
       const response = await apiPost('/generate-questions', body, { timeoutMs: 300000 });
@@ -1102,33 +1098,6 @@ function DashboardPage() {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </div>
-
-                {/* Sample Answers Toggle */}
-                <div className="pt-4 border-t border-[var(--color-border)]">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="text-sm font-medium text-[var(--color-text-primary)]">
-                        Generate Sample Answers
-                      </label>
-                      <p className="text-xs text-[var(--color-text-secondary)]">
-                        Also create one sample answer for each question (uses more tokens)
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIncludeSampleAnswers(!includeSampleAnswers)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                        includeSampleAnswers ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-gray-700'
-                      } cursor-pointer`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          includeSampleAnswers ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                  </div>
                 </div>
               </div>
             </div>

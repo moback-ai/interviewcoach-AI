@@ -7,12 +7,17 @@ import ChatWindow from '@/components/interview/ChatWindow';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
 import WaveAnimation from '@/components/interview/WaveAnimation';
-import { getSession } from '../lib/authClient';
+import { authFetchInit, getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
 import { useOperation } from '../contexts/OperationContext';
+import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { devLog } from '../utils/devLog';
 import { useInterviewTimer } from '@/hooks/useInterviewTimer';
+
+/** Matches backend STARTED_INTERVIEW_STATUSES (+ legacy in_progress). */
+const RESUMABLE_INTERVIEW_STATUSES = new Set(['STARTED', 'ACTIVE', 'in_progress']);
+const COMPLETED_INTERVIEW_STATUSES = new Set(['ENDED', 'completed']);
 
 function InterviewPage() {
   const { setIsOperationInProgress } = useOperation();
@@ -22,6 +27,7 @@ function InterviewPage() {
   const [isValidated, setIsValidated] = useState(false);
   useInterviewTimer(interviewId, isValidated);
   const [isValidating, setIsValidating] = useState(true); // ✅ RENAMED: Validation loading
+  const [validationError, setValidationError] = useState(null);
   
   // ✅ ADD: Separate loading state for ChatWindow
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -443,89 +449,110 @@ function InterviewPage() {
     };
   }, [calibrationCheckTimer]);
 
-  // Interview validation - FIXED to only run once
+  // Interview validation — cookie-aware auth; never dump failures to /upload
   useEffect(() => {
     const validateInterview = async () => {
-      // ✅ FIXED: Only validate once
       if (hasValidated.current) {
         return;
       }
-      
+
       hasValidated.current = true;
-      
+
       try {
-        setIsValidating(true); // ✅ FIXED: Use validation-specific loading state
-        
-        // Get interview_id from URL
-        const interviewId = searchParams.get('interview_id');
-        
-        if (!interviewId) {
+        setIsValidating(true);
+        setValidationError(null);
+
+        const interviewIdFromUrl = searchParams.get('interview_id');
+
+        if (!interviewIdFromUrl) {
           devLog('❌ No interview_id provided');
-          navigate('/upload');
+          setValidationError('No interview was specified. Open Resume from your dashboard.');
           return;
         }
-        
-        devLog('🔍 Validating interview:', interviewId);
-        
-        // Get user session
+
+        devLog('🔍 Validating interview:', interviewIdFromUrl);
+
         const session = await getSession();
-        if (!session?.access_token) {
+        if (!session) {
           devLog('❌ No session found');
-          navigate('/upload');
+          navigate('/login', {
+            replace: true,
+            state: { from: `/interview?interview_id=${interviewIdFromUrl}` },
+          });
           return;
         }
-        
-        // Check if interview exists and get its status
-        const response = await fetch(`${getBackendOrigin()}/functions/v1/interviews/${interviewId}`, {
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        });
-        
-        const result = await response.json();
-        
+
+        const response = await fetch(
+          `${getBackendOrigin()}/functions/v1/interviews/${interviewIdFromUrl}`,
+          {
+            method: 'GET',
+            ...authFetchInit({ 'Content-Type': 'application/json' }),
+          },
+        );
+
+        let result = {};
+        try {
+          result = await response.json();
+        } catch {
+          result = {};
+        }
+
         devLog('📋 Interview validation result:', result);
-        
+
+        if (response.status === 401 || isAuthErrorMessage(result.error || result.message || '')) {
+          redirectToExpiredLogin();
+          return;
+        }
+
         if (!response.ok || !result.success) {
           devLog('❌ Interview not found or access denied');
-          navigate('/upload');
+          setValidationError(
+            result.message || 'This interview could not be found or you do not have access to it.',
+          );
           return;
         }
-        
+
         const interview = result.data;
-        
-        // ✅ UPDATED: Handle PENDING status
-        if (interview.status === 'PENDING') {
-          devLog('⏳ Interview is pending payment confirmation...');
-          // Show loading state while waiting for payment confirmation
-          setIsValidating(true);
-          // You could add polling here or just show a message
+        const status = interview?.status;
+
+        if (status === 'PENDING') {
+          devLog('⏳ Interview is pending payment confirmation');
+          setValidationError(
+            'This interview is still waiting for payment confirmation. Check your dashboard or payment status.',
+          );
           return;
         }
 
-        if (interview.status === 'ENDED') {
+        if (COMPLETED_INTERVIEW_STATUSES.has(status)) {
           devLog('✅ Interview already completed, redirecting to feedback page');
-          navigate(`/interview-feedback?interview_id=${interviewId}`);
+          navigate(`/interview-feedback?interview_id=${interviewIdFromUrl}`, { replace: true });
           return;
         }
 
-        if (interview.status !== 'STARTED') {
-          devLog('❌ Interview status is not STARTED:', interview.status);
-          navigate('/upload');
+        if (!RESUMABLE_INTERVIEW_STATUSES.has(status)) {
+          devLog('❌ Interview status is not resumable:', status);
+          setValidationError(
+            `This interview cannot be resumed (status: ${status || 'unknown'}). Return to the dashboard to continue.`,
+          );
           return;
         }
-        
+
         devLog('✅ Interview validated successfully:', interview);
         setIsValidated(true);
-        
       } catch (error) {
         console.error('❌ Interview validation error:', error);
-        navigate('/upload');
+        if (isAuthErrorMessage(error.message)) {
+          redirectToExpiredLogin();
+          return;
+        }
+        setValidationError(
+          error.message || 'Could not validate this interview session. Please try again from the dashboard.',
+        );
       } finally {
-        setIsValidating(false); // ✅ FIXED: Use validation-specific loading state
+        setIsValidating(false);
       }
     };
-    
+
     validateInterview();
   }, [navigate, searchParams]);
 
@@ -566,9 +593,27 @@ function InterviewPage() {
     );
   }
 
-  // Show error if not validated
+  // Show error if not validated (auth redirects happen above; avoid silent /upload bounce)
   if (!isValidated) {
-    return null; // Will redirect to /upload
+    return (
+      <div className="min-h-screen bg-[var(--color-bg)] flex items-center justify-center px-4">
+        <div className="max-w-md w-full text-center space-y-4">
+          <p className="text-[var(--color-text-primary)] font-semibold text-lg">
+            Unable to resume interview
+          </p>
+          <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
+            {validationError || 'This interview session could not be opened.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard', { replace: true })}
+            className="inline-flex items-center justify-center px-4 py-2.5 rounded-lg bg-[var(--color-primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            Back to dashboard
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Original interview page content
