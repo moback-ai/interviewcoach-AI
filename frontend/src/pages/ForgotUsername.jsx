@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiArrowLeft, FiMail, FiUser } from 'react-icons/fi';
+import { FiMail, FiUser } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
@@ -55,9 +55,9 @@ function ForgotUsername() {
         description="Use the email you signed up with and we’ll send a reminder so you can step back into the platform without guessing."
         footer={(
           <p className="text-sm text-center text-[var(--color-text-secondary)]">
-            Back to{' '}
+            Remembered your username?{' '}
             <Link to="/login" className="auth-scene-link-inline">
-              login
+              Return to sign in
             </Link>
           </p>
         )}
@@ -95,11 +95,6 @@ function ForgotUsername() {
             {loading ? 'Recovering...' : 'Recover username'}
           </button>
         </form>
-
-        <Link to="/login" className="auth-scene-link-row">
-          <FiArrowLeft size={15} />
-          <span>Return to sign in</span>
-        </Link>
       </AuthSceneShell>
     </>
   );

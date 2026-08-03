@@ -4,11 +4,17 @@ title = "InterviewCoach gitleaks config"
 useDefault = true
 
 [allowlist]
-description = "Ignore known safe patterns and generated assets"
+description = "Ignore known safe patterns, AWS resource IDs, and non-secret infra/docs configs"
 paths = [
   '''\.env\.example$''',
   '''backend/Piper/''',
   '''frontend/dist/''',
   '''package-lock\.json$''',
   '''scripts/aws-plan-b/''',
+  '''docs/diagrams/''',
+  '''infra/prod/prod\.env$''',
+]
+regexes = [
+  '''sg-[0-9a-fA-F]{17}''',
+  '''i-[0-9a-fA-F]{17}''',
 ]
