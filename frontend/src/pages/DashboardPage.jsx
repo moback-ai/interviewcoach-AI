@@ -500,10 +500,10 @@ function DashboardPage() {
         <div className="w-full max-w-7xl">
           {/* Header */}
           <div className="text-center mb-6 sm:mb-8 md:mb-10">
-            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-2 sm:mb-3 md:mb-4">
+            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-extrabold tracking-tight text-[var(--color-text-primary)] mb-1.5 sm:mb-2">
               Interview Dashboard
             </h1>
-            <p className="text-xs sm:text-sm md:text-base lg:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-3 sm:mb-4">
+            <p className="text-sm sm:text-base text-[var(--color-text-primary)] max-w-xl mx-auto leading-relaxed px-2 mb-3 sm:mb-4">
               Manage your resume and job description pairings
             </p>
           </div>

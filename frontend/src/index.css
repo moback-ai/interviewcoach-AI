@@ -4476,7 +4476,7 @@ body::after {
 .auth-scene-shell {
   position: relative;
   overflow: hidden;
-  min-height: 100vh;
+  min-height: calc(100vh - 6rem);
   isolation: isolate;
 }
 
@@ -4644,7 +4644,7 @@ body::after {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100vh;
+  min-height: calc(100vh - 6rem);
   padding: 6rem 1rem 2rem;
 }
 

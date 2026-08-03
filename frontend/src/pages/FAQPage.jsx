@@ -244,12 +244,12 @@ function FAQPage() {
             transition={{ duration: 0.6, ease: "easeOut" }}
             className="text-center mb-6 sm:mb-8 md:mb-10 lg:mb-12"
           >
-            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-3 sm:mb-4">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--color-text-primary)] mb-3 sm:mb-4">
               Frequently Asked Questions
             </h1>
-            <p className="text-xs sm:text-sm md:text-base lg:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 sm:px-4 mb-4 sm:mb-6">
+            <p className="text-sm sm:text-base text-[var(--color-text-primary)]/90 max-w-xl mx-auto leading-relaxed px-2 sm:px-4 mb-4 sm:mb-6">
               Find quick answers to common questions about AI Interview Coach. 
-              Can't find what you're looking for? <a href="#contact" className="text-[var(--color-primary)] hover:underline">Contact our support team</a>.
+              Can't find what you're looking for? <a href="#contact" className="text-[var(--color-text-primary)]/90 underline underline-offset-2 hover:text-[var(--color-primary)]">Contact our support team</a>.
             </p>
           </motion.div>
 

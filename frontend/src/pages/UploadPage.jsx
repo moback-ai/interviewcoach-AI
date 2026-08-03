@@ -1291,12 +1291,26 @@ function UploadPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const skillsSuggestions = SUGGESTED_SKILLS_POOL.filter((s) => {
-    const normalized = s.toLowerCase();
-    const input = skillsInputValue.trim().toLowerCase();
-    const alreadySelected = selectedSkills.some((existing) => existing.toLowerCase() === normalized);
-    return !alreadySelected && (!input || normalized.includes(input));
-  });
+  const skillsSuggestions = SUGGESTED_SKILLS_POOL
+    .filter((s) => {
+      const normalized = s.toLowerCase();
+      const input = skillsInputValue.trim().toLowerCase();
+      const alreadySelected = selectedSkills.some(
+        (existing) => existing.toLowerCase() === normalized
+      );
+      if (alreadySelected) return false;
+      if (!input) return true;
+      return normalized.startsWith(input) || normalized.includes(input);
+    })
+    .sort((a, b) => {
+      const input = skillsInputValue.trim().toLowerCase();
+      if (!input) return 0;
+      const aStarts = a.toLowerCase().startsWith(input);
+      const bStarts = b.toLowerCase().startsWith(input);
+      if (aStarts !== bStarts) return aStarts ? -1 : 1;
+      return a.localeCompare(b);
+    })
+    .slice(0, 8);
 
   const addSkill = (skill) => {
     const trimmed = (skill || '').trim();
@@ -1618,7 +1632,7 @@ function UploadPage() {
                       type="button"
                       onClick={handleManualJobDescAccept}
                       disabled={loading || parsingJobDesc}
-                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm hover:bg-[var(--color-primary-dark)] disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white shadow-md hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {parsingJobDesc && (
                         <FiLoader className="w-4 h-4 animate-spin" />
@@ -1654,7 +1668,7 @@ function UploadPage() {
                       type="button"
                       onClick={handleFetchJobFromUrl}
                       disabled={loading || jobUrlLoading}
-                      className="ml-auto inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-medium rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-primary)] focus:ring-offset-[var(--color-card)] bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white shadow-md hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {jobUrlLoading && (
                         <FiLoader className="w-4 h-4 animate-spin" />
