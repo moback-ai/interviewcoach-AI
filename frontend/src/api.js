@@ -142,6 +142,7 @@ export async function apiCall(endpoint, options = {}) {
 
     if (!response.ok) {
       let msg = `HTTP ${response.status}`;
+      let code = null;
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('text/html')) {
         if (response.status === 504) {
@@ -151,8 +152,14 @@ export async function apiCall(endpoint, options = {}) {
         }
         throw new Error(`Server error (${response.status}). Please try again in a moment.`);
       }
-      try { const e = await response.json(); msg = e.error || e.message || msg; } catch {}
-      throw new Error(msg);
+      try {
+        const e = await response.json();
+        msg = e.error || e.message || msg;
+        code = e.code || null;
+      } catch {}
+      const err = new Error(msg);
+      if (code) err.code = code;
+      throw err;
     }
     try { return await response.json(); } catch { return { data: await response.text() }; }
   } catch (error) {

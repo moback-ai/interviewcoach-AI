@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from flask import jsonify, request
 
+from common.db import query_one
+
 from common.interview_start import (
     InterviewStartError,
     PaymentRequiredError,
@@ -56,6 +58,22 @@ def start_interview_handler():
 
     if not _verify_resume_jd_owned(user_id, resume_id, jd_id):
         return jsonify({"success": False, "message": "Resume or job description not found"}), 404
+
+    active_row = query_one(
+        """
+        SELECT id FROM interviews
+        WHERE user_id = %s AND resume_id = %s AND jd_id = %s AND question_set = %s
+          AND status IN ('STARTED', 'ACTIVE')
+        LIMIT 1
+        """,
+        (user_id, resume_id, jd_id, question_set),
+    )
+    if active_row:
+        return jsonify({
+            "success": False,
+            "active_interview_id": str(active_row["id"]),
+            "message": "You already have an active interview in progress for this question set. Please resume your existing interview before starting a new retake.",
+        }), 400
 
     quota = interview_quota(user_id)
     if quota["payment_required"]:

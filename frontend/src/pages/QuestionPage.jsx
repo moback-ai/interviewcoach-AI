@@ -28,19 +28,6 @@ const getLevelColor = (level) => {
   }
 };
 
-const getStrengthColor = (strength) => {
-  switch (strength) {
-    case 'beginner':
-      return 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800';
-    case 'intermediate':
-      return 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-800';
-    case 'expert':
-      return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800';
-    default:
-      return 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-gray-900/20 dark:text-gray-400 dark:border-gray-800';
-  }
-};
-
 const normalizeLevel = (level) => {
   const normalized = String(level || '').trim().toLowerCase();
   if (['beginner', 'easy', 'basic', 'junior', 'novice', 'simple'].includes(normalized)) return 'easy';
@@ -49,23 +36,13 @@ const normalizeLevel = (level) => {
   return normalized || 'medium';
 };
 
-const normalizeStrength = (strength) => {
-  const normalized = String(strength || '').trim().toLowerCase();
-  if (['weak', 'beginner', 'easy', 'basic'].includes(normalized)) return 'beginner';
-  if (['medium', 'intermediate', 'mid'].includes(normalized)) return 'intermediate';
-  if (['strong', 'expert', 'advanced', 'hard'].includes(normalized)) return 'expert';
-  return normalized || 'beginner';
-};
-
 const DIFFICULTY_ORDER = { easy: 1, medium: 2, hard: 3 };
-const EXPERIENCE_ORDER = { beginner: 1, intermediate: 2, expert: 3 };
-const ANSWER_LEVELS = ['beginner', 'intermediate', 'expert'];
+const GENERATE_ANSWERS_TIMEOUT_MS = 300000;
 const formatLabel = (value) => String(value || '').charAt(0).toUpperCase() + String(value || '').slice(1);
 
-const getAnswerDisplayLabel = (strength) => {
-  const normalized = normalizeStrength(strength);
-  if (normalized === 'beginner') return 'Easy';
-  return formatLabel(normalized);
+const hasSampleAnswer = (answer) => {
+  const text = String(answer || '').trim();
+  return Boolean(text) && text !== 'No answer provided';
 };
 
 const questionCardVariants = {
@@ -140,11 +117,60 @@ const detectLanguage = (code) => {
   return 'python'; // Default to Python
 };
 
+/** Render light markdown inline: **bold**, *italic*, `code` — no extra dependency. */
+const renderInlineMarkdown = (text) => {
+  if (text == null || text === '') return null;
+  const nodes = [];
+  // Order: code fences first, then bold, then italic
+  const tokenRe = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = tokenRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code
+          key={`md-${key++}`}
+          className="px-1 py-0.5 rounded bg-[var(--color-input-bg)] border border-[var(--color-border)] text-[0.9em] font-mono"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(
+        <strong key={`md-${key++}`} className="font-semibold text-[var(--color-text-primary)]">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(
+        <em key={`md-${key++}`} className="italic">
+          {token.slice(1, -1)}
+        </em>
+      );
+    } else {
+      nodes.push(token);
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes.length ? nodes : text;
+};
+
 const AnswerContent = ({ answer }) => {
   if (!answer) return null;
   
-  // First, try to split by markdown code blocks
-  const markdownParts = answer.split(/(```[\w]*\n[\s\S]*?```)/);
+  // First, try to split by markdown code blocks (```lang optional)
+  const markdownParts = answer.split(/(```[\w]*\r?\n[\s\S]*?```)/);
   
   // If we found markdown blocks, use them
   if (markdownParts.length > 1) {
@@ -153,7 +179,7 @@ const AnswerContent = ({ answer }) => {
         {markdownParts.map((part, index) => {
           if (part.startsWith('```')) {
             // Extract the language and code from the markdown code block
-            const codeMatch = part.match(/```(\w*)\n([\s\S]*?)```/);
+            const codeMatch = part.match(/```(\w*)\r?\n([\s\S]*?)```/);
             if (codeMatch) {
               const language = codeMatch[1] || 'text';
               const code = codeMatch[2].trim();
@@ -276,7 +302,7 @@ const processTextWithCode = (text, baseIndex) => {
           <div className="text-[var(--color-text-primary)] leading-relaxed">
             {result[0].content.split('\n').map((line, lineIndex) => (
               <p key={lineIndex} className="mb-2 text-sm sm:text-base">
-                {line || '\u00A0'}
+                {line ? renderInlineMarkdown(line) : '\u00A0'}
               </p>
             ))}
           </div>
@@ -284,7 +310,7 @@ const processTextWithCode = (text, baseIndex) => {
           <div className="text-[var(--color-text-primary)] leading-relaxed">
             {text.split('\n').map((line, lineIndex) => (
               <p key={lineIndex} className="mb-2 text-sm sm:text-base">
-                {line || '\u00A0'}
+                {line ? renderInlineMarkdown(line) : '\u00A0'}
               </p>
             ))}
           </div>
@@ -305,7 +331,7 @@ const processTextWithCode = (text, baseIndex) => {
             <div key={`text-${baseIndex}-${index}`} className="text-[var(--color-text-primary)] leading-relaxed">
               {item.content.split('\n').map((line, lineIndex) => (
                 <p key={lineIndex} className="mb-2 text-sm sm:text-base">
-                  {line || '\u00A0'}
+                  {line ? renderInlineMarkdown(line) : '\u00A0'}
                 </p>
               ))}
             </div>
@@ -320,7 +346,6 @@ export default function QuestionsPage() {
   const [searchParams] = useSearchParams(); // ✅ Add this
   const [expandedQuestions, setExpandedQuestions] = useState(new Set());
   const [filterLevel, setFilterLevel] = useState('all');
-  const [filterStrength, setFilterStrength] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [isPaymentLoading, setIsPaymentLoading] = useState(false);
   // Database state
@@ -335,6 +360,7 @@ export default function QuestionsPage() {
   const [hasExistingInterviews, setHasExistingInterviews] = useState(false);
   const [interviewQuota, setInterviewQuota] = useState(null);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
+  const [isGeneratingAnswers, setIsGeneratingAnswers] = useState(false);
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
@@ -524,93 +550,213 @@ export default function QuestionsPage() {
     }
   };
 
-  // Group questions by difficulty + text so answer-depth rows stay under one prompt.
-  const groupedQuestions = questions.reduce((acc, item) => {
-    const normalizedLevel = normalizeLevel(item.difficulty_category || item.difficulty_level);
-    const questionText = item.question_text || item.question || '';
-    const questionKey = `${normalizedLevel}::${questionText.trim().toLowerCase()}`;
-    
-    if (!acc[questionKey]) {
-      acc[questionKey] = {
-        question_id: questionKey,
-        question: questionText,
-        level: normalizedLevel,
-        originalIndex: Object.keys(acc).length,
-        answers: []
-      };
-    }
+  // One row per question with a single sample answer.
+  const displayQuestions = Object.values(
+    questions.reduce((acc, item) => {
+      const normalizedLevel = normalizeLevel(item.difficulty_category || item.difficulty_level);
+      const questionText = item.question_text || item.question || '';
+      const questionKey = `${normalizedLevel}::${questionText.trim().toLowerCase()}`;
+      const answer = item.expected_answer || item.answer || '';
+      const missing = !hasSampleAnswer(answer);
 
-    const strength = normalizeStrength(item.difficulty_experience || item.strength);
-    const answer = item.expected_answer || item.answer || 'No answer provided';
-    const existingAnswer = acc[questionKey].answers.find((entry) => entry.strength === strength);
-    
-    if (!existingAnswer || existingAnswer.answer === 'No answer provided') {
-      if (existingAnswer) {
-        existingAnswer.answer = answer;
-      } else {
-        acc[questionKey].answers.push({ strength, answer });
+      if (!acc[questionKey]) {
+        acc[questionKey] = {
+          question_id: item.id || questionKey,
+          question: questionText,
+          level: normalizedLevel,
+          originalIndex: Object.keys(acc).length,
+          answer,
+          missing,
+        };
+      } else if (!acc[questionKey].missing && missing) {
+        // Keep existing filled answer
+      } else if (acc[questionKey].missing && !missing) {
+        acc[questionKey].answer = answer;
+        acc[questionKey].missing = false;
+        if (item.id) acc[questionKey].question_id = item.id;
       }
-    }
-    
-    return acc;
-  }, {});
 
+      return acc;
+    }, {})
+  );
 
-  // Sort questions by difficulty level (easy -> medium -> hard)
-  const sortQuestionsByDifficulty = (questions) => {
-    return [...questions].sort((a, b) => {
+  const sortQuestionsByDifficulty = (list) => {
+    return [...list].sort((a, b) => {
       const aOrder = DIFFICULTY_ORDER[a.level] || 999;
       const bOrder = DIFFICULTY_ORDER[b.level] || 999;
       return aOrder - bOrder || a.originalIndex - b.originalIndex;
     });
   };
 
-  // Sort answers by experience level (beginner -> intermediate -> expert)
-  const sortAnswersByExperience = (answers) => {
-    return [...answers].sort((a, b) => {
-      const aOrder = EXPERIENCE_ORDER[normalizeStrength(a.strength)] || 999;
-      const bOrder = EXPERIENCE_ORDER[normalizeStrength(b.strength)] || 999;
-      return aOrder - bOrder;
+  const filteredQuestions = sortQuestionsByDifficulty(
+    displayQuestions.filter((q) => {
+      const matchesLevel = filterLevel === 'all' || normalizeLevel(q.level) === normalizeLevel(filterLevel);
+      const matchesSearch = q.question.toLowerCase().includes(searchTerm.toLowerCase());
+      return matchesLevel && matchesSearch;
+    })
+  );
+
+  const sampleAnswersMissing = displayQuestions.some((q) => q.missing);
+
+  const closeNoticeModal = () => {
+    setNoticeModal({
+      isOpen: false,
+      title: '',
+      message: '',
+      variant: 'error',
+      actionButton: null,
+      primaryLabel: undefined,
+      onPrimary: undefined,
+      secondaryLabel: undefined,
+      onSecondary: undefined,
     });
   };
 
-  const completeAnswerLevels = (answers) => {
-    const byStrength = sortAnswersByExperience(answers).reduce((acc, answer) => {
-      const strength = normalizeStrength(answer.strength);
-      if (!acc[strength] || acc[strength].missing) {
-        acc[strength] = {
-          ...answer,
-          strength,
-          answer: answer.answer || '',
-          missing: !answer.answer || answer.answer === 'No answer provided'
-        };
-      }
-      return acc;
-    }, {});
+  const sampleAnswersErrorCopy = (rawMessage = '') => {
+    const msg = String(rawMessage || '').trim();
+    const lower = msg.toLowerCase();
 
-    return ANSWER_LEVELS.map((strength) => (
-      byStrength[strength] || {
-        strength,
-        answer: '',
-        missing: true
-      }
-    ));
+    if (
+      lower.includes('timeout') ||
+      lower.includes('timed out') ||
+      lower.includes('aborted')
+    ) {
+      return {
+        title: 'Generation took too long',
+        message:
+          'Sample answer generation timed out before finishing. Your questions are unchanged — retry when you are ready.',
+        retryable: true,
+      };
+    }
+
+    if (
+      lower.includes('complete sample answer') ||
+      lower.includes('did not return') ||
+      lower.includes('incomplete')
+    ) {
+      const countMatch = msg.match(/(\d+)\s*question/i);
+      const countLabel = countMatch ? `${countMatch[1]} question(s)` : 'one or more questions';
+      return {
+        title: 'Sample answers incomplete',
+        message: `We couldn't finish sample answers for ${countLabel}. This usually clears on a second try — nothing on your question set was lost.`,
+        retryable: true,
+      };
+    }
+
+    if (lower.includes('dossier') || lower.includes('missing')) {
+      return {
+        title: 'Could not generate sample answers',
+        message: msg || 'Sample answers could not be generated for this question set.',
+        retryable: false,
+      };
+    }
+
+    return {
+      title: 'Could not generate sample answers',
+      message:
+        msg ||
+        'Something went wrong while generating sample answers. You can retry, or dismiss and try again later.',
+      retryable: true,
+    };
   };
 
-  // Sort grouped questions and their answers
-  const sortedGroupedQuestions = Object.values(groupedQuestions).map(q => ({
-    ...q,
-    answers: completeAnswerLevels(q.answers)
-  }));
+  const handleGenerateSampleAnswers = async () => {
+    if (!currentResumeId || !currentJdId || !currentQuestionSet) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Missing data',
+        message: 'Resume, job description, and question set are required to generate sample answers.',
+        variant: 'info',
+        primaryLabel: 'OK',
+      });
+      return;
+    }
 
-  const filteredQuestions = sortQuestionsByDifficulty(
-    sortedGroupedQuestions.filter(q => {
-    const matchesLevel = filterLevel === 'all' || normalizeLevel(q.level) === normalizeLevel(filterLevel);
-    const matchesSearch = q.question.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStrength = filterStrength === 'all' || q.answers.some((answer) => normalizeStrength(answer.strength) === normalizeStrength(filterStrength));
-    return matchesLevel && matchesSearch && matchesStrength;
-    })
-  );
+    setIsGeneratingAnswers(true);
+    try {
+      const session = await getSession();
+      if (!session) {
+        throw new Error('No active session');
+      }
+
+      const backendOrigin = getBackendOrigin();
+      const response = await fetch(`${backendOrigin}/api/generate-answers`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(GENERATE_ANSWERS_TIMEOUT_MS)
+          : undefined,
+        body: JSON.stringify({
+          resume_id: currentResumeId,
+          jd_id: currentJdId,
+          question_set: currentQuestionSet,
+        }),
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('text/html') && response.status === 504) {
+          throw new Error('Sample answer generation timed out on the server. Please try again.');
+        }
+        let errorData = {};
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = {};
+        }
+        throw new Error(errorData.message || `Failed to generate sample answers: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.message || 'Sample answer generation failed');
+      }
+
+      const savedQuestions = result.data?.questions || [];
+      const uniqueQuestionCount = savedQuestions.length;
+
+      setQuestions(savedQuestions);
+      setExpandedQuestions(new Set());
+      setNoticeModal({
+        isOpen: true,
+        title: 'Sample answers ready',
+        message: `Generated sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`,
+        variant: 'info',
+        primaryLabel: 'OK',
+      });
+    } catch (error) {
+      console.error('Error generating sample answers:', error);
+      if (isAuthErrorMessage(error.message)) {
+        redirectToExpiredLogin();
+        return;
+      }
+      const rawMessage =
+        error?.name === 'TimeoutError' || error?.name === 'AbortError'
+          ? 'Sample answer generation timed out. Please try again.'
+          : error.message;
+      const copy = sampleAnswersErrorCopy(rawMessage);
+      setNoticeModal({
+        isOpen: true,
+        title: copy.title,
+        message: copy.message,
+        variant: copy.retryable ? 'warning' : 'error',
+        primaryLabel: copy.retryable ? 'Retry' : 'OK',
+        onPrimary: copy.retryable
+          ? () => {
+              closeNoticeModal();
+              handleGenerateSampleAnswers();
+            }
+          : undefined,
+        secondaryLabel: copy.retryable ? 'Dismiss' : undefined,
+        onSecondary: copy.retryable ? closeNoticeModal : undefined,
+      });
+    } finally {
+      setIsGeneratingAnswers(false);
+    }
+  };
 
   const toggleQuestion = (questionId) => {
     const newExpanded = new Set(expandedQuestions);
@@ -642,11 +788,35 @@ export default function QuestionsPage() {
       });
     } catch (error) {
       console.error('Error scheduling interview:', error);
+      const isAlreadyActive =
+        error.message?.toLowerCase().includes('active interview') ||
+        error.message?.toLowerCase().includes('in progress') ||
+        error.message?.toLowerCase().includes('resume');
+
+      const activeInterview = interviewHistory.find(
+        (interview) =>
+          interview.status === 'STARTED' ||
+          interview.status === 'ACTIVE' ||
+          interview.status === 'in_progress'
+      );
+
       setNoticeModal({
         isOpen: true,
-        title: retakeFrom ? 'Retake failed' : 'Payment failed',
-        message: error.message,
-        variant: 'error',
+        title: isAlreadyActive ? 'Active Interview In Progress' : (retakeFrom ? 'Retake Failed' : 'Payment Failed'),
+        message: error.message || 'An unexpected error occurred.',
+        variant: isAlreadyActive ? 'info' : 'error',
+        actionButton: (isAlreadyActive && activeInterview) ? (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ) : null,
       });
       setIsPaymentLoading(false);
     }
@@ -666,6 +836,35 @@ export default function QuestionsPage() {
   };
 
   const handleRetakeInterview = async () => {
+    const activeInterview = interviewHistory.find(
+      (interview) =>
+        interview.status === 'STARTED' ||
+        interview.status === 'ACTIVE' ||
+        interview.status === 'in_progress'
+    );
+
+    if (activeInterview) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Active Interview In Progress',
+        message: 'You already have an active interview in progress for this question set. Please resume your current interview before starting a new retake.',
+        variant: 'info',
+        actionButton: (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ),
+      });
+      return;
+    }
+
     const originalInterview = interviewHistory.find(
       (interview) => interview.status === 'completed' || interview.status === 'ENDED'
     );
@@ -673,7 +872,7 @@ export default function QuestionsPage() {
     if (!originalInterview) {
       setNoticeModal({
         isOpen: true,
-        title: 'Retake unavailable',
+        title: 'Retake Unavailable',
         message: 'No completed interview found to retake from.',
         variant: 'info',
       });
@@ -718,7 +917,7 @@ export default function QuestionsPage() {
               Interview Questions & Answers
             </h1>
             <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-4">
-              Review generated questions and sample answers for your interview preparation
+              Review generated questions for your interview preparation. Sample answers can be generated on demand.
             </p>
             {quotaBadgeText && (
               <p className="text-xs sm:text-sm font-medium text-[var(--color-primary)] mb-2">
@@ -740,9 +939,29 @@ export default function QuestionsPage() {
                   <span className="font-medium">Question Set {currentQuestionSet}</span>
                 </div>
                 <div className="flex items-center gap-2 text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-card)] px-3 py-1 rounded-full border border-[var(--color-border)]">
-                  <span className="font-medium">{Object.keys(groupedQuestions).length}</span>
+                  <span className="font-medium">{displayQuestions.length}</span>
                   <span className="opacity-75">questions</span>
                 </div>
+                {!loading && !error && sampleAnswersMissing && (
+                  <button
+                    type="button"
+                    onClick={handleGenerateSampleAnswers}
+                    disabled={isGeneratingAnswers}
+                    className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
+                  >
+                    {isGeneratingAnswers ? (
+                      <>
+                        <FiLoader className="w-4 h-4 animate-spin" />
+                        Generating answers...
+                      </>
+                    ) : (
+                      <>
+                        <FiRefreshCw className="w-4 h-4" />
+                        Generate Sample Answers
+                      </>
+                    )}
+                  </button>
+                )}
               </motion.div>
             )}
           </motion.div>
@@ -754,8 +973,8 @@ export default function QuestionsPage() {
             transition={{ duration: 0.3, delay: 0.1 }}
             className="bg-[var(--color-card)] rounded-xl sm:rounded-2xl lg:rounded-3xl shadow-lg sm:shadow-xl lg:shadow-2xl border border-[var(--color-border)] p-4 sm:p-6 lg:p-8 mb-6 sm:mb-8"
           >
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              <div className="sm:col-span-2 lg:col-span-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-1">
                 <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2 flex items-center">
                   <FiSearch className="mr-2" size={16} />
                   Search Questions
@@ -784,30 +1003,6 @@ export default function QuestionsPage() {
                      <option value="easy">Easy</option>
                   <option value="medium">Medium</option>
                   <option value="hard">Hard</option>
-                </select>
-                   <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                     <svg className="w-4 h-4 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                     </svg>
-                   </div>
-                 </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2 flex items-center">
-                  <FiFilter className="mr-2" size={16} />
-                   Answer Depth
-                </label>
-                 <div className="relative">
-                <select
-                  value={filterStrength}
-                  onChange={(e) => setFilterStrength(e.target.value)}
-                     className="appearance-none w-full px-3 sm:px-4 py-2 sm:py-3 pr-10 border border-[var(--color-border)] rounded-lg sm:rounded-xl bg-[var(--color-input-bg)] text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] transition-all duration-200 text-sm sm:text-base hover:border-[var(--color-primary)] cursor-pointer"
-                   >
-                     <option value="all">All Answer Depths</option>
-                     <option value="beginner">Easy</option>
-                     <option value="intermediate">Intermediate</option>
-                     <option value="expert">Expert</option>
                 </select>
                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
                      <svg className="w-4 h-4 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -910,38 +1105,29 @@ export default function QuestionsPage() {
                           transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
                           className="px-4 sm:px-6 lg:px-8 pb-4 sm:pb-6 lg:pb-8 border-t border-[var(--color-border)]"
                         >
-                          <div className="mt-4 sm:mt-6 space-y-4 sm:space-y-6">
-                            {questionGroup.answers
-                              .filter(answer => filterStrength === 'all' || normalizeStrength(answer.strength) === normalizeStrength(filterStrength))
-                              .map((answer, answerIndex) => (
-                                <motion.div
-                                  key={answer.strength}
-                                  custom={answerIndex}
-                                  variants={answerCardVariants}
-                                  initial="hidden"
-                                  animate="visible"
-                                  className="bg-[var(--color-input-bg)] rounded-lg sm:rounded-xl p-4 sm:p-6 border border-[var(--color-border)]"
-                                >
-                                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0 mb-3 sm:mb-4">
-                                    <h4 className="text-sm font-medium text-[var(--color-text-primary)] flex items-center">
-                                      <FiCode className="mr-2" size={16} />
-                                      Answer ({getAnswerDisplayLabel(answer.strength)})
-                                    </h4>
-                                    <span className={`px-3 sm:px-4 py-1 sm:py-2 text-xs sm:text-sm font-medium rounded-lg sm:rounded-xl border ${getStrengthColor(answer.strength)}`}>
-                                      {getAnswerDisplayLabel(answer.strength)}
-                                    </span>
-                                  </div>
-                                  <div className="bg-[var(--color-card)] rounded-lg sm:rounded-xl p-3 sm:p-6 border border-[var(--color-border)]">
-                                    {answer.missing ? (
-                                      <p className="text-sm sm:text-base text-[var(--color-text-secondary)] leading-relaxed">
-                                        No {getAnswerDisplayLabel(answer.strength)} answer was generated for this question yet.
-                                      </p>
-                                    ) : (
-                                      <AnswerContent answer={answer.answer} />
-                                    )}
-                                  </div>
-                                </motion.div>
-                              ))}
+                          <div className="mt-4 sm:mt-6">
+                            <motion.div
+                              variants={answerCardVariants}
+                              initial="hidden"
+                              animate="visible"
+                              className="bg-[var(--color-input-bg)] rounded-lg sm:rounded-xl p-4 sm:p-6 border border-[var(--color-border)]"
+                            >
+                              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-0 mb-3 sm:mb-4">
+                                <h4 className="text-sm font-medium text-[var(--color-text-primary)] flex items-center">
+                                  <FiCode className="mr-2" size={16} />
+                                  Sample Answer
+                                </h4>
+                              </div>
+                              <div className="bg-[var(--color-card)] rounded-lg sm:rounded-xl p-3 sm:p-6 border border-[var(--color-border)]">
+                                {questionGroup.missing ? (
+                                  <p className="text-sm sm:text-base text-[var(--color-text-secondary)] leading-relaxed">
+                                    No sample answer was generated for this question yet.
+                                  </p>
+                                ) : (
+                                  <AnswerContent answer={questionGroup.answer} />
+                                )}
+                              </div>
+                            </motion.div>
                           </div>
                         </motion.div>
                       )}
@@ -1020,11 +1206,15 @@ export default function QuestionsPage() {
       </PageWavesShell>
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error' })}
+        onClose={closeNoticeModal}
         title={noticeModal.title}
         message={noticeModal.message}
-        variant={noticeModal.variant}
-      />
-    </>
+        variant={noticeModal.variant || 'error'}
+        actionButton={noticeModal.actionButton}
+        primaryLabel={noticeModal.primaryLabel}
+        onPrimary={noticeModal.onPrimary}
+        secondaryLabel={noticeModal.secondaryLabel}
+        onSecondary={noticeModal.onSecondary}
+      />    </>
   );
 }

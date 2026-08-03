@@ -73,6 +73,14 @@ API ASG scales to **0 instances after 19:00 IST**. Deploy is blocked outside **1
 
 ---
 
+## Abandoned checkout cleanup
+
+Pending Dodo checkouts that users abandon are **expired** (not deleted) by the API.
+
+See **[PAYMENTS_CHECKOUT.md](PAYMENTS_CHECKOUT.md)** for the endpoint, secret keys, and DevSecOps handoff.
+
+---
+
 ## Local verification before requesting deploy
 
 ```bash

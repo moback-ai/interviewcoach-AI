@@ -176,7 +176,15 @@ const generateInterviewPDF = (feedbackData, transcriptData, getOverallRating, ge
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(44, 62, 80);
         
-        const transcript = JSON.parse(transcriptData.full_transcript);
+        const rawTranscript = JSON.parse(transcriptData.full_transcript);
+        // Hide internal control tokens (e.g. END_INTERVIEW) from the download.
+        const isInternalControl = (content) => {
+          const token = String(content || '').trim().toUpperCase();
+          return ['END_INTERVIEW', 'ENDINTERVIEW', '/END_INTERVIEW', '/END'].includes(token);
+        };
+        const transcript = (Array.isArray(rawTranscript) ? rawTranscript : []).filter(
+          (m) => m && !isInternalControl(m.content),
+        );
         doc.text(`Total Messages: ${transcript.length}`, margin, yPosition);
         yPosition += 8;
         doc.text(`Interviewer Questions: ${transcript.filter(m => m.role === 'assistant').length}`, margin, yPosition);
@@ -432,10 +440,10 @@ function InterviewFeedbackPage() {
   };
 
   const getQuestionsAnswered = () => {
-    if (feedbackData?.responses_count !== undefined) {
+    if (feedbackData?.responses_count !== undefined && feedbackData?.responses_count !== null) {
       return feedbackData.responses_count;
     }
-    return 12; // Fallback
+    return '—';
   };
 
   const downloadInterviewReport = async () => {

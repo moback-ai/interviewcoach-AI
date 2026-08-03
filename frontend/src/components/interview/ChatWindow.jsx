@@ -11,6 +11,7 @@ import { getMediaAccessErrorMessage, requestUserMedia } from '../../utils/mediaD
 import { devLog } from '../../utils/devLog';
 import { createAuthenticatedAudioElement } from '../../hooks/useAuthenticatedBlobUrl';
 import { revokeBlobUrl } from '../../utils/protectedFiles';
+import { stripMarkdownForDisplay } from '../../utils/stripMarkdown';
 
 const GENERATE_RESPONSE_TIMEOUT_MS = 120000;
 
@@ -50,7 +51,7 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
   const [canEndInterview, setCanEndInterview] = useState(false); // Start disabled
   const [isResponseInProgress, setIsResponseInProgress] = useState(false);
 
-  const { loadChatHistory, deleteChatHistory } = useChatHistory();
+  const { loadChatHistory } = useChatHistory();
 
   const buildGenerateResponsePayload = useCallback((message) => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -58,12 +59,15 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
     return {
       message,
       interview_id: interviewId,
+      // Matches the interviewer persona shown on InterviewPage.
+      interviewer_name: 'Sadhan',
     };
   }, []);
 
   // ✅ NEW: Add state to track interview stage and resume question answers
   const [interviewStage, setInterviewStage] = useState('introduction');
   const [hasAnsweredResumeQuestion, setHasAnsweredResumeQuestion] = useState(false);
+  const [awaitingManualEnd, setAwaitingManualEnd] = useState(false);
 
   const [showCodeEditor, setShowCodeEditor] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState(null);
@@ -451,11 +455,21 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       devLog('📥 Interview Manager response:', response);
       
       if (response.success) {
-        const { response: textResponse, audio_url, should_delete_audio, stage, interview_done, requires_code, code_language } = response.data;
+        const {
+          response: textResponse,
+          audio_url,
+          should_delete_audio,
+          stage,
+          interview_done,
+          requires_code,
+          code_language,
+          awaiting_manual_end,
+        } = response.data;
         
         devLog('🔍 Response data:', {
           stage,
           interview_done,
+          awaiting_manual_end,
           userInput: userInput.trim(),
           currentInterviewStage: interviewStage
         });
@@ -464,11 +478,18 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         
         const answeredResumeQuestion = interviewStage === 'resume_discussion' && userInput.trim().length > 0;
         const nextHasAnsweredResumeQuestion = hasAnsweredResumeQuestion || answeredResumeQuestion;
+        const nextAwaitingManualEnd = !!awaiting_manual_end;
 
         // ✅ NEW: Track when user answers resume questions (check current stage before updating)
         if (answeredResumeQuestion) {
           devLog('✅ User answered resume question - marking as answered');
           setHasAnsweredResumeQuestion(true);
+        }
+
+        setAwaitingManualEnd(nextAwaitingManualEnd);
+        if (nextAwaitingManualEnd) {
+          setCanEndInterview(true);
+          setIsRecording(false);
         }
 
         if (requires_code) {
@@ -494,9 +515,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           const nextEndState = resolveEndInterviewState(stage, nextHasAnsweredResumeQuestion);
           setInterviewStage(nextEndState.interviewStage);
           setHasAnsweredResumeQuestion(nextEndState.hasAnsweredResumeQuestion);
-          setCanEndInterview(nextEndState.canEndInterview);
+          setCanEndInterview(nextAwaitingManualEnd || nextEndState.canEndInterview);
 
-          if (nextEndState.canEndInterview) {
+          if (nextAwaitingManualEnd || nextEndState.canEndInterview) {
             devLog('✅ End Interview button enabled');
           } else {
             devLog('⏳ End Interview button remains disabled', {
@@ -550,17 +571,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
       const urlParams = new URLSearchParams(window.location.search);
       const interviewId = urlParams.get('interview_id');
 
-      if (interviewId) {
-        try {
-          devLog('🗑️ Deleting chat history for interview:', interviewId);
-          await deleteChatHistory(interviewId);
-          devLog('✅ Chat history deleted successfully');
-        } catch (error) {
-          console.error('❌ Failed to delete chat history:', error);
-        }
-      }
-      
+      // Keep chat_history so the full transcript can be saved on completion.
+      // (Deleting here previously left only END_INTERVIEW + thank-you in the download.)
+
       setIsEndingInterview(true);
+      setAwaitingManualEnd(false);
       
       try {
         devLog('📤 Sending END_INTERVIEW command to backend...');
@@ -616,6 +631,9 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
   // Update the toggleRecording function (around line 266)
   const toggleRecording = async () => {
+    if (awaitingManualEnd && !isRecording) {
+      return;
+    }
     if (isRecording) {
       // Stop recording
       devLog('🛑 Stopping recording...');
@@ -949,10 +967,15 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             result.interviewStage,
             result.hasAnsweredResumeQuestion,
           );
+          const nextAwaitingManualEnd = !!result.awaitingManualEnd;
           setInterviewStage(restored.interviewStage);
           setHasAnsweredResumeQuestion(restored.hasAnsweredResumeQuestion);
-          setCanEndInterview(restored.canEndInterview);
-          devLog('♻️ Restored interview UI state after refresh:', restored);
+          setAwaitingManualEnd(nextAwaitingManualEnd);
+          setCanEndInterview(nextAwaitingManualEnd || restored.canEndInterview);
+          devLog('♻️ Restored interview UI state after refresh:', {
+            ...restored,
+            awaitingManualEnd: nextAwaitingManualEnd,
+          });
         }
       }
     };
@@ -1058,8 +1081,13 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         setLanguage(newLanguage);
   };
 
-  const isEndInterviewDisabled =
-    !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress;
+  const isInputLocked = awaitingManualEnd;
+  const isMicDisabled =
+    isInputLocked || isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress;
+  // Option B: once Q&A is done, keep End Interview clickable (only block while ending).
+  const isEndInterviewDisabled = awaitingManualEnd
+    ? isEndingInterview
+    : !canEndInterview || isAudioPlaying || isRecording || isLoading || isResponseInProgress;
 
   return (
     <div 
@@ -1090,7 +1118,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             }`}
             title={
               isEndInterviewDisabled
-                ? (isRecording ? "Wait for recording to finish" : 
+                ? (isEndingInterview ? "Ending interview..." :
+                   isRecording ? "Wait for recording to finish" : 
                    isLoading ? "Wait for response to generate" : 
                    isResponseInProgress ? "Response in progress..." : 
                    isAudioPlaying ? "Wait for audio to finish" :
@@ -1117,30 +1146,42 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           <button
             type="button"
             onClick={toggleRecording}
-            disabled={isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress} // ✅ NEW: Also disable during response process
+            disabled={isMicDisabled}
             className={`w-full max-w-md px-5 sm:px-8 py-3.5 sm:py-4 rounded-2xl flex items-center justify-center gap-2 sm:gap-3 text-white font-semibold transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] ${
-              isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
-                ? 'bg-gray-400 cursor-not-allowed opacity-60' // ✅ NEW: Disabled state for all conditions
+              isMicDisabled
+                ? 'bg-gray-400 cursor-not-allowed opacity-60'
                 : isRecording 
                   ? 'bg-red-500 hover:bg-red-600' 
                   : 'bg-blue-500 hover:bg-blue-600'
             }`}
             title={
-              isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
-                ? (isAudioPlaying ? 'Wait for audio to finish' : 
-                   isLoading ? 'Generating response...' : 
-                   isResponseInProgress ? 'Response in progress...' : 'Button temporarily disabled')
+              isMicDisabled
+                ? (isInputLocked
+                    ? 'Interview finished — press End Interview for feedback'
+                    : isAudioPlaying
+                      ? 'Wait for audio to finish'
+                      : isLoading
+                        ? 'Generating response...'
+                        : isResponseInProgress
+                          ? 'Response in progress...'
+                          : 'Button temporarily disabled')
                 : (isRecording ? 'Stop Recording' : 'Speak Now')
-            } // ✅ NEW: Dynamic tooltip for all disabled states
+            }
           >
             {isRecording ? <MicOff size={18} className="sm:w-5 sm:h-5" /> : <Mic size={18} className="sm:w-5 sm:h-5" />}
             <span className="text-sm font-medium">
-              {isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
-                ? (isAudioPlaying ? 'Audio Playing...' : 
-                   isLoading ? 'Generating...' : 
-                   isResponseInProgress ? 'Response in progress...' : 'Please Wait...')
+              {isMicDisabled
+                ? (isInputLocked
+                    ? 'Press End Interview'
+                    : isAudioPlaying
+                      ? 'Audio Playing...'
+                      : isLoading
+                        ? 'Generating...'
+                        : isResponseInProgress
+                          ? 'Response in progress...'
+                          : 'Please Wait...')
                 : (isRecording ? 'Stop Recording' : 'Speak Now')
-              } {/* ✅ NEW: Dynamic text for all disabled states */}
+              }
             </span>
           </button>
         </div>
@@ -1197,7 +1238,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                         : 'bg-white/20 text-white'
                     }`}
                   >
-                    {message.speaker === 'interviewer' ? 'INTERVIEWER' : 'YOU'}
+                    {message.speaker === 'interviewer'
+                      ? 'INTERVIEWER'
+                      : message.speaker === 'system'
+                        ? 'SYSTEM'
+                        : 'YOU'}
                   </span>
                   <span 
                     className="text-xs font-medium opacity-70"
@@ -1206,7 +1251,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                     {message.timestamp}
                   </span>
                 </div>
-                <p className="text-xs sm:text-sm md:text-base leading-relaxed font-medium">{message.message}</p>
+                <p className="text-xs sm:text-sm md:text-base leading-relaxed font-medium">
+                  {message.speaker === 'interviewer'
+                    ? stripMarkdownForDisplay(message.message)
+                    : message.message}
+                </p>
               </div>
             </motion.div>
           ))}
@@ -1283,9 +1332,11 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
           className="text-xs sm:text-sm"
           style={{ color: 'var(--color-text-secondary)' }}
         >
-          {isRecording 
-            ? 'Click to stop recording and submit your response'
-            : 'Click to start recording your response'
+          {isInputLocked
+            ? 'Interview complete — press End Interview for your feedback'
+            : isRecording 
+              ? 'Click to stop recording and submit your response'
+              : 'Click to start recording your response'
           }
         </p>
       </div>
@@ -1305,14 +1356,14 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
         <div className="pt-3 sm:pt-4">
           <button
             onClick={() => setShowCodeEditor(true)}
-            disabled={isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress}
+            disabled={isMicDisabled}
             className={`w-full px-4 py-2.5 rounded-lg flex items-center justify-center gap-2 text-white font-semibold transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 ${
-              isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
+              isMicDisabled
                 ? 'bg-gray-400 cursor-not-allowed opacity-60'
                 : 'bg-purple-500 hover:bg-purple-600'
             }`}
             title={
-              isButtonDisabled || isAudioPlaying || isLoading || isResponseInProgress
+              isMicDisabled
                 ? 'Please wait...'
                 : `Open Code Editor`
             }

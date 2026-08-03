@@ -18,7 +18,8 @@ These are the **only** process environment variables allowed on prod servers:
 | `AWS_REGION` | `ap-south-1` |
 | `AWS_SECRETS_MANAGER_SECRET_ID` | `interviewcoach/prod/app` |
 
-Everything else (`DB_*`, `JWT_SECRET`, `OPENROUTER_API_KEY`, `LLM_PROVIDER`, etc.) must be keys inside the secret JSON.
+Everything else (`DB_*`, `JWT_SECRET`, `OPENROUTER_API_KEY`, `LLM_PROVIDER`,
+`CHECKOUT_MAINTENANCE_TOKEN`, etc.) must be keys inside the secret JSON.
 
 ## Secret template
 
