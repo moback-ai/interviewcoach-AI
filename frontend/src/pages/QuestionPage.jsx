@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
-import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings } from 'react-icons/fi'; // Add FiLoader, FiRefreshCw, FiEye
+import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings, FiPlay } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import LazySyntaxHighlightedCode from '../components/common/LazySyntaxHighlightedCode';
@@ -1131,6 +1131,22 @@ export default function QuestionsPage() {
     }
     return null;
   })();
+
+  const activeInterview = interviewHistory.find(
+    (interview) =>
+      interview.status === 'STARTED' ||
+      interview.status === 'ACTIVE' ||
+      interview.status === 'in_progress'
+  );
+
+  const hasCompletedInterview = interviewHistory.some(
+    (interview) => interview.status === 'completed' || interview.status === 'ENDED'
+  );
+
+  const handleResumeInterview = () => {
+    if (!activeInterview?.id) return;
+    window.location.href = `/interview?interview_id=${activeInterview.id}`;
+  };
   
   return (
     <>
@@ -1403,10 +1419,26 @@ export default function QuestionsPage() {
             transition={{ duration: 0.3, delay: 0.4 }}
             className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8 sm:mt-12"
           >
-            {/* Show different buttons based on interview status */}
-            {hasExistingInterviews ? (
+            {/* Match Dashboard: Resume while in progress; Retake only after a completed interview */}
+            {activeInterview ? (
               <>
-                {/* Retake Interview Button */}
+                <button
+                  onClick={handleResumeInterview}
+                  className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-500 text-white shadow-lg hover:shadow-xl"
+                >
+                  <FiPlay className="w-4 h-4 sm:w-5 sm:h-5" />
+                  Resume Interview
+                </button>
+                <button
+                  onClick={() => window.location.href = '/dashboard'}
+                  className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-[var(--color-card)] hover:bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] shadow-lg hover:shadow-xl"
+                >
+                  <FiEye className="w-4 h-4 sm:w-5 sm:h-5" />
+                  View Dashboard
+                </button>
+              </>
+            ) : hasCompletedInterview ? (
+              <>
                 <button
                   onClick={handleRetakeInterview}
                   disabled={isPaymentLoading}
@@ -1417,8 +1449,6 @@ export default function QuestionsPage() {
                   <FiRefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${isPaymentLoading ? 'animate-spin' : ''}`} />
                   {isPaymentLoading ? 'Processing...' : 'Retake Interview'}
                 </button>
-                
-                {/* View Dashboard Button */}
                 <button
                   onClick={() => window.location.href = '/dashboard'}
                   className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-[var(--color-card)] hover:bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] shadow-lg hover:shadow-xl"
@@ -1428,7 +1458,6 @@ export default function QuestionsPage() {
                 </button>
               </>
             ) : (
-              /* Schedule Interview Button - Only show when no interviews exist */
               <button
                 onClick={handlePayment}
                 disabled={isPaymentLoading}

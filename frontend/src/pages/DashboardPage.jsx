@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings } from 'react-icons/fi';
+import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings, FiInfo } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -749,10 +749,23 @@ function DashboardPage() {
                      >
                        <FiRefreshCw className={`mr-2 sm:mr-3 ${regeneratingQuestions.has(pairing.id) ? 'animate-spin' : ''}`} size={18} />
                        <span className="hidden sm:inline">
-                         {regeneratingQuestions.has(pairing.id) ? 'Regenerating...' : isGeneratingQuestions ? 'Generation in Progress...' : 'Regenerate Questions'}
+                         {regeneratingQuestions.has(pairing.id) ? 'Creating...' : isGeneratingQuestions ? 'Generation in Progress...' : 'Create New Question Set'}
                        </span>
                        <span className="sm:hidden">
-                         {regeneratingQuestions.has(pairing.id) ? 'Regenerating...' : isGeneratingQuestions ? 'In Progress...' : 'Regenerate'}
+                         {regeneratingQuestions.has(pairing.id) ? 'Creating...' : isGeneratingQuestions ? 'In Progress...' : 'New Set'}
+                       </span>
+                       <span
+                         className="relative group ml-2 inline-flex items-center justify-center"
+                         onClick={(e) => e.stopPropagation()}
+                         aria-label="Creates a new question set for this resume and job. Existing sets are kept."
+                       >
+                         <FiInfo size={14} className="opacity-90 hover:opacity-100" />
+                         <span
+                           role="tooltip"
+                           className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 sm:w-64 px-3 py-2 rounded-lg bg-[var(--color-card)] text-[var(--color-text-primary)] text-xs leading-snug border border-[var(--color-border)] shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 font-normal"
+                         >
+                           Creates a new question set for this resume and job. Existing sets are kept.
+                         </span>
                        </span>
                      </button>
                    </div>
