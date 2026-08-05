@@ -1157,7 +1157,45 @@ def _dossier_example_snippets(dossier: dict) -> dict:
     }
 
 
-def _dossier_dynamic_examples_block(dossier: dict) -> str:
+def _blend_weight_guidance(blend_pct_resume: int = 50, blend_pct_jd: int = 50) -> str:
+    """
+    Construct clear, actionable LLM instructions for question framing based on blend weights.
+    """
+    r_pct = 50 if blend_pct_resume is None else int(blend_pct_resume)
+    j_pct = 50 if blend_pct_jd is None else int(blend_pct_jd)
+
+    if j_pct > r_pct:
+        return (
+            f"WEIGHTING RULE (CRITICAL - {j_pct}% Job Description / {r_pct}% Resume):\n"
+            f"- Primary Subject ({j_pct}% weight): Every question MUST center around a specific Job Description expectation, "
+            f"duty, must-have skill, key tool, or responsibility from the dossier (responsibilities, jd_highlights, must_have_skills).\n"
+            f"- Secondary Subject ({r_pct}% weight): Bring in candidate's resume experience (resume_anchors, experience, projects) secondarily, "
+            f"asking how their past work equips them to address that specific JD requirement/scenario.\n"
+            f"- Framing: Lead with the JD requirement/challenge first, then connect to candidate's past work. "
+            f"Do NOT make candidate's past project the main subject; make the JD requirement the main subject."
+        )
+    elif r_pct > j_pct:
+        return (
+            f"WEIGHTING RULE (CRITICAL - {r_pct}% Resume / {j_pct}% Job Description):\n"
+            f"- Primary Subject ({r_pct}% weight): Every question MUST center around a specific past project, company, artifact, or tool "
+            f"from the candidate's resume (resume_anchors, experience, projects).\n"
+            f"- Secondary Subject ({j_pct}% weight): Connect to a JD expectation secondarily to aim the probe toward role relevance.\n"
+            f"- Framing: Lead with candidate's past project first, and probe how that past experience aligns with a JD expectation."
+        )
+    else:
+        return (
+            f"WEIGHTING RULE ({r_pct}% Resume / {j_pct}% Job Description):\n"
+            f"- Balanced Focus: Give equal weight to candidate's past work (resume_anchor) and the Job Description expectation.\n"
+            f"- Framing: Seamlessly blend one resume anchor with one JD expectation in each question."
+        )
+
+
+def _dossier_dynamic_examples_block(
+    dossier: dict,
+    mode: str = "core",
+    blend_pct_resume: int = 50,
+    blend_pct_jd: int = 50,
+) -> str:
     """Universal BAD examples + GOOD examples grounded in THIS dossier."""
     s = _dossier_example_snippets(dossier)
     domain_line = ""
@@ -1175,13 +1213,26 @@ def _dossier_dynamic_examples_block(dossier: dict) -> str:
         )
     bundle_block = "\n".join(bundle_lines) if bundle_lines else ""
 
-    return f"""{domain_line}
-Use ONE anchor bundle per question — do NOT combine project from anchor A with outcome from anchor B.
-Self-contained resume anchors from THIS dossier:
-{bundle_block}
-- JD expectation: {s['jd_need']}
-- Gap / stretch skill (transfer only, never as past experience): {s['gap']}
+    b_res = 50 if blend_pct_resume is None else int(blend_pct_resume)
+    b_jd = 50 if blend_pct_jd is None else int(blend_pct_jd)
+    is_jd_heavy_blend = mode in ("blend", "hybrid") and b_jd > b_res
 
+    if is_jd_heavy_blend:
+        examples_section = f"""
+BEGINNER (JD-primary walkthrough — lead with JD expectation):
+- BAD: "Walk through {s['project']} at {s['company']}." (too resume-heavy for {blend_pct_jd}% JD weight)
+- GOOD: "Our role requires {s['jd_need']}. How does your experience with {s['project']} at {s['company']} demonstrate your ability to deliver this?"
+
+MEDIUM (JD-primary mechanism / challenge — lead with JD requirement):
+- BAD: "On {s['project']}, what failure mode worried you most?" (ignores the {blend_pct_jd}% JD weight)
+- GOOD: "For this role's key responsibility of {s['jd_need']}, what specific approach would you take given your past work on {s['artifact_b']} at {s['company_b']}?"
+
+HARD (JD-primary judgment & tradeoffs — lead with JD constraint/goal):
+- BAD: "Given {s['project']} at {s['company']}, what would you change?" (resume-heavy framing)
+- GOOD: "In this role, you will face {s['jd_need']}. Given your background with {s['project']} at {s['company']}, what tradeoffs would you navigate to meet this requirement?"
+"""
+    else:
+        examples_section = f"""
 BEGINNER (concrete walkthrough — pick ONE anchor bundle):
 - Must name a specific project/outcome from a single anchor (not a bare skill label).
 - BAD: "Tell us about your experience with {s['tool_or_method']}."
@@ -1204,6 +1255,14 @@ HARD (judgment for THIS role — resume anchor + JD need; gap skills as transfer
 - GOOD: "Given {s['project']} at {s['company']}, what would you change to meet this role's need for {s['jd_need']} — and why?"
 - GOOD: "You may not list {s['gap']} strongly; given {s['artifact_b']}, how would you ramp up for that JD expectation?"
 """
+
+    return f"""{domain_line}
+Use ONE anchor bundle per question — do NOT combine project from anchor A with outcome from anchor B.
+Self-contained resume anchors from THIS dossier:
+{bundle_block}
+- JD expectation: {s['jd_need']}
+- Gap / stretch skill (transfer only, never as past experience): {s['gap']}
+{examples_section}"""
 
 
 def _coerce_text_field(value, max_chars=200) -> str:
@@ -1281,11 +1340,12 @@ def _strip_internal_question_fields(questions):
 def _build_theory_prompt(job_title, dossier, level, count, weight, mode="core",
                          resume_pct=50, jd_pct=50, blend_pct_resume=50, blend_pct_jd=50):
     dossier_blob = _dossier_json(dossier)
+    blend_rule = _blend_weight_guidance(blend_pct_resume, blend_pct_jd)
     mode_block = {
         "core": (
             "MODE: core (resume-primary).\n"
-            "Focus mostly on resume experience/projects; use JD to aim the probe at role expectations.\n"
-            "About 70% resume grounding, 30% JD alignment."
+            "About 70% resume grounding, 30% JD alignment.\n"
+            "Focus mostly on resume experience/projects; use JD to aim the probe at role expectations."
         ),
         "split_resume": (
             f"MODE: split — RESUME bucket (~{resume_pct}%).\n"
@@ -1300,6 +1360,7 @@ def _build_theory_prompt(job_title, dossier, level, count, weight, mode="core",
         ),
         "blend": (
             f"MODE: blend ({blend_pct_resume}% resume / {blend_pct_jd}% JD per question).\n"
+            f"{blend_rule}\n"
             "Each question must meaningfully combine a resume_anchor with a JD expectation "
             "(prefer overlap_skills; use gap_skills only when tied to closest experience)."
         ),
@@ -1313,6 +1374,7 @@ def _build_theory_prompt(job_title, dossier, level, count, weight, mode="core",
         ),
         "hybrid_blend": (
             f"MODE: hybrid blend bucket ({blend_pct_resume}% resume / {blend_pct_jd}% JD).\n"
+            f"{blend_rule}\n"
             "Each question must integrate both a resume_anchor and a JD expectation."
         ),
     }.get(mode, "MODE: core.")
@@ -1459,6 +1521,7 @@ def _batch_mode_instructions(
     blend_pct_jd=50,
 ) -> str:
     """Mode-specific rules for one-call batch prompts (domain-agnostic)."""
+    blend_rule = _blend_weight_guidance(blend_pct_resume, blend_pct_jd)
     return {
         "core": (
             "MODE: core (resume-primary).\n"
@@ -1467,6 +1530,7 @@ def _batch_mode_instructions(
         ),
         "blend": (
             f"MODE: blend ({blend_pct_resume}% resume / {blend_pct_jd}% JD per question).\n"
+            f"{blend_rule}\n"
             "EVERY question must meaningfully combine one resume_anchor with one JD expectation "
             "(prefer overlap_skills; use gap_skills only as transfer tied to closest experience)."
         ),
@@ -1483,8 +1547,9 @@ def _batch_mode_instructions(
             f"- resume bucket: deep resume probes; still name a JD expectation for relevance.\n"
             f"- jd bucket: JD expectations grounded in closest resume overlap or acknowledged gap — "
             "not textbook quizzes.\n"
-            f"- blend bucket ({blend_pct_resume}% resume / {blend_pct_jd}% JD): each question must "
-            "integrate both a resume_anchor and a JD expectation."
+            f"- blend bucket ({blend_pct_resume}% resume / {blend_pct_jd}% JD):\n"
+            f"  {blend_rule}\n"
+            "  each question must integrate both a resume_anchor and a JD expectation."
         ),
     }.get(mode, "MODE: core.")
 
@@ -1564,7 +1629,12 @@ def _build_mode_batch_prompt(
     dossier_blob = _dossier_json(dossier)
     exclude_block = _exclude_questions_block(exclude_questions)
     regeneration_block = _regeneration_mode_block(exclude_questions)
-    examples_block = _dossier_dynamic_examples_block(dossier or {})
+    examples_block = _dossier_dynamic_examples_block(
+        dossier or {},
+        mode=mode,
+        blend_pct_resume=blend_pct_resume,
+        blend_pct_jd=blend_pct_jd,
+    )
     anchor_block = _dossier_anchor_assignment_block(dossier or {})
     mode_block = _batch_mode_instructions(
         mode, resume_pct, jd_pct, blend_pct_resume, blend_pct_jd
@@ -2030,13 +2100,14 @@ def _generate_batched_buckets(
     Shared exact-count runner for nested split/hybrid schemas.
     Flattened beginner/medium/hard must match requested totals.
     """
-    beginner_count = max(0, int(beginner_count or 0))
-    medium_count = max(0, int(medium_count or 0))
-    hard_count = max(0, int(hard_count or 0))
     resume_dist = list(resume_dist or [0, 0, 0])
     jd_dist = list(jd_dist or [0, 0, 0])
     blend_dist = list(blend_dist or [0, 0, 0]) if mode == "hybrid" else None
     schema = "hybrid" if mode == "hybrid" else "split"
+
+    beginner_count = resume_dist[0] + jd_dist[0] + (blend_dist[0] if blend_dist else 0)
+    medium_count = resume_dist[1] + jd_dist[1] + (blend_dist[1] if blend_dist else 0)
+    hard_count = resume_dist[2] + jd_dist[2] + (blend_dist[2] if blend_dist else 0)
 
     beginner_qs: list = []
     medium_qs: list = []
@@ -2316,18 +2387,32 @@ def generate_split_questions(
     if total == 0:
         return {"beginner": [], "medium": [], "hard": []}
 
-    resume_total = round(total * resume_pct / 100)
-    jd_total = total - resume_total
+    if jd_pct is not None and (resume_pct == 50 or jd_pct != 50):
+        jd_total = round(total * (jd_pct / 100))
+        resume_total = total - jd_total
+    else:
+        resume_total = round(total * (resume_pct / 100))
+        jd_total = total - resume_total
+
+    # Ensure at least 1 question for non-zero percentage if total allows
+    if jd_pct > 0 and jd_total == 0 and total > 0:
+        jd_total = 1
+        resume_total = max(0, total - 1)
+    elif resume_pct > 0 and resume_total == 0 and total > 0:
+        resume_total = 1
+        jd_total = max(0, total - 1)
 
     print(f"\n{Fore.BLUE}=== SPLIT MODE DEBUG ==={Style.RESET_ALL}")
     print(f"{Fore.CYAN}[REQUESTED]{Style.RESET_ALL} Resume={resume_pct}% ({resume_total}), JD={jd_pct}% ({jd_total})")
 
-    def distribute(bucket_total, total):
-        if bucket_total == 0:
+    def distribute(bucket_total, total_count):
+        if bucket_total <= 0 or total_count <= 0:
             return (0, 0, 0)
-        b = round(bucket_total * (beginner_count / total))
-        m = round(bucket_total * (medium_count / total))
-        h = round(bucket_total * (hard_count / total))
+        b = round(bucket_total * (beginner_count / total_count))
+        m = round(bucket_total * (medium_count / total_count))
+        h = round(bucket_total * (hard_count / total_count))
+        if b + m + h == 0 and bucket_total > 0:
+            b = bucket_total
         while b + m + h < bucket_total:
             b += 1
         while b + m + h > bucket_total:
@@ -2563,6 +2648,12 @@ def run_pipeline_from_api(
         temp_dir = None
         try:
             print(f"\n[INFO] API Attempt {attempt + 1} of {max_retries}")
+
+            if not split and not blend:
+                if (jd_pct is not None and jd_pct != 50) or (resume_pct is not None and resume_pct != 50):
+                    split = True
+                elif (blend_pct_jd is not None and blend_pct_jd != 50) or (blend_pct_resume is not None and blend_pct_resume != 50):
+                    blend = True
 
             if split and blend:
                 mode_label = "hybrid"
