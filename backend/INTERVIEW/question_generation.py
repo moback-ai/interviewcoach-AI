@@ -1161,8 +1161,8 @@ def _blend_weight_guidance(blend_pct_resume: int = 50, blend_pct_jd: int = 50) -
     """
     Construct clear, actionable LLM instructions for question framing based on blend weights.
     """
-    r_pct = int(blend_pct_resume or 50)
-    j_pct = int(blend_pct_jd or 50)
+    r_pct = 50 if blend_pct_resume is None else int(blend_pct_resume)
+    j_pct = 50 if blend_pct_jd is None else int(blend_pct_jd)
 
     if j_pct > r_pct:
         return (
@@ -1213,7 +1213,9 @@ def _dossier_dynamic_examples_block(
         )
     bundle_block = "\n".join(bundle_lines) if bundle_lines else ""
 
-    is_jd_heavy_blend = mode in ("blend", "hybrid") and int(blend_pct_jd or 50) > int(blend_pct_resume or 50)
+    b_res = 50 if blend_pct_resume is None else int(blend_pct_resume)
+    b_jd = 50 if blend_pct_jd is None else int(blend_pct_jd)
+    is_jd_heavy_blend = mode in ("blend", "hybrid") and b_jd > b_res
 
     if is_jd_heavy_blend:
         examples_section = f"""

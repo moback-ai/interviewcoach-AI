@@ -1911,12 +1911,12 @@ function UploadPage() {
                           {/* Split Mode Slider */}
                           {splitMode ? (
                               <div className="mt-4 upload-panel-reveal">
-                                <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                                <div className="p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700/50 rounded-lg">
                                   <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
                                     Split Mode Settings
                                   </h4>
                                   <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                                    <div className="flex items-center justify-between text-xs font-medium text-yellow-700 dark:text-yellow-300">
                                       <span>Resume</span>
                                       <span>Job Description</span>
                                     </div>
@@ -1927,11 +1927,15 @@ function UploadPage() {
                                       value={splitResumePercentage}
                                       onChange={(e) => setSplitResumePercentage(parseInt(e.target.value))}
                                       disabled={loading}
-                                      className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                      className="w-full h-2 bg-yellow-200 dark:bg-yellow-800/60 rounded-lg appearance-none cursor-pointer slider"
                                     />
-                                    <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                                      <span>{splitResumePercentage}%</span>
-                                      <span>{100 - splitResumePercentage}%</span>
+                                    <div className="flex justify-between text-sm font-bold">
+                                      <span className="px-2 py-0.5 rounded-md bg-yellow-100 dark:bg-yellow-800/60 text-yellow-900 dark:text-yellow-100">
+                                        {splitResumePercentage}%
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded-md bg-yellow-100 dark:bg-yellow-800/60 text-yellow-900 dark:text-yellow-100">
+                                        {100 - splitResumePercentage}%
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
@@ -1969,12 +1973,12 @@ function UploadPage() {
                           {/* Blend Mode Slider */}
                           {blendMode ? (
                               <div className="mt-4 upload-panel-reveal">
-                                <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+                                <div className="p-4 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700/50 rounded-lg">
                                   <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
                                     Blend Mode Settings
                                   </h4>
                                   <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                                    <div className="flex items-center justify-between text-xs font-medium text-purple-700 dark:text-purple-300">
                                       <span>Resume Weight</span>
                                       <span>Job Description Weight</span>
                                     </div>
@@ -1985,11 +1989,15 @@ function UploadPage() {
                                       value={blendResumePercentage}
                                       onChange={(e) => setBlendResumePercentage(parseInt(e.target.value))}
                                       disabled={loading}
-                                      className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                      className="w-full h-2 bg-purple-200 dark:bg-purple-800/60 rounded-lg appearance-none cursor-pointer slider"
                                     />
-                                    <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                                      <span>{blendResumePercentage}%</span>
-                                      <span>{100 - blendResumePercentage}%</span>
+                                    <div className="flex justify-between text-sm font-bold">
+                                      <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-800/60 text-purple-900 dark:text-purple-100">
+                                        {blendResumePercentage}%
+                                      </span>
+                                      <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-800/60 text-purple-900 dark:text-purple-100">
+                                        {100 - blendResumePercentage}%
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
