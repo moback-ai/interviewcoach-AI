@@ -58,7 +58,7 @@ from common.auth import (
     hash_password,
     check_password,
 )
-from common.db import query_one, query_all, execute, execute_many
+from common.db import query_one, query_all, execute, execute_many, run_transaction
 from common.content_hash import (
     hash_resume_bytes,
     hash_skills_list,
@@ -2729,6 +2729,16 @@ def generate_questions():
                 f"resume_id={resume_id} jd_id={jd_id} (dossier-only, no pre-load)"
             )
 
+        raw_exclude = data.get("exclude_question_texts") or []
+        exclude_questions = []
+        if isinstance(raw_exclude, list):
+            for item in raw_exclude:
+                text = str(item or "").strip()
+                if text:
+                    exclude_questions.append(text)
+        if exclude_questions:
+            print(f"[INFO] generate-questions excluding {len(exclude_questions)} prior question(s)")
+
         question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         pipeline_kwargs = {
@@ -2749,6 +2759,7 @@ def generate_questions():
             "jd_id": jd_id,
             "user_id": request.user["id"],
             "resume_text": None,
+            "exclude_questions": exclude_questions or None,
         }
 
         temp_resume = None
@@ -5018,8 +5029,91 @@ def legacy_questions():
     resume_id = data.get('resume_id')
     jd_id = data.get('jd_id')
     question_set = data.get('question_set', 1)
+    replace = bool(data.get('replace'))
+    questions_payload = data.get('questions', [])
+
+    if replace:
+        from common.payment_handlers import _verify_resume_jd_owned
+
+        if not resume_id or not jd_id:
+            return jsonify({
+                'success': False,
+                'message': 'resume_id and jd_id are required to replace a question set',
+            }), 400
+        if not questions_payload:
+            return jsonify({
+                'success': False,
+                'message': 'questions are required to replace a question set',
+            }), 400
+        if not _verify_resume_jd_owned(request.user['id'], resume_id, jd_id):
+            return jsonify({
+                'success': False,
+                'message': 'Resume or job description not found',
+            }), 404
+        try:
+            question_set = int(question_set)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'message': 'question_set must be an integer',
+            }), 400
+
+        existing_interview = query_one(
+            """
+            SELECT id
+            FROM interviews
+            WHERE user_id = %s AND resume_id = %s AND jd_id = %s AND question_set = %s
+            LIMIT 1
+            """,
+            (request.user['id'], resume_id, jd_id, question_set),
+        )
+        if existing_interview:
+            return jsonify({
+                'success': False,
+                'message': (
+                    'Cannot replace questions for this set because an interview already exists. '
+                    'Generate a new question set from the Dashboard instead.'
+                ),
+            }), 400
+
+        def _replace_questions(cur):
+            cur.execute(
+                """
+                DELETE FROM questions
+                WHERE resume_id = %s AND jd_id = %s AND question_set = %s
+                """,
+                (resume_id, jd_id, question_set),
+            )
+            saved_rows = []
+            for question in questions_payload:
+                exp = normalize_difficulty_experience(question.get("difficulty_experience"))
+                level = normalize_question_difficulty(question.get('difficulty_category') or question.get('difficulty_level'))
+                cur.execute(
+                    """
+                    INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, difficulty_experience, question_set, requires_code)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        question.get('interview_id') or data.get('interview_id'),
+                        resume_id,
+                        jd_id,
+                        question.get('question_text') or question.get('question'),
+                        question.get('expected_answer') or question.get('answer'),
+                        level,
+                        exp,
+                        question.get('question_set') or question_set,
+                        question.get('requires_code', False),
+                    ),
+                )
+                saved_rows.append(_serialize_question(cur.fetchone()))
+            saved_rows.sort(key=_question_sort_key)
+            return saved_rows
+
+        return jsonify({'success': True, 'data': run_transaction(_replace_questions)}), 201
+
     saved = []
-    for question in data.get('questions', []):
+    for question in questions_payload:
         exp = normalize_difficulty_experience(question.get("difficulty_experience"))
         level = normalize_question_difficulty(question.get('difficulty_category') or question.get('difficulty_level'))
         row = execute(

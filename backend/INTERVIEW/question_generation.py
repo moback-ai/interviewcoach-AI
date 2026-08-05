@@ -1400,21 +1400,54 @@ def filter_questions_batch(questions, job_title, dossier, level, weight, model, 
     return questions[:target_count] if target_count else questions
 
 
-def _exclude_questions_block(exclude_questions) -> str:
+def _normalize_exclude_question_texts(exclude_questions) -> list[str]:
     if not exclude_questions:
-        return ""
-    lines = []
-    for i, q in enumerate(exclude_questions[:40], 1):
-        text = (q if isinstance(q, str) else (q.get("question") or "")).strip()
+        return []
+    normalized = []
+    for item in exclude_questions:
+        text = (
+            item
+            if isinstance(item, str)
+            else (item.get("question") or item.get("question_text") or "")
+        ).strip()
         if text:
-            lines.append(f"{i}. {text}")
+            normalized.append(text)
+    return normalized[:40]
+
+
+def _exclude_questions_block(exclude_questions) -> str:
+    lines = []
+    for i, q in enumerate(_normalize_exclude_question_texts(exclude_questions), 1):
+        lines.append(f"{i}. {q}")
     if not lines:
         return ""
     return (
-        "\nALREADY KEPT QUESTIONS (do NOT repeat, rephrase, or reuse the same "
-        "story/project/tech theme):\n"
+        "\nREJECTED PREVIOUS QUESTIONS (hard ban — do NOT repeat, lightly reword, "
+        "or ask the same interview intent):\n"
         + "\n".join(lines)
         + "\n"
+        "A near-paraphrase of any item above is INVALID. Change the ask, not just the wording.\n"
+    )
+
+
+def _regeneration_mode_block(exclude_questions) -> str:
+    if not _normalize_exclude_question_texts(exclude_questions):
+        return ""
+    return (
+        "\nREGENERATION MODE (mandatory — user rejected the previous batch):\n"
+        "- Produce a CLEARLY NEW set: different interview intent for every difficulty.\n"
+        "- Do NOT reuse common templates from the rejected list "
+        "(e.g. \"what did you build\", \"what failure mode\", \"what would you change/adapt for this role\" "
+        "when those intents already appear above).\n"
+        "- Spread across the RESUME ANCHOR POOL: if one project dominated the rejected list, "
+        "use OTHER projects/companies/experiences from the dossier for most new questions.\n"
+        "- At most ONE new question may reuse the same project as a rejected question, "
+        "and only with a totally different probe (not walkthrough / failure / adapt-to-role).\n"
+        "- Prefer unused angles: debugging, measurement/metrics, design tradeoffs, collaboration, "
+        "ownership, data handling, performance, testing, rollout/ops — grounded in dossier + JD.\n"
+        "- Coding tasks: different problem shape than any rejected coding item "
+        "(not another fetch-list / filter-list / JWT-auth variant of the same idea).\n"
+        "- Still stay domain-true to THIS dossier; invent nothing not in the dossier.\n"
     )
 
 
@@ -1530,6 +1563,7 @@ def _build_mode_batch_prompt(
     schema = schema or ("levels" if mode in ("core", "blend") else mode)
     dossier_blob = _dossier_json(dossier)
     exclude_block = _exclude_questions_block(exclude_questions)
+    regeneration_block = _regeneration_mode_block(exclude_questions)
     examples_block = _dossier_dynamic_examples_block(dossier or {})
     anchor_block = _dossier_anchor_assignment_block(dossier or {})
     mode_block = _batch_mode_instructions(
@@ -1626,7 +1660,7 @@ UNIQUENESS (strict — enforced by you, not post-processing):
 - gap_skills: NEVER as past experience — only transfer ("how would you approach…").
 - Soft skills (communication, teamwork, Agile) in at most ONE question total across the whole batch.
 - beginner = walkthrough; medium = mechanism/failure/measurement; hard = tradeoffs/judgment for THIS role.
-{exclude_block}
+{exclude_block}{regeneration_block}
 CANDIDATE/ROLE DOSSIER (use ONLY this; do not invent employers/projects not listed):
 {dossier_blob}
 
@@ -1877,6 +1911,7 @@ def _generate_batched_levels(
     label_prefix="core_batch",
     blend_pct_resume=50,
     blend_pct_jd=50,
+    exclude_questions=None,
 ):
     """
     Shared exact-count runner for flat beginner/medium/hard schemas (core + blend).
@@ -1896,6 +1931,9 @@ def _generate_batched_levels(
     beginner_qs: list = []
     medium_qs: list = []
     hard_qs: list = []
+    seed_exclude = _normalize_exclude_question_texts(exclude_questions)
+    if seed_exclude:
+        print(f"[INFO] {mode} batch excluding {len(seed_exclude)} prior question(s) on regenerate")
 
     for round_num in range(QUESTION_BATCH_MAX_REFILL_ROUNDS):
         need_b = max(0, beginner_count - len(beginner_qs))
@@ -1907,12 +1945,12 @@ def _generate_batched_levels(
         if round_num == 0:
             req_b, req_m, req_h = beginner_count, medium_count, hard_count
             label = label_prefix
-            exclude = None
+            exclude = seed_exclude or None
             only_missing = None
         else:
             req_b, req_m, req_h = need_b, need_m, need_h
             label = f"{label_prefix}_refill_{round_num}"
-            exclude = beginner_qs + medium_qs + hard_qs
+            exclude = seed_exclude + beginner_qs + medium_qs + hard_qs
             only_missing = {"beginner": need_b, "medium": need_m, "hard": need_h}
             print(
                 f"[INFO] {mode} batch refill round {round_num}: "
@@ -1986,6 +2024,7 @@ def _generate_batched_buckets(
     jd_pct=50,
     blend_pct_resume=50,
     blend_pct_jd=50,
+    exclude_questions=None,
 ):
     """
     Shared exact-count runner for nested split/hybrid schemas.
@@ -2002,6 +2041,9 @@ def _generate_batched_buckets(
     beginner_qs: list = []
     medium_qs: list = []
     hard_qs: list = []
+    seed_exclude = _normalize_exclude_question_texts(exclude_questions)
+    if seed_exclude:
+        print(f"[INFO] {mode} batch excluding {len(seed_exclude)} prior question(s) on regenerate")
 
     for round_num in range(QUESTION_BATCH_MAX_REFILL_ROUNDS):
         need_b = max(0, beginner_count - len(beginner_qs))
@@ -2012,12 +2054,12 @@ def _generate_batched_buckets(
 
         if round_num == 0:
             label = label_prefix
-            exclude = None
+            exclude = seed_exclude or None
             only_missing = None
             req_rd, req_jd, req_bd = resume_dist, jd_dist, blend_dist
         else:
             label = f"{label_prefix}_refill_{round_num}"
-            exclude = beginner_qs + medium_qs + hard_qs
+            exclude = seed_exclude + beginner_qs + medium_qs + hard_qs
             only_missing = _missing_nested_for_refill(need_b, need_m, need_h, schema)
             req_rd = [
                 only_missing["resume"]["beginner"],
@@ -2106,6 +2148,7 @@ def generate_core_questions(
     hard_count=2,
     model="llama3",
     dossier=None,
+    exclude_questions=None,
 ):
     """
     Generate core questions via batched LLM calls (dossier fed once per round).
@@ -2124,6 +2167,7 @@ def generate_core_questions(
         model,
         mode="core",
         label_prefix="core_batch",
+        exclude_questions=exclude_questions,
     )
 
 # === CODING QUESTIONS GENERATION ===
@@ -2135,6 +2179,7 @@ def generate_coding_questions(
     coding_count=0,
     model="llama3",
     dossier=None,
+    exclude_questions=None,
 ):
     """
     Generate coding/programming interview questions from compact dossier skills.
@@ -2175,6 +2220,11 @@ def generate_coding_questions(
         else:
             weights.append(5)
 
+    exclude_block = _exclude_questions_block(exclude_questions)
+    regeneration_block = _regeneration_mode_block(exclude_questions)
+    if exclude_block:
+        print(f"[INFO] Coding batch excluding {len(_normalize_exclude_question_texts(exclude_questions))} prior question(s)")
+
     prompt = f"""You are an expert technical interviewer for **{job_title}**.
 
 Generate CLEAR, PRECISE, IMPLEMENTABLE coding tasks (NOT theory).
@@ -2192,7 +2242,7 @@ RULES:
    - weight 5 (hard): mini utility (retry/pagination), complex SQL, branching + error handling
 5. BAN: vague discussion, system design essays, unrelated LeetCode puzzles, multi-day projects.
 6. Do not invent languages or libraries not present in the skill focus.
-
+{exclude_block}{regeneration_block}
 Return ONLY a JSON array with EXACTLY {coding_count} items. Use these weights in order: {weights}
 [
   {{"question":"Write a ...","difficulty":"coding","weight":1}}
@@ -2253,6 +2303,7 @@ def generate_split_questions(
     jd_pct=50,
     model="llama3",
     dossier=None,
+    exclude_questions=None,
 ):
     """Split mode: one nested batch call (resume + jd × all difficulties), then refill."""
     if dossier is None:
@@ -2309,6 +2360,7 @@ def generate_split_questions(
         jd_dist=jd_dist,
         resume_pct=resume_pct,
         jd_pct=jd_pct,
+        exclude_questions=exclude_questions,
     )
 
 
@@ -2328,6 +2380,7 @@ def generate_blend_questions(
     blend_pct_jd=50,
     model="llama3",
     dossier=None,
+    exclude_questions=None,
 ):
     """Generate blended questions in one multi-difficulty batch (exact counts via refill)."""
     if dossier is None:
@@ -2346,6 +2399,7 @@ def generate_blend_questions(
         label_prefix="blend_batch",
         blend_pct_resume=blend_pct_resume,
         blend_pct_jd=blend_pct_jd,
+        exclude_questions=exclude_questions,
     )
 
 # === END OF CORE QUESTION GENERATION WITH BLEND INTEGRATED ===
@@ -2366,6 +2420,7 @@ def generate_hybrid_questions(
     blend_pct_jd=50,
     model="llama3",
     dossier=None,
+    exclude_questions=None,
 ):
     """
     Hybrid mode: 40% blended questions, 60% split (resume vs JD).
@@ -2465,6 +2520,7 @@ def generate_hybrid_questions(
         jd_pct=jd_pct,
         blend_pct_resume=blend_pct_resume,
         blend_pct_jd=blend_pct_jd,
+        exclude_questions=exclude_questions,
     )
 
 
@@ -2486,6 +2542,7 @@ def run_pipeline_from_api(
     jd_id=None,
     user_id=None,
     resume_text=None,
+    exclude_questions=None,
 ):
 
     """
@@ -2525,6 +2582,9 @@ def run_pipeline_from_api(
                 print(f"[INFO] Include answers: {include_answers}")
                 print(f"[INFO] Ollama model: {resolved_model}")
                 print(f"[INFO] Mode: {mode_label} | Split={split} ({resume_pct}%/{jd_pct}%) | Blend={blend}")
+                seed_exclude = _normalize_exclude_question_texts(exclude_questions)
+                if seed_exclude:
+                    print(f"[INFO] Regenerate exclusions: {len(seed_exclude)} prior question(s)")
 
                 preextracted_resume_text = (resume_text or "").strip()
                 resume_text = ""
@@ -2671,6 +2731,7 @@ def run_pipeline_from_api(
                         blend_pct_jd=blend_pct_jd,
                         model=resolved_model,
                         dossier=dossier,
+                        exclude_questions=exclude_questions,
                     )
                 elif split:
                     core_questions = generate_split_questions(
@@ -2684,6 +2745,7 @@ def run_pipeline_from_api(
                         jd_pct,
                         model=resolved_model,
                         dossier=dossier,
+                        exclude_questions=exclude_questions,
                     )
                 elif blend:
                     core_questions = generate_blend_questions(
@@ -2697,6 +2759,7 @@ def run_pipeline_from_api(
                         blend_pct_jd,
                         model=resolved_model,
                         dossier=dossier,
+                        exclude_questions=exclude_questions,
                     )
                 else:
                     core_questions = generate_core_questions(
@@ -2708,6 +2771,7 @@ def run_pipeline_from_api(
                         question_counts.get('hard', 1),
                         model=resolved_model,
                         dossier=dossier,
+                        exclude_questions=exclude_questions,
                     )
 
                 # Generate coding questions if requested
@@ -2721,6 +2785,7 @@ def run_pipeline_from_api(
                         coding_count,
                         model=resolved_model,
                         dossier=dossier,
+                        exclude_questions=exclude_questions,
                     )
 
                     # Categorize coding questions by weight and merge into existing categories
