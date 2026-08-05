@@ -93,7 +93,7 @@ function UploadPage() {
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 300000;
 
-  // Removed debug useEffect for question counts and canGenerateQuestions
+
 
   // Debounced function to classify technical role when fields change
   useEffect(() => {
@@ -1911,12 +1911,12 @@ function UploadPage() {
                           {/* Split Mode Slider */}
                           {splitMode ? (
                               <div className="mt-4 upload-panel-reveal">
-                                <div className="p-4 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700/50 rounded-lg">
-                                  <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                                <div className="p-4 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-200/50 dark:border-yellow-800/30 rounded-lg">
+                                  <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300 mb-3">
                                     Split Mode Settings
                                   </h4>
                                   <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs font-medium text-yellow-700 dark:text-yellow-300">
+                                    <div className="flex items-center justify-between text-sm font-medium text-yellow-700 dark:text-yellow-300">
                                       <span>Resume</span>
                                       <span>Job Description</span>
                                     </div>
@@ -1927,13 +1927,13 @@ function UploadPage() {
                                       value={splitResumePercentage}
                                       onChange={(e) => setSplitResumePercentage(parseInt(e.target.value))}
                                       disabled={loading}
-                                      className="w-full h-2 bg-yellow-200 dark:bg-yellow-800/60 rounded-lg appearance-none cursor-pointer slider"
+                                      className="w-full h-2 bg-yellow-200/50 dark:bg-yellow-700/30 rounded-lg appearance-none cursor-pointer slider-yellow"
                                     />
-                                    <div className="flex justify-between text-sm font-bold">
-                                      <span className="px-2 py-0.5 rounded-md bg-yellow-100 dark:bg-yellow-800/60 text-yellow-900 dark:text-yellow-100">
+                                    <div className="flex justify-between text-xs font-medium text-yellow-600 dark:text-yellow-400">
+                                      <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
                                         {splitResumePercentage}%
                                       </span>
-                                      <span className="px-2 py-0.5 rounded-md bg-yellow-100 dark:bg-yellow-800/60 text-yellow-900 dark:text-yellow-100">
+                                      <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
                                         {100 - splitResumePercentage}%
                                       </span>
                                     </div>
@@ -1973,12 +1973,12 @@ function UploadPage() {
                           {/* Blend Mode Slider */}
                           {blendMode ? (
                               <div className="mt-4 upload-panel-reveal">
-                                <div className="p-4 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700/50 rounded-lg">
-                                  <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
+                                <div className="p-4 bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/50 dark:border-purple-800/30 rounded-lg">
+                                  <h4 className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-3">
                                     Blend Mode Settings
                                   </h4>
                                   <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs font-medium text-purple-700 dark:text-purple-300">
+                                    <div className="flex items-center justify-between text-sm font-medium text-purple-700 dark:text-purple-300">
                                       <span>Resume Weight</span>
                                       <span>Job Description Weight</span>
                                     </div>
@@ -1989,13 +1989,13 @@ function UploadPage() {
                                       value={blendResumePercentage}
                                       onChange={(e) => setBlendResumePercentage(parseInt(e.target.value))}
                                       disabled={loading}
-                                      className="w-full h-2 bg-purple-200 dark:bg-purple-800/60 rounded-lg appearance-none cursor-pointer slider"
+                                      className="w-full h-2 bg-purple-200/50 dark:bg-purple-700/30 rounded-lg appearance-none cursor-pointer slider-purple"
                                     />
-                                    <div className="flex justify-between text-sm font-bold">
-                                      <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-800/60 text-purple-900 dark:text-purple-100">
+                                    <div className="flex justify-between text-xs font-medium text-purple-600 dark:text-purple-400">
+                                      <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
                                         {blendResumePercentage}%
                                       </span>
-                                      <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-800/60 text-purple-900 dark:text-purple-100">
+                                      <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
                                         {100 - blendResumePercentage}%
                                       </span>
                                     </div>

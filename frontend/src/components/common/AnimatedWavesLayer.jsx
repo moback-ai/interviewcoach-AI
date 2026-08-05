@@ -188,11 +188,30 @@ export default function AnimatedWavesLayer({
       }
     };
 
+    const handleResize = () => {
+      if (instanceRef.current && typeof instanceRef.current.resize === 'function') {
+        instanceRef.current.resize();
+      }
+    };
+
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined' && elementRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        handleResize();
+      });
+      resizeObserver.observe(elementRef.current);
+    }
+
     document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('resize', handleResize);
 
     return () => {
       cancelled = true;
       document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('resize', handleResize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       if (idleHandleRef.current) {
         cancelIdle(idleHandleRef.current);
         idleHandleRef.current = null;

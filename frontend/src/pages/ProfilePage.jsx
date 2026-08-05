@@ -422,17 +422,17 @@ const PaymentsSection = () => {
     switch (status) {
       case 'succeeded':
       case 'success':
-        return 'text-green-600 bg-green-100';
+        return 'text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/40 border border-green-200 dark:border-green-800';
       case 'failed':
       case 'checkout_creation_failed':
-        return 'text-red-600 bg-red-100';
+        return 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40 border border-red-200 dark:border-red-800';
       case 'expired':
-        return 'text-gray-600 bg-gray-100';
+        return 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700';
       case 'pending':
       case 'processing':
-        return 'text-yellow-600 bg-yellow-100';
+        return 'text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-900/40 border border-yellow-200 dark:border-yellow-800';
       default:
-        return 'text-gray-600 bg-gray-100';
+        return 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700';
     }
   };
 
@@ -876,8 +876,8 @@ const AnalyticsSection = () => {
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 bg-red-100 border border-red-300 rounded-lg">
-          <p className="text-red-700">{error}</p>
+        <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-red-700 dark:text-red-300">{error}</p>
         </div>
       )}
 
@@ -1318,10 +1318,10 @@ function ProfilePage() {
           </div>
         </div>
 
-        <div className="flex">
+        <div>
           {/* Sidebar */}
           <div className={`
-            fixed md:static inset-y-0 left-0 z-40 w-64 bg-[var(--color-card)] border-r border-[var(--color-border)] transform transition-transform duration-300 ease-in-out
+            fixed top-16 bottom-0 left-0 z-40 w-64 bg-[var(--color-card)] border-r border-[var(--color-border)] transform transition-transform duration-300 ease-in-out overflow-y-auto
             ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
           `}>
             <div className="p-6">
@@ -1371,7 +1371,7 @@ function ProfilePage() {
           )}
 
           {/* Main Content */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 md:pl-64">
             <div className="max-w-4xl mx-auto px-6 py-8">
               {/* Desktop Header */}
               <div className="hidden md:block mb-8">
