@@ -187,14 +187,15 @@ body::after {
 }
 
 .page-waves-shell__backdrop {
-  position: absolute;
+  position: fixed;
   inset: 0;
   overflow: hidden;
   pointer-events: none;
+  z-index: 0;
 }
 
 .page-waves-shell__backdrop.style-backdrop--page {
-  position: absolute;
+  position: fixed;
   inset: 0;
 }
 

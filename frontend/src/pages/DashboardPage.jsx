@@ -353,11 +353,11 @@ function DashboardPage() {
           coding: questionSettings.coding || 0
         },
         split: questionSettings.splitMode || false,
-        resume_pct: questionSettings.splitResumePercentage || 50,
-        jd_pct: 100 - (questionSettings.splitResumePercentage || 50),
+        resume_pct: questionSettings.splitResumePercentage ?? 50,
+        jd_pct: 100 - (questionSettings.splitResumePercentage ?? 50),
         blend: questionSettings.blendMode || false,
-        blend_pct_resume: questionSettings.blendResumePercentage || 50,
-        blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50),
+        blend_pct_resume: questionSettings.blendResumePercentage ?? 50,
+        blend_pct_jd: 100 - (questionSettings.blendResumePercentage ?? 50),
       };
 
       const response = await apiPost('/generate-questions', body, { timeoutMs: 300000 });
@@ -1008,12 +1008,12 @@ function DashboardPage() {
                         transition={{ duration: 0.3 }}
                         className="mt-3"
                       >
-                        <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                          <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                        <div className="p-4 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-200/50 dark:border-yellow-800/30 rounded-lg">
+                          <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300 mb-3">
                             Split Mode Settings
                           </h4>
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <div className="flex items-center justify-between text-sm font-medium text-yellow-700 dark:text-yellow-300">
                               <span>Resume</span>
                               <span>Job Description</span>
                             </div>
@@ -1023,11 +1023,15 @@ function DashboardPage() {
                               max="100"
                               value={splitResumePercentage}
                               onChange={(e) => setSplitResumePercentage(parseInt(e.target.value))}
-                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                              className="w-full h-2 bg-yellow-200/50 dark:bg-yellow-700/30 rounded-lg appearance-none cursor-pointer slider-yellow"
                             />
-                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                              <span>{splitResumePercentage}%</span>
-                              <span>{100 - splitResumePercentage}%</span>
+                            <div className="flex justify-between text-xs font-medium text-yellow-600 dark:text-yellow-400">
+                              <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                {splitResumePercentage}%
+                              </span>
+                              <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                {100 - splitResumePercentage}%
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1072,12 +1076,12 @@ function DashboardPage() {
                         transition={{ duration: 0.3 }}
                         className="mt-3"
                       >
-                        <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
-                          <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
+                        <div className="p-4 bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/50 dark:border-purple-800/30 rounded-lg">
+                          <h4 className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-3">
                             Blend Mode Settings
                           </h4>
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <div className="flex items-center justify-between text-sm font-medium text-purple-700 dark:text-purple-300">
                               <span>Resume Weight</span>
                               <span>Job Description Weight</span>
                             </div>
@@ -1087,11 +1091,15 @@ function DashboardPage() {
                               max="100"
                               value={blendResumePercentage}
                               onChange={(e) => setBlendResumePercentage(parseInt(e.target.value))}
-                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                              className="w-full h-2 bg-purple-200/50 dark:bg-purple-700/30 rounded-lg appearance-none cursor-pointer slider-purple"
                             />
-                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                              <span>{blendResumePercentage}%</span>
-                              <span>{100 - blendResumePercentage}%</span>
+                            <div className="flex justify-between text-xs font-medium text-purple-600 dark:text-purple-400">
+                              <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                {blendResumePercentage}%
+                              </span>
+                              <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                {100 - blendResumePercentage}%
+                              </span>
                             </div>
                           </div>
                         </div>
