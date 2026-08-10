@@ -1767,6 +1767,7 @@ def verify_email():
 
 @app.route('/api/me', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_me():
     user = query_one(
         "SELECT {columns} FROM users WHERE id = %s".format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
@@ -1808,6 +1809,7 @@ def get_my_avatar():
 
 @app.route('/api/upload-resume', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def upload_resume():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1845,6 +1847,7 @@ def upload_resume():
 
 @app.route('/api/job-descriptions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def create_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1865,6 +1868,7 @@ def create_job_description():
 
 @app.route('/api/job-descriptions', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_job_descriptions():
     rows = query_all("SELECT * FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC",
                      (request.user['id'],))
@@ -1873,6 +1877,7 @@ def get_job_descriptions():
 
 @app.route('/api/check-resume-jd-pair', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def check_resume_jd_pair():
     """
     Detect existing resume+JD pair for this user via content hash (+ filename gate).
@@ -2028,24 +2033,28 @@ def check_resume_jd_pair():
 
 @app.route('/api/interview-quota', methods=['GET', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interview_quota():
     return interview_quota_handler()
 
 
 @app.route('/api/interviews/start', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def start_interview():
     return start_interview_handler()
 
 
 @app.route('/api/interviews', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def create_interview():
     return start_interview_handler()
 
 
 @app.route('/api/interviews', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interviews():
     rows = query_all("SELECT * FROM interviews WHERE user_id=%s ORDER BY scheduled_at DESC",
                      (request.user['id'],))
@@ -2054,6 +2063,7 @@ def get_interviews():
 
 @app.route('/api/interviews/<interview_id>', methods=['PUT', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def update_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2107,6 +2117,7 @@ def interview_timer_pause(interview_id):
 
 @app.route('/api/interview-data', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interview_data():
     interview_id = request.args.get('interview_id')
     interview = query_one(
@@ -2132,6 +2143,7 @@ def get_interview_data():
 
 @app.route('/api/questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def save_questions():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2156,6 +2168,7 @@ def save_questions():
 
 @app.route('/api/questions/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_questions(interview_id):
     rows = query_all(f"SELECT * FROM questions WHERE interview_id=%s ORDER BY {QUESTION_ORDER_SQL}", (interview_id,))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
@@ -2166,6 +2179,7 @@ def get_questions(interview_id):
 
 @app.route('/api/transcripts', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=30, window_seconds=60)
 def save_transcript():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2181,6 +2195,7 @@ def save_transcript():
 
 @app.route('/api/transcripts/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_transcript(interview_id):
     row = query_one("SELECT * FROM transcripts WHERE interview_id=%s", (interview_id,))
     if not row:
@@ -2193,6 +2208,7 @@ def get_transcript(interview_id):
 
 @app.route('/api/interview-feedback', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def save_feedback():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2211,6 +2227,7 @@ def save_feedback():
 
 @app.route('/api/interview-feedback/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_feedback(interview_id):
     row = query_one(
         """
@@ -2231,6 +2248,7 @@ def get_feedback(interview_id):
 
 @app.route('/api/chat-history/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_chat_history(interview_id):
     rows = query_all(
         """
@@ -2255,6 +2273,7 @@ def get_chat_history(interview_id):
 
 @app.route('/api/dashboard', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def dashboard():
     user_id = request.user['id']
     page  = max(1, int(request.args.get('page', 1)))
@@ -2296,6 +2315,7 @@ def dashboard():
 
 @app.route('/api/parse-job-description', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def parse_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2365,6 +2385,7 @@ def parse_job_description():
 
 @app.route('/api/extract-job-from-url', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def extract_job_from_url_api():
     """Fetch a job posting URL and extract job title + description."""
     safe_error_message = (
@@ -2455,6 +2476,7 @@ def extract_job_from_url_api():
 
 @app.route('/api/classify-technical-role', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def classify_technical_role():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2658,6 +2680,7 @@ def _pipeline_failure_response(result, ollama_diagnostics):
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def generate_questions():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2848,6 +2871,7 @@ def generate_questions():
 @app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def generate_answers_for_question_set():
     """Generate one best sample answer per question (dossier-backed batch)."""
     if request.method == 'OPTIONS':
@@ -3666,6 +3690,7 @@ def _merge_interview_audio(user_id, interview_id):
 
 @app.route('/api/generate-speech', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def generate_speech():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3747,6 +3772,7 @@ def _support_bot_fallback_reply(user_message):
 
 @app.route('/api/support-bot', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=15, window_seconds=60)
 def support_bot():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3787,6 +3813,7 @@ def support_bot():
 
 @app.route('/api/analyze-performance-trends', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def analyze_performance_trends():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3812,6 +3839,7 @@ def analyze_performance_trends():
 @app.route('/api/overall-performance', methods=['GET'])
 @app.route('/api/api/overall-performance', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def overall_performance():
     user_id = request.user['id']
     rows = query_all("SELECT * FROM overall_evaluation WHERE user_id=%s ORDER BY created_at DESC LIMIT 10",
@@ -4672,6 +4700,7 @@ def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, 
 
 @app.route('/api/me', methods=['PUT', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def update_me():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -4733,6 +4762,7 @@ def update_me():
 
 @app.route('/api/resumes', methods=['GET', 'POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=30, window_seconds=60)
 def resumes_api():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -4859,6 +4889,7 @@ def check_payment_status():
 
 @app.route('/api/interviews/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interview(interview_id):
     row = query_one('SELECT * FROM interviews WHERE id=%s AND user_id=%s', (interview_id, request.user['id']))
     if not row:
@@ -4868,6 +4899,7 @@ def get_interview(interview_id):
 
 @app.route('/api/interviews/<interview_id>', methods=['DELETE', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def delete_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -5516,6 +5548,7 @@ def reset_password():
 
 @app.route('/api/me', methods=['DELETE', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def delete_account():
     """Permanently delete the authenticated user and all their data."""
     if request.method == 'OPTIONS':
@@ -5549,6 +5582,7 @@ def delete_account():
 
 @app.route('/api/interview-history', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def interview_history():
     """Paginated list of the user's past interviews with feedback summaries."""
     user_id = request.user['id']
