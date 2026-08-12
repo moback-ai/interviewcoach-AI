@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { FiCheckCircle } from 'react-icons/fi';
 
-const SuccessModal = ({ isOpen, onClose, title, message, details, customAction }) => {
+const SuccessModal = ({ isOpen, onClose, title, message, details, customAction, secondaryAction }) => {
   useEffect(() => {
     if (!isOpen || typeof document === 'undefined' || typeof window === 'undefined') return undefined;
 
@@ -76,6 +76,16 @@ const SuccessModal = ({ isOpen, onClose, title, message, details, customAction }
                 className="w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 bg-[var(--color-accent)] text-white rounded-lg hover:bg-[var(--color-accent)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base"
               >
                 {customAction.label}
+              </button>
+            )}
+            {secondaryAction && (
+              <button
+                type="button"
+                onClick={secondaryAction.onClick}
+                disabled={secondaryAction.disabled}
+                className="w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {secondaryAction.label}
               </button>
             )}
             <button

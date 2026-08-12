@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
-import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX } from 'react-icons/fi';
+import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX, FiDownload } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
@@ -18,6 +18,7 @@ import {
 import { getSession } from '../lib/authClient';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 import { devLog, devWarn } from '../utils/devLog';
+import generateQuestionsPDF from '../utils/generateQuestionsPDF';
 
 const JD_FETCH_ERROR_MESSAGE =
   "We couldn't fetch this job description from the link. Please paste it manually or upload the JD file.";
@@ -76,6 +77,8 @@ function UploadPage() {
   const pendingDossierRetryRef = useRef(null);
   const lastGenerateAttemptRef = useRef(null);
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
+  const [lastGeneratedQuestions, setLastGeneratedQuestions] = useState(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   // New state for question generation settings
   const [easyQuestions, setEasyQuestions] = useState(1); // ✅ Changed from 2 to 1
@@ -1027,6 +1030,12 @@ function UploadPage() {
       questionSet: savedQuestionSet
     });
 
+    setLastGeneratedQuestions({
+      questions: questionsSaveResult.data,
+      questionSet: savedQuestionSet,
+      jobTitle,
+    });
+
     setSuccessModal({
       isOpen: true,
       title: 'Upload & Generation Complete!',
@@ -1245,6 +1254,35 @@ function UploadPage() {
     }
     
     return null; // Button should be enabled
+  };
+
+  const handleDownloadQuestionsPdf = async () => {
+    if (!lastGeneratedQuestions || isDownloadingPdf) return;
+    try {
+      setIsDownloadingPdf(true);
+      const normalizeLevel = (level) => {
+        const n = String(level || '').trim().toLowerCase();
+        if (['beginner', 'easy', 'basic'].includes(n)) return 'easy';
+        if (['intermediate', 'medium', 'mid', 'moderate', 'coding'].includes(n)) return 'medium';
+        if (['expert', 'hard', 'advanced', 'senior'].includes(n)) return 'hard';
+        return n || 'medium';
+      };
+      const questionsList = lastGeneratedQuestions.questions.map((q) => ({
+        question: q.question_text || q.question || '',
+        level: normalizeLevel(q.difficulty_category || q.difficulty_level || ''),
+        answer: q.expected_answer || q.answer || '',
+        missing: !String(q.expected_answer || q.answer || '').trim(),
+      }));
+      await generateQuestionsPDF({
+        questionsList,
+        questionSet: lastGeneratedQuestions.questionSet,
+        jobTitle: lastGeneratedQuestions.jobTitle || '',
+      });
+    } catch (error) {
+      console.error('Error downloading questions PDF:', error);
+    } finally {
+      setIsDownloadingPdf(false);
+    }
   };
 
   // Close success modal and go to the new question set (View Questions only)
@@ -2077,6 +2115,13 @@ function UploadPage() {
           label: 'View Questions',
           onClick: handleNavigateToQuestions
         }}
+        secondaryAction={lastGeneratedQuestions ? {
+          label: isDownloadingPdf
+            ? <><FiLoader className="inline w-4 h-4 mr-1.5 animate-spin" />Preparing PDF...</>
+            : <><FiDownload className="inline w-4 h-4 mr-1.5" />Download PDF</>,
+          onClick: handleDownloadQuestionsPdf,
+          disabled: isDownloadingPdf,
+        } : undefined}
       />
       <NoticeModal
         isOpen={noticeModal.isOpen}
