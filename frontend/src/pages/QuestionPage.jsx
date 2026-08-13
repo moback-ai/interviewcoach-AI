@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
-import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings, FiPlay } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings, FiPlay, FiDownload, FiMessageSquare } from 'react-icons/fi';
+import { Sparkles } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import LazySyntaxHighlightedCode from '../components/common/LazySyntaxHighlightedCode';
@@ -14,6 +15,7 @@ import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from '../components/common/NoticeModal';
 import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
+import generateQuestionsPDF from '../utils/generateQuestionsPDF';
 
 
 const getLevelColor = (level) => {
@@ -374,6 +376,7 @@ export default function QuestionsPage() {
   const [blendResumePercentage, setBlendResumePercentage] = useState(50);
   const [questionValidationError, setQuestionValidationError] = useState('');
   const [isRegeneratingQuestions, setIsRegeneratingQuestions] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
@@ -828,6 +831,29 @@ export default function QuestionsPage() {
 
   const sampleAnswersMissing = displayQuestions.some((q) => q.missing);
 
+  const handleDownloadQuestionsPdf = async () => {
+    if (!displayQuestions.length || !currentQuestionSet || isDownloadingPdf) return;
+
+    try {
+      setIsDownloadingPdf(true);
+      await generateQuestionsPDF({
+        questionsList: sortQuestionsByDifficulty(displayQuestions),
+        questionSet: currentQuestionSet,
+        jobTitle: pairingContext?.jobTitle || '',
+      });
+    } catch (error) {
+      console.error('Error downloading questions PDF:', error);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Download failed',
+        message: 'Could not download the questions PDF. Please try again.',
+        variant: 'error',
+      });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   const closeNoticeModal = () => {
     setNoticeModal({
       isOpen: false,
@@ -1120,18 +1146,6 @@ export default function QuestionsPage() {
     return 'Schedule Interview';
   })();
 
-  const quotaBadgeText = (() => {
-    if (!interviewQuota) return null;
-    if (interviewQuota.free_remaining > 0) {
-      const n = interviewQuota.free_remaining;
-      return `${n} free interview${n !== 1 ? 's' : ''} remaining`;
-    }
-    if (interviewQuota.payment_required) {
-      return 'Payment required for next interview';
-    }
-    return null;
-  })();
-
   const activeInterview = interviewHistory.find(
     (interview) =>
       interview.status === 'STARTED' ||
@@ -1159,65 +1173,94 @@ export default function QuestionsPage() {
             transition={{ duration: 0.3 }}
             className="text-center mb-8 sm:mb-10"
           >
-            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-3 sm:mb-4">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--color-text-primary)] mb-3 sm:mb-4">
               Interview Questions & Answers
             </h1>
-            <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-4">
+            <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-primary)]/80 max-w-2xl mx-auto leading-relaxed px-2 mb-4">
               Review generated questions for your interview preparation. Sample answers can be generated on demand.
             </p>
-            {quotaBadgeText && (
-              <p className="text-xs sm:text-sm font-medium text-[var(--color-primary)] mb-2">
-                {quotaBadgeText}
-              </p>
-            )}
-            
 
-            {/* Question Set Display */}
+            {/* Question set toolbar */}
             {currentQuestionSet && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.3 }}
-                className="flex items-center justify-center gap-4 mt-6"
+                className="flex flex-col items-center mt-4 max-w-3xl mx-auto w-full"
               >
-                <div className="flex items-center gap-2 text-sm sm:text-base text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] px-4 py-2 rounded-full border border-[var(--color-border)]">
-                  <div className="w-2 h-2 bg-[var(--color-primary)] rounded-full animate-pulse"></div>
-                  <span className="font-medium">Question Set {currentQuestionSet}</span>
+                {/* Info row */}
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm sm:text-base text-[var(--color-text-secondary)]">
+                  <span className="inline-flex items-center gap-2">
+                    <FiFileText className="w-4 h-4 text-[var(--color-text-primary)] shrink-0" aria-hidden />
+                    <span className="font-medium text-[var(--color-text-primary)]">
+                      Question Set {currentQuestionSet}
+                    </span>
+                  </span>
+                  <span className="hidden sm:block h-4 w-px bg-[var(--color-text-primary)]/40" aria-hidden />
+                  <span className="inline-flex items-center gap-2">
+                    <FiMessageSquare className="w-4 h-4 text-[var(--color-text-primary)] shrink-0" aria-hidden />
+                    <span className="font-medium text-[var(--color-text-primary)]">
+                      {displayQuestions.length} Question{displayQuestions.length !== 1 ? 's' : ''}
+                    </span>
+                  </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-card)] px-3 py-1 rounded-full border border-[var(--color-border)]">
-                  <span className="font-medium">{displayQuestions.length}</span>
-                  <span className="opacity-75">questions</span>
-                </div>
-                {!loading && !error && !hasExistingInterviews && pairingContext && (
-                  <button
-                    type="button"
-                    onClick={handleOpenRegenerateModal}
-                    disabled={isRegeneratingQuestions}
-                    className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full bg-[var(--color-card)] text-[var(--color-text-primary)] border border-[var(--color-border)] hover:bg-[var(--color-input-bg)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    <FiRefreshCw className={`w-4 h-4 ${isRegeneratingQuestions ? 'animate-spin' : ''}`} />
-                    {isRegeneratingQuestions ? 'Regenerating...' : 'Regenerate Questions'}
-                  </button>
-                )}
-                {!loading && !error && sampleAnswersMissing && (
-                  <button
-                    type="button"
-                    onClick={handleGenerateSampleAnswers}
-                    disabled={isGeneratingAnswers}
-                    className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
-                  >
-                    {isGeneratingAnswers ? (
-                      <>
-                        <FiLoader className="w-4 h-4 animate-spin" />
-                        Generating answers...
-                      </>
-                    ) : (
-                      <>
-                        <FiRefreshCw className="w-4 h-4" />
-                        Generate Sample Answers
-                      </>
-                    )}
-                  </button>
+
+                {!loading && !error && (
+                  <>
+                    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 w-full mt-4">
+                      {displayQuestions.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadQuestionsPdf}
+                          disabled={isDownloadingPdf}
+                          className="inline-flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] bg-[var(--color-input-bg)] hover:bg-[var(--color-card)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          {isDownloadingPdf ? (
+                            <>
+                              <FiLoader className="w-4 h-4 animate-spin" />
+                              Preparing PDF...
+                            </>
+                          ) : (
+                            <>
+                              <FiDownload className="w-4 h-4" />
+                              Download PDF
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {!hasExistingInterviews && pairingContext && (
+                        <button
+                          type="button"
+                          onClick={handleOpenRegenerateModal}
+                          disabled={isRegeneratingQuestions}
+                          className="inline-flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] bg-[var(--color-input-bg)] hover:bg-[var(--color-card)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          <FiRefreshCw className={`w-4 h-4 ${isRegeneratingQuestions ? 'animate-spin' : ''}`} />
+                          {isRegeneratingQuestions ? 'Regenerating...' : 'Regenerate Questions'}
+                        </button>
+                      )}
+                      {sampleAnswersMissing && (
+                        <button
+                          type="button"
+                          onClick={handleGenerateSampleAnswers}
+                          disabled={isGeneratingAnswers}
+                          className="inline-flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-2.5 rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shadow-sm"
+                        >
+                          {isGeneratingAnswers ? (
+                            <>
+                              <FiLoader className="w-4 h-4 animate-spin" />
+                              Generating answers...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" aria-hidden />
+                              Generate Sample Answers
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </>
                 )}
               </motion.div>
             )}
