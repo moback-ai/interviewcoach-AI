@@ -1036,6 +1036,10 @@ function UploadPage() {
       jobTitle,
     });
 
+    const roleLabel = String(jobTitle || '')
+      .replace(/^job\s*title\s*:\s*/i, '')
+      .trim();
+
     setSuccessModal({
       isOpen: true,
       title: 'Upload & Generation Complete!',
@@ -1046,7 +1050,7 @@ function UploadPage() {
         `Question Set: ${savedQuestionSet}`,
         `Total Questions: ${uniqueQuestions.size}`,
         isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resumeName || 'resume'}`,
-        `Job Title: ${jobTitle}`,
+        `Job Title: ${roleLabel || jobTitle}`,
         'Status: Ready for interview preparation',
       ],
     });

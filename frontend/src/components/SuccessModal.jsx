@@ -1,8 +1,10 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { FiCheckCircle } from 'react-icons/fi';
+import { FiCheckCircle, FiX } from 'react-icons/fi';
 
 const SuccessModal = ({ isOpen, onClose, title, message, details, customAction, secondaryAction }) => {
+  const hasFooterActions = Boolean(customAction || secondaryAction);
+
   useEffect(() => {
     if (!isOpen || typeof document === 'undefined' || typeof window === 'undefined') return undefined;
 
@@ -41,17 +43,25 @@ const SuccessModal = ({ isOpen, onClose, title, message, details, customAction, 
           <div className="w-8 h-8 sm:w-10 sm:h-10 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center shrink-0">
             <FiCheckCircle className="w-4 h-4 sm:w-5 sm:h-5 text-green-600 dark:text-green-400" />
           </div>
-          <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)]">
+          <h3 className="flex-1 text-base sm:text-lg font-semibold text-[var(--color-text-primary)] pr-2">
             {title || 'Success!'}
           </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 p-1.5 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-input-bg)] transition-colors"
+            aria-label="Close"
+          >
+            <FiX className="w-5 h-5" />
+          </button>
         </div>
-        
+
         {/* Content */}
         <div className="p-3 sm:p-4 md:p-6">
           <p className="text-sm sm:text-base text-[var(--color-text-secondary)] leading-relaxed mb-3 sm:mb-4">
             {message}
           </p>
-          
+
           {details && (
             <div className="bg-[var(--color-input-bg)] border border-[var(--color-border)] rounded-lg p-3 sm:p-4 mb-3 sm:mb-4">
               <h4 className="font-medium text-[var(--color-text-primary)] mb-2 sm:mb-3 text-sm">
@@ -66,36 +76,41 @@ const SuccessModal = ({ isOpen, onClose, title, message, details, customAction, 
               </div>
             </div>
           )}
-          
+
           {/* Action Buttons */}
-          <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-3">
-            {customAction && (
+          {hasFooterActions ? (
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
+              {secondaryAction && (
+                <button
+                  type="button"
+                  onClick={secondaryAction.onClick}
+                  disabled={secondaryAction.disabled}
+                  className="w-full sm:w-auto inline-flex items-center justify-center px-4 sm:px-5 py-2.5 sm:py-3 bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] rounded-lg hover:bg-[var(--color-card)] transition-colors duration-200 font-medium shadow-sm text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {secondaryAction.label}
+                </button>
+              )}
+              {customAction && (
+                <button
+                  type="button"
+                  onClick={customAction.onClick}
+                  className="w-full sm:w-auto inline-flex items-center justify-center px-4 sm:px-5 py-2.5 sm:py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base"
+                >
+                  {customAction.label}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex justify-end">
               <button
                 type="button"
-                onClick={customAction.onClick}
-                className="w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 bg-[var(--color-accent)] text-white rounded-lg hover:bg-[var(--color-accent)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base"
+                onClick={onClose}
+                className="w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base"
               >
-                {customAction.label}
+                Continue
               </button>
-            )}
-            {secondaryAction && (
-              <button
-                type="button"
-                onClick={secondaryAction.onClick}
-                disabled={secondaryAction.disabled}
-                className="w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {secondaryAction.label}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/90 transition-colors duration-200 font-medium shadow-sm hover:shadow-md text-sm sm:text-base"
-            >
-              {customAction ? 'Close' : 'Continue'}
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>,
