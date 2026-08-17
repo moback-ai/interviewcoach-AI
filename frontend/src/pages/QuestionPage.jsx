@@ -894,7 +894,7 @@ export default function QuestionsPage() {
       const countLabel = countMatch ? `${countMatch[1]} question(s)` : 'one or more questions';
       return {
         title: 'Sample answers incomplete',
-        message: `We couldn't finish sample answers for ${countLabel}. This usually clears on a second try — nothing on your question set was lost.`,
+        message: `We couldn't finish sample answers for ${countLabel}. Retry generates only the remaining questions — answers that already succeeded are kept.`,
         retryable: true,
       };
     }
@@ -963,6 +963,9 @@ export default function QuestionsPage() {
         } catch {
           errorData = {};
         }
+        if (Array.isArray(errorData.data?.questions) && errorData.data.questions.length) {
+          setQuestions(errorData.data.questions);
+        }
         throw new Error(errorData.message || `Failed to generate sample answers: ${response.status}`);
       }
 
@@ -972,14 +975,47 @@ export default function QuestionsPage() {
       }
 
       const savedQuestions = result.data?.questions || [];
-      const uniqueQuestionCount = savedQuestions.length;
+      const missingCount = Number(result.data?.missing_count || 0);
+      const generatedCount = Number(result.data?.generated_count ?? 0);
 
-      setQuestions(savedQuestions);
-      setExpandedQuestions(new Set());
+      if (savedQuestions.length) {
+        setQuestions(savedQuestions);
+        setExpandedQuestions(new Set());
+      }
+
+      if (result.partial || missingCount > 0) {
+        const remainingLabel = `${missingCount} question${missingCount === 1 ? '' : 's'}`;
+        setNoticeModal({
+          isOpen: true,
+          title: 'Sample answers incomplete',
+          message: generatedCount > 0
+            ? `Saved sample answers for ${generatedCount} question${generatedCount === 1 ? '' : 's'}. Retry will generate only the remaining ${remainingLabel}.`
+            : `We couldn't finish sample answers for ${remainingLabel}. Retry generates only those that are still missing.`,
+          variant: 'warning',
+          primaryLabel: 'Retry',
+          onPrimary: () => {
+            closeNoticeModal();
+            handleGenerateSampleAnswers();
+          },
+          secondaryLabel: 'Dismiss',
+          onSecondary: closeNoticeModal,
+        });
+        return;
+      }
+
+      const uniqueQuestionCount = savedQuestions.length;
+      let readyMessage;
+      if (result.data?.already_complete) {
+        readyMessage = 'All questions already have sample answers.';
+      } else if (generatedCount > 0 && generatedCount < uniqueQuestionCount) {
+        readyMessage = `Filled in sample answers for the remaining ${generatedCount} question${generatedCount === 1 ? '' : 's'}.`;
+      } else {
+        readyMessage = `Generated sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`;
+      }
       setNoticeModal({
         isOpen: true,
         title: 'Sample answers ready',
-        message: `Generated sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`,
+        message: readyMessage,
         variant: 'info',
         primaryLabel: 'OK',
       });

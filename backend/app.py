@@ -2868,12 +2868,26 @@ def generate_questions():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+def _load_serialized_question_set(resume_id, jd_id, question_set):
+    rows = query_all(
+        """
+        SELECT * FROM questions
+        WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+        ORDER BY created_at ASC
+        """,
+        (resume_id, jd_id, question_set),
+    )
+    serialized = [_serialize_question(row) for row in rows]
+    serialized.sort(key=_question_sort_key)
+    return serialized
+
+
 @app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
 @user_rate_limit(max_calls=5, window_seconds=60)
 def generate_answers_for_question_set():
-    """Generate one best sample answer per question (dossier-backed batch)."""
+    """Generate sample answers for questions that still lack a usable answer."""
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     try:
@@ -2923,6 +2937,7 @@ def generate_answers_for_question_set():
         from INTERVIEW.dossier_store import load_dossier
         from INTERVIEW.answer_generation import (
             _dedupe_question_rows,
+            rows_needing_answers,
             run_generate_answers_for_question_set,
         )
 
@@ -2945,12 +2960,33 @@ def generate_answers_for_question_set():
                 "message": "No questions found to generate answers for",
             }), 404
 
+        rows_to_generate = rows_needing_answers(existing_rows)
+        if not rows_to_generate:
+            serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
+            return jsonify({
+                "success": True,
+                "partial": False,
+                "data": {
+                    "questions": serialized,
+                    "questions_count": len(serialized),
+                    "generated_count": 0,
+                    "missing_count": 0,
+                    "already_complete": True,
+                },
+                "debug": {"dossier_cache": dossier_cache},
+            })
+
+        print(
+            f"[INFO] Sample answers needed: {len(rows_to_generate)}/{len(unique_rows)} "
+            f"(skipping {len(unique_rows) - len(rows_to_generate)} already filled)"
+        )
+
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         try:
             result = _run_callable_with_timeout(
                 lambda: run_generate_answers_for_question_set(
                     dossier=dossier,
-                    question_rows=unique_rows,
+                    question_rows=rows_to_generate,
                     model=get_ollama_model_name(),
                     job_title=job_title,
                     dossier_cache=dossier_cache,
@@ -2970,19 +3006,7 @@ def generate_answers_for_question_set():
                 "debug": {"ollama": ollama_diagnostics},
             }), status
 
-        if not result.get("success"):
-            return jsonify({
-                "success": False,
-                "message": result.get("error") or "Answer generation failed",
-            }), 500
-
         generated = result.get("questions") or []
-        if not generated:
-            return jsonify({
-                "success": False,
-                "message": "Answer generation returned no questions",
-            }), 500
-
         saved = []
         for question in generated:
             qid = question.get("id")
@@ -3035,25 +3059,55 @@ def generate_answers_for_question_set():
                     (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
                 )
 
-        if not saved:
+        serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
+        still_missing = rows_needing_answers(serialized)
+        missing_count = len(still_missing)
+        generated_count = len(saved)
+
+        if missing_count and not saved:
             return jsonify({
                 "success": False,
-                "message": "Failed to save sample answers to the database",
+                "partial": False,
+                "message": result.get("error") or (
+                    f"LLM did not return complete sample answers for {missing_count} question(s). "
+                    "Please try again."
+                ),
+                "data": {
+                    "questions": serialized,
+                    "questions_count": len(serialized),
+                    "generated_count": 0,
+                    "missing_count": missing_count,
+                    "missing_ids": [q.get("id") for q in still_missing],
+                },
+                "debug": {
+                    "answer_generation": result.get("answer_generation", {}),
+                    "ollama": ollama_diagnostics,
+                    "dossier_cache": dossier_cache,
+                },
             }), 500
 
-        saved.sort(key=_question_sort_key)
-        return jsonify({
+        payload = {
             "success": True,
+            "partial": missing_count > 0,
             "data": {
-                "questions": saved,
-                "questions_count": len(saved),
+                "questions": serialized,
+                "questions_count": len(serialized),
+                "generated_count": generated_count,
+                "missing_count": missing_count,
+                "missing_ids": [q.get("id") for q in still_missing],
             },
             "debug": {
                 "answer_generation": result.get("answer_generation", {}),
                 "ollama": ollama_diagnostics,
                 "dossier_cache": dossier_cache,
             },
-        })
+        }
+        if missing_count:
+            payload["message"] = (
+                f"LLM did not return complete sample answers for {missing_count} question(s). "
+                "Please try again."
+            )
+        return jsonify(payload)
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
