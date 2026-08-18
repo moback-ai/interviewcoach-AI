@@ -31,6 +31,47 @@ export const getMediaAccessErrorMessage = (kind = 'camera') => {
   return `${kind === 'audio' ? 'Microphone' : 'Camera'} access is not supported in this browser. Try the latest Chrome, Edge, or Safari.`;
 };
 
+export const getInterviewCameraConstraints = (headTrackingEnabled) => ({
+  video: headTrackingEnabled
+    ? {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
+        facingMode: 'user',
+      }
+    : {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 15, max: 24 },
+        facingMode: 'user',
+      },
+  audio: false,
+});
+
+export const applyInterviewCameraConstraints = async (stream, headTrackingEnabled) => {
+  const track = stream?.getVideoTracks?.()[0];
+  if (!track) {
+    return false;
+  }
+
+  try {
+    await track.applyConstraints(getInterviewCameraConstraints(headTrackingEnabled).video);
+  } catch {
+    return false;
+  }
+
+  const { width = 0, height = 0 } = track.getSettings?.() || {};
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+
+  if (headTrackingEnabled) {
+    return width >= 960 && height >= 540;
+  }
+
+  return width <= 1440;
+};
+
 export const requestUserMedia = async (constraints) => {
   if (typeof navigator === 'undefined') {
     const error = new Error('Media devices are unavailable.');

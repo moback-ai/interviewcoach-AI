@@ -806,24 +806,24 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
 
   // ✅ NEW: Add audio conversion function
   const convertToWav = async (audioBlob) => {
+    let audioContext;
     try {
-      // Create an audio context
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      
-      // Convert blob to array buffer
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const arrayBuffer = await audioBlob.arrayBuffer();
-      
-      // Decode the audio
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      
-      // Convert to WAV format
       const wavBuffer = audioBufferToWav(audioBuffer);
-      
       return new Blob([wavBuffer], { type: 'audio/wav' });
     } catch (error) {
       console.error('❌ Audio conversion failed:', error);
-      // Fallback: return original blob if conversion fails
       return audioBlob;
+    } finally {
+      if (audioContext) {
+        try {
+          await audioContext.close();
+        } catch {
+          // Ignore close errors; conversion result (or fallback blob) still returns.
+        }
+      }
     }
   };
 

@@ -4,8 +4,8 @@ import { getAccessToken } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const FRAME_INTERVAL_MS = 333;
-const MAX_FRAME_WIDTH = 320;
-const JPEG_QUALITY = 0.65;
+const MAX_FRAME_WIDTH = 640;
+const JPEG_QUALITY = 0.8;
 
 export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => {
   const [isCalibrated, setIsCalibrated] = useState(false);
