@@ -1300,7 +1300,12 @@ def health_check():
 
 @app.route('/api/service-hours', methods=['GET'])
 def service_hours():
-    return jsonify({"success": True, "data": service_hours_status()}), 200
+    data = service_hours_status()
+    res = jsonify({"success": True, "data": data})
+    seconds_until_next = data.get("seconds_until_next_transition", 300)
+    max_age = min(300, max(1, int(seconds_until_next)))
+    res.headers['Cache-Control'] = f'public, max-age={max_age}, stale-while-revalidate=60'
+    return res, 200
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (

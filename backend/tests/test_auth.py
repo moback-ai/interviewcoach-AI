@@ -76,6 +76,9 @@ def test_service_hours_status_shape():
     assert "timezone" in status
     assert "start" in status
     assert "end" in status
+    assert "seconds_until_next_transition" in status
+    assert isinstance(status["seconds_until_next_transition"], int)
+    assert status["seconds_until_next_transition"] > 0
     assert status["end"] == "19:00"
 
 
@@ -90,3 +93,5 @@ def test_service_hours_closed_message():
     assert "under maintenance" in status["message"].lower()
     assert "10:00 AM" in status["message"]
     assert "7:00 PM" in status["message"]
+    # 22:00 to 10:00 AM next day is 12 hours (43,200 seconds)
+    assert status["seconds_until_next_transition"] == 43200

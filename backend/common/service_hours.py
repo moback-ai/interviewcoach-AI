@@ -48,6 +48,15 @@ def service_hours_status(now=None):
     else:
         is_open = current_minutes >= start_minutes or current_minutes < end_minutes
 
+    current_seconds = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
+    target_h, target_m = (end_h, end_m) if is_open else (start_h, start_m)
+    target_seconds = target_h * 3600 + target_m * 60
+
+    if target_seconds <= current_seconds:
+        target_seconds += 24 * 3600
+
+    seconds_until_next_transition = target_seconds - current_seconds
+
     start_label = _format_display_time(start_h, start_m)
     end_label = _format_display_time(end_h, end_m)
 
@@ -62,6 +71,7 @@ def service_hours_status(now=None):
         "start": f"{start_h:02d}:{start_m:02d}",
         "end": f"{end_h:02d}:{end_m:02d}",
         "now_local": now_local.isoformat(),
+        "seconds_until_next_transition": seconds_until_next_transition,
         "title": "Under maintenance" if not is_open else "",
         "message": closed_message if not is_open else "",
     }
