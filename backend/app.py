@@ -2882,6 +2882,59 @@ def _load_serialized_question_set(resume_id, jd_id, question_set):
     return serialized
 
 
+def _persist_generated_sample_answers(generated, resume_id, jd_id, question_set):
+    """UPDATE expected_answer for generated rows. Safe to call incrementally."""
+    saved = []
+    for question in generated or []:
+        qid = question.get("id")
+        answer = question.get("expected_answer") or question.get("answer") or ""
+        q_text = (question.get("question_text") or question.get("question") or "").strip()
+        level = normalize_question_difficulty(
+            question.get("difficulty_category") or question.get("difficulty_level")
+        )
+        if not qid or not str(answer).strip():
+            continue
+        row = execute(
+            """
+            UPDATE questions
+            SET expected_answer=%s
+            WHERE id=%s AND resume_id=%s AND jd_id=%s AND question_set=%s
+            RETURNING *
+            """,
+            (answer, qid, resume_id, jd_id, question_set),
+        )
+        if not row and q_text:
+            row = execute(
+                """
+                UPDATE questions
+                SET expected_answer=%s
+                WHERE id = (
+                    SELECT id FROM questions
+                    WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                      AND lower(question_text)=lower(%s)
+                      AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                )
+                RETURNING *
+                """,
+                (answer, resume_id, jd_id, question_set, q_text, level),
+            )
+        if row:
+            saved.append(_serialize_question(row))
+            execute(
+                """
+                DELETE FROM questions
+                WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                  AND lower(question_text)=lower(%s)
+                  AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                  AND id <> %s
+                """,
+                (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
+            )
+    return saved
+
+
 @app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
@@ -2981,6 +3034,27 @@ def generate_answers_for_question_set():
             f"(skipping {len(unique_rows) - len(rows_to_generate)} already filled)"
         )
 
+        persisted_ids = set()
+
+        def persist_answers_incrementally(questions):
+            fresh = [
+                q for q in (questions or [])
+                if str(q.get("id") or "") not in persisted_ids
+            ]
+            if not fresh:
+                return
+            saved_now = _persist_generated_sample_answers(
+                fresh, resume_id, jd_id, question_set
+            )
+            for row in saved_now:
+                if row.get("id"):
+                    persisted_ids.add(str(row["id"]))
+            if saved_now:
+                print(
+                    f"[INFO] Incrementally saved {len(saved_now)} sample answer(s) "
+                    f"(total_saved={len(persisted_ids)})"
+                )
+
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         try:
             result = _run_callable_with_timeout(
@@ -2990,6 +3064,7 @@ def generate_answers_for_question_set():
                     model=get_ollama_model_name(),
                     job_title=job_title,
                     dossier_cache=dossier_cache,
+                    on_answers=persist_answers_incrementally,
                 ),
                 GENERATE_ANSWERS_TIMEOUT_SECONDS,
                 label="Sample answer generation",
@@ -2999,65 +3074,28 @@ def generate_answers_for_question_set():
                 "[ERROR] Sample answer generation failed: "
                 f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
             )
+            serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
+            still_missing = rows_needing_answers(serialized)
+            saved_count = len(persisted_ids)
             status = _question_generation_error_status(pipeline_error)
             return jsonify({
                 "success": False,
+                "partial": saved_count > 0,
                 "message": str(pipeline_error),
-                "debug": {"ollama": ollama_diagnostics},
+                "data": {
+                    "questions": serialized,
+                    "questions_count": len(serialized),
+                    "generated_count": saved_count,
+                    "missing_count": len(still_missing),
+                    "missing_ids": [q.get("id") for q in still_missing],
+                },
+                "debug": {"ollama": ollama_diagnostics, "dossier_cache": dossier_cache},
             }), status
 
         generated = result.get("questions") or []
-        saved = []
-        for question in generated:
-            qid = question.get("id")
-            answer = question.get("expected_answer") or question.get("answer") or ""
-            q_text = (question.get("question_text") or question.get("question") or "").strip()
-            level = normalize_question_difficulty(
-                question.get("difficulty_category") or question.get("difficulty_level")
-            )
-            if not qid:
-                continue
-            row = execute(
-                """
-                UPDATE questions
-                SET expected_answer=%s
-                WHERE id=%s AND resume_id=%s AND jd_id=%s AND question_set=%s
-                RETURNING *
-                """,
-                (answer, qid, resume_id, jd_id, question_set),
-            )
-            if not row and q_text:
-                # Fallback: match by text+level if id was synthetic
-                row = execute(
-                    """
-                    UPDATE questions
-                    SET expected_answer=%s
-                    WHERE id = (
-                        SELECT id FROM questions
-                        WHERE resume_id=%s AND jd_id=%s AND question_set=%s
-                          AND lower(question_text)=lower(%s)
-                          AND lower(coalesce(difficulty_level, '')) = lower(%s)
-                        ORDER BY created_at ASC
-                        LIMIT 1
-                    )
-                    RETURNING *
-                    """,
-                    (answer, resume_id, jd_id, question_set, q_text, level),
-                )
-            if row:
-                saved.append(_serialize_question(row))
-
-                # Delete legacy duplicate rows (same text+level, different answer-depth rows)
-                execute(
-                    """
-                    DELETE FROM questions
-                    WHERE resume_id=%s AND jd_id=%s AND question_set=%s
-                      AND lower(question_text)=lower(%s)
-                      AND lower(coalesce(difficulty_level, '')) = lower(%s)
-                      AND id <> %s
-                    """,
-                    (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
-                )
+        saved = _persist_generated_sample_answers(
+            generated, resume_id, jd_id, question_set
+        )
 
         serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
         still_missing = rows_needing_answers(serialized)

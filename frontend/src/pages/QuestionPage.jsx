@@ -880,7 +880,7 @@ export default function QuestionsPage() {
       return {
         title: 'Generation took too long',
         message:
-          'Sample answer generation timed out before finishing. Your questions are unchanged — retry when you are ready.',
+          'Sample answer generation timed out before finishing. Retry generates only questions that still need an answer.',
         retryable: true,
       };
     }
@@ -965,6 +965,13 @@ export default function QuestionsPage() {
         }
         if (Array.isArray(errorData.data?.questions) && errorData.data.questions.length) {
           setQuestions(errorData.data.questions);
+        }
+        const savedCount = Number(errorData.data?.generated_count || 0);
+        const missingCount = Number(errorData.data?.missing_count || 0);
+        if (savedCount > 0 && missingCount > 0) {
+          throw new Error(
+            `LLM did not return complete sample answers for ${missingCount} question(s). Please try again.`
+          );
         }
         throw new Error(errorData.message || `Failed to generate sample answers: ${response.status}`);
       }

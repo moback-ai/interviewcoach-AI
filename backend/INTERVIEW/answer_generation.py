@@ -225,6 +225,35 @@ def rows_needing_answers(question_rows: list) -> list[dict]:
     return needing
 
 
+def _questions_with_answers(questions_by_id: dict, answers_map: dict[str, str]) -> list[dict]:
+    """Build question rows for ids that have a usable answer."""
+    out = []
+    for qid, ans in (answers_map or {}).items():
+        q = questions_by_id.get(qid)
+        if not q:
+            continue
+        text = (ans or "").strip()
+        if not _is_usable_answer(text, requires_code=bool(q.get("requires_code"))):
+            continue
+        out.append({
+            **q,
+            "expected_answer": text,
+            "answer": text,
+            "answer_source": "ai",
+            "difficulty_category": q.get("difficulty_level"),
+        })
+    return out
+
+
+def _safe_on_answers(on_answers, questions: list[dict]) -> None:
+    if not on_answers or not questions:
+        return
+    try:
+        on_answers(questions)
+    except Exception as persist_exc:
+        print(f"[WARN] Incremental sample-answer persist failed: {persist_exc}")
+
+
 def _call_chunk_until_complete(
     dossier: dict,
     chunk: list[dict],
@@ -233,6 +262,7 @@ def _call_chunk_until_complete(
     dossier_cache: str,
     chunk_index: int,
     chunk_total: int,
+    on_answers=None,
 ) -> tuple[dict[str, str], str | None]:
     """LLM call(s) for one chunk until all ids have usable answers, or retries exhausted."""
     question_ids = [q["id"] for q in chunk]
@@ -264,9 +294,15 @@ def _call_chunk_until_complete(
             )
             raw = (response.get("message") or {}).get("content") or ""
             parsed = _extract_answers_map(raw, target_ids)
+            newly = {}
             for qid, ans in parsed.items():
-                if _is_usable_answer(ans, requires_code=bool(by_id.get(qid, {}).get("requires_code"))):
+                if (
+                    qid not in answers_map
+                    and _is_usable_answer(ans, requires_code=bool(by_id.get(qid, {}).get("requires_code")))
+                ):
                     answers_map[qid] = ans
+                    newly[qid] = ans
+            _safe_on_answers(on_answers, _questions_with_answers(by_id, newly))
             missing = [qid for qid in question_ids if qid not in answers_map]
             print(
                 f"[INFO] Answer batch chunk {chunk_index}/{chunk_total} "
@@ -291,11 +327,14 @@ def generate_sample_answers_batch(
     model: str = "llama3",
     job_title: str = "",
     dossier_cache: str = "hit",
+    on_answers=None,
 ):
     """
     Generate one best sample answer per unique question via chunked LLM calls.
     No template fallbacks. Succeeded answers are returned even if some ids fail;
     callers should save those and retry only the missing questions.
+    on_answers(questions), if provided, is invoked as soon as usable answers exist
+    so callers can persist them before the full batch (or outer timeout) finishes.
     """
     resolved_model = resolve_ollama_model_name(model)
     unique = _dedupe_question_rows(question_rows)
@@ -314,6 +353,7 @@ def generate_sample_answers_batch(
     chunks = _chunk_questions(unique)
     answers_map: dict[str, str] = {}
     last_error = None
+    by_id = {q["id"]: q for q in unique}
 
     print(
         f"[INFO] Answer generation start: questions={len(unique)} chunks={len(chunks)} "
@@ -331,8 +371,10 @@ def generate_sample_answers_batch(
                 dossier_cache=dossier_cache,
                 chunk_index=idx,
                 chunk_total=len(chunks),
+                on_answers=on_answers,
             )
             answers_map.update(chunk_answers)
+            _safe_on_answers(on_answers, _questions_with_answers(by_id, chunk_answers))
             if err:
                 last_error = err
         token_usage = token_tracker.as_dict()
@@ -416,6 +458,7 @@ def run_generate_answers_for_question_set(
     model="llama3",
     job_title="",
     dossier_cache="hit",
+    on_answers=None,
     **_unused,
 ):
     """
@@ -428,4 +471,5 @@ def run_generate_answers_for_question_set(
         model=model,
         job_title=job_title,
         dossier_cache=dossier_cache,
+        on_answers=on_answers,
     )
