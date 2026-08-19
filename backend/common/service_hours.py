@@ -1,15 +1,13 @@
 """Service window: 10:00–20:00 IST (configurable)."""
 from __future__ import annotations
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timezone, timedelta
 
 from common.runtime_config import optional_env
 
 DEFAULT_TZ = "Asia/Kolkata"
 DEFAULT_START = "10:00"
 DEFAULT_END = "19:00"
-
 
 def _parse_hhmm(value: str, fallback: str) -> tuple[int, int]:
     raw = (value or fallback).strip()
@@ -20,24 +18,38 @@ def _parse_hhmm(value: str, fallback: str) -> tuple[int, int]:
         fb_hour, fb_minute = fallback.split(":", 1)
         return int(fb_hour), int(fb_minute)
 
-
 def _format_display_time(hour: int, minute: int) -> str:
     period = "AM" if hour < 12 else "PM"
     hour12 = hour % 12 or 12
     return f"{hour12}:{minute:02d} {period}"
 
+def _get_tz(tz_name: str):
+    if tz_name in ("Asia/Kolkata", "IST", "Asia/Calcutta"):
+        return timezone(timedelta(hours=5, minutes=30))
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(tz_name)
+    except Exception:
+        return timezone.utc
 
 def service_hours_status(now=None):
-    tz_name = optional_env("SERVICE_HOURS_TZ", DEFAULT_TZ)
-    start_h, start_m = _parse_hhmm(optional_env("SERVICE_HOURS_START", DEFAULT_START), DEFAULT_START)
-    end_h, end_m = _parse_hhmm(optional_env("SERVICE_HOURS_END", DEFAULT_END), DEFAULT_END)
+    try:
+        tz_name = optional_env("SERVICE_HOURS_TZ", DEFAULT_TZ)
+        start_h, start_m = _parse_hhmm(optional_env("SERVICE_HOURS_START", DEFAULT_START), DEFAULT_START)
+        end_h, end_m = _parse_hhmm(optional_env("SERVICE_HOURS_END", DEFAULT_END), DEFAULT_END)
 
-    tz = ZoneInfo(tz_name)
-    now_local = now or datetime.now(tz)
-    if now_local.tzinfo is None:
-        now_local = now_local.replace(tzinfo=tz)
-    else:
-        now_local = now_local.astimezone(tz)
+        tz = _get_tz(tz_name)
+        now_local = now or datetime.now(tz)
+        if now_local.tzinfo is None:
+            now_local = now_local.replace(tzinfo=tz)
+        else:
+            now_local = now_local.astimezone(tz)
+    except Exception:
+        tz_name = DEFAULT_TZ
+        start_h, start_m = 10, 0
+        end_h, end_m = 19, 0
+        tz = timezone(timedelta(hours=5, minutes=30))
+        now_local = now or datetime.now(tz)
 
     start_minutes = start_h * 60 + start_m
     end_minutes = end_h * 60 + end_m

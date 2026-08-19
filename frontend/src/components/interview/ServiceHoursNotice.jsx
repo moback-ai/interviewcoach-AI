@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import { FiClock } from 'react-icons/fi';
 import { apiGet } from '../../api';
 
-const MAX_CHECK_INTERVAL_MS = 15 * 60 * 1000;
-const MIN_CHECK_INTERVAL_MS = 10 * 1000;
+const MAX_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours max cap
+const MIN_CHECK_INTERVAL_MS = 10 * 1000; // 10 seconds min floor
 
 const FALLBACK_STATUS = {
   is_open: false,
@@ -15,6 +15,18 @@ const FALLBACK_STATUS = {
   message:
     'InterviewCoach is under maintenance from 7:00 PM until 10:00 AM IST. We are live daily from 10:00 AM to 7:00 PM — stay tuned and check back when we open.',
 };
+
+let inFlightFetch = null;
+
+async function fetchServiceHoursDeduplicated() {
+  if (inFlightFetch) {
+    return inFlightFetch;
+  }
+  inFlightFetch = apiGet('/api/service-hours').finally(() => {
+    inFlightFetch = null;
+  });
+  return inFlightFetch;
+}
 
 function getMsUntilNextTransition(status) {
   if (!status) {
@@ -74,6 +86,7 @@ export default function ServiceHoursNotice() {
   useEffect(() => {
     let cancelled = false;
     let timerId = null;
+    let isFetching = false;
 
     const clearTimer = () => {
       if (timerId) {
@@ -83,11 +96,13 @@ export default function ServiceHoursNotice() {
     };
 
     const loadStatus = async () => {
+      if (isFetching) return;
+      isFetching = true;
       clearTimer();
 
       let currentData = null;
       try {
-        const res = await apiGet('/api/service-hours');
+        const res = await fetchServiceHoursDeduplicated();
         if (!cancelled && res?.data) {
           currentData = res.data;
           setStatus(res.data);
@@ -97,9 +112,12 @@ export default function ServiceHoursNotice() {
           currentData = FALLBACK_STATUS;
           setStatus(FALLBACK_STATUS);
         }
+      } finally {
+        isFetching = false;
       }
 
       if (!cancelled && document.visibilityState === 'visible') {
+        clearTimer();
         const delay = getMsUntilNextTransition(currentData);
         timerId = window.setTimeout(loadStatus, delay);
       }
