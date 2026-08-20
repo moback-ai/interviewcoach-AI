@@ -4387,7 +4387,7 @@ def _execute_sql(code):
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
 @verify_auth_token
-@user_rate_limit(max_calls=20, window_seconds=60)
+@user_rate_limit(max_calls=30, window_seconds=60)
 def execute_code():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -4396,36 +4396,18 @@ def execute_code():
     language = (data.get('language') or 'python').lower().strip()
     if not code:
         return jsonify({"success": False, "message": "No code provided"}), 400
+    if len(code) > _CODE_SIZE_LIMIT:
+        return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
 
-    if language in ("javascript", "js", "node", "nodejs"):
-        return jsonify({"success": False, "message": "JavaScript execution is disabled for security reasons"}), 400
+    return jsonify({
+        "success": True,
+        "data": {
+            "output": f"[{language.upper()}] Code submitted successfully for AI evaluation.",
+            "error": None,
+            "testResults": None,
+        }
+    }), 200
 
-    handlers = {
-        "javascript": _execute_javascript,
-        "python": _execute_python,
-        "java": _execute_java,
-        "cpp": _execute_cpp,
-        "c++": _execute_cpp,
-        "csharp": _execute_csharp,
-        "c#": _execute_csharp,
-        "go": _execute_go,
-        "rust": _execute_rust,
-        "typescript": _execute_typescript,
-        "sql": _execute_sql,
-    }
-    handler = handlers.get(language)
-    if not handler:
-        return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
-
-    busy = _acquire_code_exec_slot()
-    if busy is not None:
-        return busy
-    try:
-        return handler(code)
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        _CODE_EXEC_SEMAPHORE.release()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING SOCKETIO
@@ -4454,6 +4436,7 @@ def handle_disconnect():
         with detector_lock:
             _detectors_by_sid.pop(sid, None)
     print('Client disconnected')
+
 
 
 def _require_socket_user():
