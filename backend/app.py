@@ -1300,7 +1300,23 @@ def health_check():
 
 @app.route('/api/service-hours', methods=['GET'])
 def service_hours():
-    return jsonify({"success": True, "data": service_hours_status()}), 200
+    data = service_hours_status()
+    seconds_until_next = data.get("seconds_until_next_transition", 300)
+    max_age = min(300, max(1, int(seconds_until_next)))
+
+    etag_source = f"{data.get('is_open')}:{data.get('start')}:{data.get('end')}:{data.get('timezone')}"
+    etag = f'"{hashlib.md5(etag_source.encode("utf-8")).hexdigest()}"'
+
+    if request.headers.get('If-None-Match') == etag:
+        res = make_response('', 304)
+        res.headers['Cache-Control'] = f'public, max-age={max_age}, stale-while-revalidate=60'
+        res.headers['ETag'] = etag
+        return res
+
+    res = jsonify({"success": True, "data": data})
+    res.headers['Cache-Control'] = f'public, max-age={max_age}, stale-while-revalidate=60'
+    res.headers['ETag'] = etag
+    return res, 200
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (
