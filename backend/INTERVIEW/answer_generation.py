@@ -73,6 +73,7 @@ def _dedupe_question_rows(question_rows: list) -> list[dict]:
             requires_code = requires_code.lower() == "true"
         if raw_level == "coding":
             requires_code = True
+        existing_answer = row.get("expected_answer") or row.get("answer") or ""
         unique.append({
             "id": str(row.get("id") or ""),
             "question_text": q_text,
@@ -81,6 +82,7 @@ def _dedupe_question_rows(question_rows: list) -> list[dict]:
             "question_set": row.get("question_set"),
             "resume_id": row.get("resume_id"),
             "jd_id": row.get("jd_id"),
+            "expected_answer": str(existing_answer).strip(),
         })
     return unique
 
@@ -213,6 +215,45 @@ def _is_usable_answer(answer: str, requires_code: bool = False) -> bool:
     return True
 
 
+def rows_needing_answers(question_rows: list) -> list[dict]:
+    """Canonical rows that still lack a usable sample answer."""
+    needing = []
+    for q in _dedupe_question_rows(question_rows):
+        answer = q.get("expected_answer") or q.get("answer") or ""
+        if not _is_usable_answer(answer, requires_code=bool(q.get("requires_code"))):
+            needing.append(q)
+    return needing
+
+
+def _questions_with_answers(questions_by_id: dict, answers_map: dict[str, str]) -> list[dict]:
+    """Build question rows for ids that have a usable answer."""
+    out = []
+    for qid, ans in (answers_map or {}).items():
+        q = questions_by_id.get(qid)
+        if not q:
+            continue
+        text = (ans or "").strip()
+        if not _is_usable_answer(text, requires_code=bool(q.get("requires_code"))):
+            continue
+        out.append({
+            **q,
+            "expected_answer": text,
+            "answer": text,
+            "answer_source": "ai",
+            "difficulty_category": q.get("difficulty_level"),
+        })
+    return out
+
+
+def _safe_on_answers(on_answers, questions: list[dict]) -> None:
+    if not on_answers or not questions:
+        return
+    try:
+        on_answers(questions)
+    except Exception as persist_exc:
+        print(f"[WARN] Incremental sample-answer persist failed: {persist_exc}")
+
+
 def _call_chunk_until_complete(
     dossier: dict,
     chunk: list[dict],
@@ -221,6 +262,7 @@ def _call_chunk_until_complete(
     dossier_cache: str,
     chunk_index: int,
     chunk_total: int,
+    on_answers=None,
 ) -> tuple[dict[str, str], str | None]:
     """LLM call(s) for one chunk until all ids have usable answers, or retries exhausted."""
     question_ids = [q["id"] for q in chunk]
@@ -252,9 +294,15 @@ def _call_chunk_until_complete(
             )
             raw = (response.get("message") or {}).get("content") or ""
             parsed = _extract_answers_map(raw, target_ids)
+            newly = {}
             for qid, ans in parsed.items():
-                if _is_usable_answer(ans, requires_code=bool(by_id.get(qid, {}).get("requires_code"))):
+                if (
+                    qid not in answers_map
+                    and _is_usable_answer(ans, requires_code=bool(by_id.get(qid, {}).get("requires_code")))
+                ):
                     answers_map[qid] = ans
+                    newly[qid] = ans
+            _safe_on_answers(on_answers, _questions_with_answers(by_id, newly))
             missing = [qid for qid in question_ids if qid not in answers_map]
             print(
                 f"[INFO] Answer batch chunk {chunk_index}/{chunk_total} "
@@ -279,10 +327,14 @@ def generate_sample_answers_batch(
     model: str = "llama3",
     job_title: str = "",
     dossier_cache: str = "hit",
+    on_answers=None,
 ):
     """
     Generate one best sample answer per unique question via chunked LLM calls.
-    No template fallbacks — returns error if any answer is missing after retries.
+    No template fallbacks. Succeeded answers are returned even if some ids fail;
+    callers should save those and retry only the missing questions.
+    on_answers(questions), if provided, is invoked as soon as usable answers exist
+    so callers can persist them before the full batch (or outer timeout) finishes.
     """
     resolved_model = resolve_ollama_model_name(model)
     unique = _dedupe_question_rows(question_rows)
@@ -301,6 +353,7 @@ def generate_sample_answers_batch(
     chunks = _chunk_questions(unique)
     answers_map: dict[str, str] = {}
     last_error = None
+    by_id = {q["id"]: q for q in unique}
 
     print(
         f"[INFO] Answer generation start: questions={len(unique)} chunks={len(chunks)} "
@@ -318,8 +371,10 @@ def generate_sample_answers_batch(
                 dossier_cache=dossier_cache,
                 chunk_index=idx,
                 chunk_total=len(chunks),
+                on_answers=on_answers,
             )
             answers_map.update(chunk_answers)
+            _safe_on_answers(on_answers, _questions_with_answers(by_id, chunk_answers))
             if err:
                 last_error = err
         token_usage = token_tracker.as_dict()
@@ -331,48 +386,17 @@ def generate_sample_answers_batch(
         )
 
     missing = []
+    enriched = []
     for q in unique:
         qid = q["id"]
         ans = (answers_map.get(qid) or "").strip()
         if not _is_usable_answer(ans, requires_code=bool(q.get("requires_code"))):
             missing.append(qid)
-
-    if missing:
-        print(
-            f"[ERROR] Answer generation incomplete: missing={len(missing)}/{len(unique)} "
-            f"ids={missing[:5]}{'...' if len(missing) > 5 else ''}"
-        )
-        return {
-            "success": False,
-            "error": (
-                f"LLM did not return complete sample answers for {len(missing)} question(s). "
-                "Please try again."
-            ),
-            "answer_generation": {
-                "requested": True,
-                "model": resolved_model,
-                "generated_count": len(unique) - len(missing),
-                "fallback_count": 0,
-                "missing_ids": missing,
-                "llm_calls": token_usage.get("llm_calls", 0),
-                "input_tokens": token_usage.get("input_tokens", 0),
-                "output_tokens": token_usage.get("output_tokens", 0),
-                "total_tokens": token_usage.get("total_tokens", 0),
-                "dossier_cache": dossier_cache,
-                "batch": True,
-                "chunks": len(chunks),
-                "last_error": last_error,
-            },
-            "ollama_model": resolved_model,
-        }
-
-    enriched = []
-    for q in unique:
-        answer = answers_map[q["id"]]
+            continue
         enriched.append({
             **q,
-            "expected_answer": answer,
-            "answer": answer,
+            "expected_answer": ans,
+            "answer": ans,
             "answer_source": "ai",
             "difficulty_category": q.get("difficulty_level"),
         })
@@ -381,8 +405,10 @@ def generate_sample_answers_batch(
         "requested": True,
         "model": resolved_model,
         "generated_count": len(enriched),
+        "requested_count": len(unique),
         "fallback_count": 0,
         "fallback_examples": [],
+        "missing_ids": missing,
         "llm_calls": token_usage.get("llm_calls", 0),
         "input_tokens": token_usage.get("input_tokens", 0),
         "output_tokens": token_usage.get("output_tokens", 0),
@@ -391,7 +417,26 @@ def generate_sample_answers_batch(
         "batch": True,
         "chunks": len(chunks),
         "answers_per_question": 1,
+        "last_error": last_error,
     }
+
+    if missing:
+        print(
+            f"[ERROR] Answer generation incomplete: missing={len(missing)}/{len(unique)} "
+            f"saved={len(enriched)} ids={missing[:5]}{'...' if len(missing) > 5 else ''}"
+        )
+        return {
+            "success": bool(enriched),
+            "partial": bool(enriched),
+            "error": (
+                f"LLM did not return complete sample answers for {len(missing)} question(s). "
+                "Please try again."
+            ),
+            "questions": enriched,
+            "questions_count": len(enriched),
+            "answer_generation": stats,
+            "ollama_model": resolved_model,
+        }
 
     print(
         f"[DONE] Sample answers ready: ai={len(enriched)} fallback=0 "
@@ -399,6 +444,7 @@ def generate_sample_answers_batch(
     )
     return {
         "success": True,
+        "partial": False,
         "questions": enriched,
         "questions_count": len(enriched),
         "answer_generation": stats,
@@ -412,6 +458,7 @@ def run_generate_answers_for_question_set(
     model="llama3",
     job_title="",
     dossier_cache="hit",
+    on_answers=None,
     **_unused,
 ):
     """
@@ -424,4 +471,5 @@ def run_generate_answers_for_question_set(
         model=model,
         job_title=job_title,
         dossier_cache=dossier_cache,
+        on_answers=on_answers,
     )
