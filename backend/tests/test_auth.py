@@ -97,14 +97,17 @@ def test_service_hours_closed_message():
     assert status["seconds_until_next_transition"] == 43200
 
 
-def test_service_hours_api_route_headers(client):
-    res = client.get("/api/service-hours")
-    assert res.status_code == 200
-    assert "Cache-Control" in res.headers
-    assert "ETag" in res.headers
-    etag = res.headers["ETag"]
+def test_service_hours_api_route_headers():
+    from app import app as flask_app
+    flask_app.config["TESTING"] = True
+    with flask_app.test_client() as client:
+        res = client.get("/api/service-hours")
+        assert res.status_code == 200
+        assert "Cache-Control" in res.headers
+        assert "ETag" in res.headers
+        etag = res.headers["ETag"]
 
-    # Test conditional GET with If-None-Match matching etag -> 304 Not Modified
-    res_conditional = client.get("/api/service-hours", headers={"If-None-Match": etag})
-    assert res_conditional.status_code == 304
-    assert res_conditional.headers.get("ETag") == etag
+        # Test conditional GET with If-None-Match matching etag -> 304 Not Modified
+        res_conditional = client.get("/api/service-hours", headers={"If-None-Match": etag})
+        assert res_conditional.status_code == 304
+        assert res_conditional.headers.get("ETag") == etag
