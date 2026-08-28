@@ -185,8 +185,8 @@ export default function PaymentSuccess() {
             {status === 'error' && (
               <>
                 <FiXCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-                <h3 className="text-xl font-semibold mb-2">Payment Issue</h3>
-                <p className="text-[var(--color-text-secondary)] mb-4">{message}</p>
+                <h3 className="text-xl font-semibold mb-2 text-[var(--color-error)]">Payment Issue</h3>
+                <p className="text-[var(--color-error)] font-medium mb-4" role="alert">{message}</p>
                 <button
                   onClick={backToQuestions}
                   className="w-full bg-[var(--color-primary)] text-white px-6 py-3 rounded-lg font-semibold"

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
-import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings, FiPlay, FiDownload, FiMessageSquare } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings, FiPlay, FiDownload, FiMessageSquare, FiAlertCircle } from 'react-icons/fi';
 import { Sparkles } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -1383,9 +1383,14 @@ export default function QuestionsPage() {
                 transition={{ duration: 0.3 }}
                 className="text-center py-12 sm:py-16"
               >
-                <FiFileText className="w-12 h-12 sm:w-16 sm:h-16 text-[var(--color-text-secondary)] mx-auto mb-4 sm:mb-6" />
-                <p className="text-[var(--color-text-secondary)] text-base sm:text-lg mb-2">Error loading questions</p>
-                <p className="text-[var(--color-text-secondary)] text-sm">{error}</p>
+                <div className="mx-auto mb-4 sm:mb-6 w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <FiAlertCircle className="w-7 h-7 sm:w-8 sm:h-8 text-[var(--color-error)]" />
+                </div>
+                <p className="text-[var(--color-error)] text-base sm:text-lg font-semibold mb-3">Error loading questions</p>
+                <div className="app-inline-error max-w-md mx-auto text-left" role="alert">
+                  <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+                  <span>{error}</span>
+                </div>
               </motion.div>
             ) : availableQuestionSets.length === 0 ? (
               <motion.div
@@ -1681,10 +1686,9 @@ export default function QuestionsPage() {
                   </div>
 
                   {questionValidationError && (
-                    <div className="mt-4 p-3 bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg">
-                      <p className="text-sm text-red-700 dark:text-red-300">
-                        {questionValidationError}
-                      </p>
+                    <div className="mt-4 app-inline-error" role="alert">
+                      <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+                      <p>{questionValidationError}</p>
                     </div>
                   )}
                 </div>

@@ -64,7 +64,7 @@ function VerifyEmail() {
         title={title}
         description="We’re validating your email so your account can safely move into the interview dashboard."
       >
-        <div className={`auth-scene-alert ${status === 'error' ? 'auth-scene-alert-error' : 'auth-scene-alert-soft'}`}>
+        <div className={`auth-scene-alert ${status === 'error' ? 'auth-scene-alert-error' : 'auth-scene-alert-soft'}`} role={status === 'error' ? 'alert' : undefined}>
           {status !== 'success' ? <FiMail size={15} /> : <FiCheckCircle size={15} />}
           <span>{message}</span>
         </div>

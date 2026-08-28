@@ -5,10 +5,11 @@ import { FiAlertCircle, FiAlertTriangle, FiInfo, FiLayers } from 'react-icons/fi
 const VARIANTS = {
   error: {
     icon: FiAlertCircle,
-    iconWrap: 'bg-red-100 dark:bg-red-900/30',
+    iconWrap: 'bg-red-100 dark:bg-red-900/40',
     iconColor: 'text-red-600 dark:text-red-400',
-    accentBar: 'from-red-500/80 to-red-400/40',
+    accentBar: 'from-red-600 to-red-400',
     button: 'bg-red-600 hover:bg-red-700 shadow-red-600/20',
+    messageColor: 'text-red-800 dark:text-red-200',
   },
   info: {
     icon: FiInfo,
@@ -141,7 +142,10 @@ const NoticeModal = ({
         <div className={isRich ? 'px-5 sm:px-6 pb-5 sm:pb-6' : 'p-3 sm:p-4 md:p-6'}>
           <p
             id="notice-modal-message"
-            className="text-sm sm:text-[0.95rem] text-[var(--color-text-secondary)] leading-relaxed"
+            className={`text-sm sm:text-[0.95rem] leading-relaxed font-medium ${
+              styles.messageColor || 'text-[var(--color-text-secondary)]'
+            }`}
+            role={variant === 'error' ? 'alert' : undefined}
           >
             {message}
           </p>

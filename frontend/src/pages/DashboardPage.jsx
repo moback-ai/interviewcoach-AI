@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings, FiInfo } from 'react-icons/fi';
+import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings, FiInfo, FiAlertCircle } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -477,9 +477,9 @@ function DashboardPage() {
         <Navbar />
         <PageWavesShell contentClassName="pt-20 px-4 flex items-center justify-center">
           <div className="text-center max-w-md mx-auto px-4">
-            <div className="bg-[var(--color-error)]/10 border border-[var(--color-error)] rounded-lg p-6">
+            <div className="bg-[var(--color-error)]/10 border border-[var(--color-error)] rounded-lg p-6" role="alert">
               <h3 className="text-lg font-semibold text-[var(--color-error)] mb-2">Error Loading Dashboard</h3>
-              <p className="text-[var(--color-text-secondary)] mb-4">{error}</p>
+              <p className="text-[var(--color-error)] font-medium mb-4">{error}</p>
               <button
                 onClick={fetchDashboardData}
                 className="bg-[var(--color-primary)] text-white px-4 py-2 rounded-lg hover:opacity-90 transition-opacity cursor-pointer"
@@ -963,8 +963,9 @@ function DashboardPage() {
 
                 {/* Validation Error Message */}
                 {!canGenerateQuestions() && splitMode && blendMode && (
-                  <div className="mt-4 p-3 bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg">
-                    <p className="text-sm text-red-700 dark:text-red-300">
+                  <div className="mt-4 app-inline-error" role="alert">
+                    <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+                    <p>
                       {/* ✅ CHANGE: Conditional message based on coding slider visibility */}
                       {selectedPairingForRegen.technical === true
                         ? 'When both Split and Blend modes are enabled, you need at least 6 total questions, excluding coding questions.'

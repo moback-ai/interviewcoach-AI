@@ -680,12 +680,15 @@ function InterviewPage() {
     return (
       <div className="min-h-screen bg-[var(--color-bg)] flex items-center justify-center px-4">
         <div className="max-w-md w-full text-center space-y-4">
-          <p className="text-[var(--color-text-primary)] font-semibold text-lg">
+          <p className="text-[var(--color-error)] font-semibold text-lg">
             Unable to resume interview
           </p>
-          <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
-            {validationError || 'This interview session could not be opened.'}
-          </p>
+          <div className="app-inline-error text-left" role="alert">
+            <svg className="app-inline-error-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{validationError || 'This interview session could not be opened.'}</span>
+          </div>
           <button
             type="button"
             onClick={() => navigate('/dashboard', { replace: true })}

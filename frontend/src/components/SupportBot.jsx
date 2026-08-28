@@ -263,16 +263,16 @@ const SupportBot = () => {
 
               {/* Error Message */}
               {error && (
-                <div className="px-4 py-3 bg-red-50 border-t border-red-200">
+                <div className="px-4 py-3 bg-red-100 dark:bg-red-900/30 border-t-2 border-red-400 dark:border-red-600" role="alert">
                   <div className="flex items-start space-x-2">
-                    <svg className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <div className="flex-1">
-                      <p className="text-red-800 text-sm">{error}</p>
+                      <p className="text-red-800 dark:text-red-200 text-sm font-semibold">{error}</p>
                       <button
                         onClick={clearError}
-                        className="text-red-600 hover:text-red-800 text-xs underline mt-1"
+                        className="text-red-700 dark:text-red-300 hover:text-red-900 dark:hover:text-red-100 text-xs font-medium underline mt-1"
                       >
                         Dismiss
                       </button>

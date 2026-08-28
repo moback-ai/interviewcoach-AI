@@ -158,7 +158,7 @@ function Signup() {
         )}
       >
         {errorMsg ? (
-          <div className="auth-simple-alert auth-simple-alert-error">
+          <div className="auth-simple-alert auth-simple-alert-error" role="alert">
             <p>{errorMsg}</p>
           </div>
         ) : null}
