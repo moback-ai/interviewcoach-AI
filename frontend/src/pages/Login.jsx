@@ -265,8 +265,9 @@ function Login() {
         )}
       >
         {errorMsg ? (
-          <div className="auth-simple-alert auth-simple-alert-error" role="alert">
-            <p>{errorMsg}</p>
+          <div className="auth-simple-alert auth-simple-alert-error flex items-start gap-2" role="alert">
+            <FiInfo className="w-4 h-4 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+            <p className="m-0">{errorMsg}</p>
           </div>
         ) : null}
 
@@ -338,18 +339,21 @@ function Login() {
               )}
             </div>
             {!errorMsg && looksLikeEmail && identifierBlurred && emailStatus === 'invalid' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Enter a valid email address.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>Enter a valid email address.</span>
               </p>
             ) : null}
             {!errorMsg && looksLikeEmail && identifierBlurred && emailStatus === 'not-exists' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                This email is not registered. Please sign up first.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>This email is not registered. Please sign up first.</span>
               </p>
             ) : null}
             {!errorMsg && (!looksLikeEmail || emailStatus === 'idle') && identifier && identifierBlurred && !identifierIsValid ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Enter a valid email or a username with at least 3 characters.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>Enter a valid email or a username with at least 3 characters.</span>
               </p>
             ) : null}
           </div>

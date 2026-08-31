@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiEye, FiEyeOff, FiCheck, FiX } from 'react-icons/fi';
+import { FiEye, FiEyeOff, FiCheck, FiX, FiInfo } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import AuthStudioShell from '../components/auth/AuthStudioShell';
 import { useTheme } from '../hooks/useTheme';
@@ -158,8 +158,9 @@ function Signup() {
         )}
       >
         {errorMsg ? (
-          <div className="auth-simple-alert auth-simple-alert-error" role="alert">
-            <p>{errorMsg}</p>
+          <div className="auth-simple-alert auth-simple-alert-error flex items-start gap-2" role="alert">
+            <FiInfo className="w-4 h-4 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+            <p className="m-0">{errorMsg}</p>
           </div>
         ) : null}
 
@@ -205,18 +206,21 @@ function Signup() {
               placeholder="your.username"
             />
             {!errorMsg && usernameBlurred && username && !isValidUsername(username) ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Use at least 3 characters. Letters, numbers, dots, underscores, and hyphens are allowed.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>Use at least 3 characters. Letters, numbers, dots, underscores, and hyphens are allowed.</span>
               </p>
             ) : null}
             {!errorMsg && usernameStatus === 'taken' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                That username is already taken. Please choose another one.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>That username is already taken. Please choose another one.</span>
               </p>
             ) : null}
             {!errorMsg && usernameStatus === 'error' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Could not check username availability. Please try again.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>Could not check username availability. Please try again.</span>
               </p>
             ) : null}
           </div>
@@ -260,13 +264,15 @@ function Signup() {
               )}
             </div>
             {!errorMsg && emailStatus === 'invalid' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Enter a valid email address (e.g. you@gmail.com or you@yahoo.com).
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>Enter a valid email address (e.g. you@gmail.com or you@yahoo.com).</span>
               </p>
             ) : null}
             {!errorMsg && emailStatus === 'taken' ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                This email is already registered. Log in instead.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>This email is already registered. Log in instead.</span>
               </p>
             ) : null}
           </div>
@@ -301,8 +307,9 @@ function Signup() {
               </button>
             </div>
             {!errorMsg && passwordBlurred && password.length > 0 && password.length < 8 ? (
-              <p className="auth-simple-helper auth-simple-helper-error">
-                Password must be at least 8 characters.
+              <p className="auth-simple-helper auth-simple-helper-error flex items-start gap-1.5">
+                <FiInfo className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                <span>Password must be at least 8 characters.</span>
               </p>
             ) : null}
           </div>

@@ -9,7 +9,7 @@ const VARIANTS = {
     iconColor: 'text-red-600 dark:text-red-400',
     accentBar: 'from-red-600 to-red-400',
     button: 'bg-red-600 hover:bg-red-700 shadow-red-600/20',
-    messageColor: 'text-red-800 dark:text-red-200',
+    messageColor: 'text-[var(--color-text-primary)]',
   },
   info: {
     icon: FiInfo,
