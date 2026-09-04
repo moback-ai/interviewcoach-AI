@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
-import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX } from 'react-icons/fi';
+import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX, FiDownload } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
@@ -18,6 +18,7 @@ import {
 import { getSession } from '../lib/authClient';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 import { devLog, devWarn } from '../utils/devLog';
+import generateQuestionsPDF from '../utils/generateQuestionsPDF';
 
 const JD_FETCH_ERROR_MESSAGE =
   "We couldn't fetch this job description from the link. Please paste it manually or upload the JD file.";
@@ -76,6 +77,8 @@ function UploadPage() {
   const pendingDossierRetryRef = useRef(null);
   const lastGenerateAttemptRef = useRef(null);
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
+  const [lastGeneratedQuestions, setLastGeneratedQuestions] = useState(null);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   // New state for question generation settings
   const [easyQuestions, setEasyQuestions] = useState(1); // ✅ Changed from 2 to 1
@@ -93,7 +96,7 @@ function UploadPage() {
   const classifiedFromFileRef = useRef(false);
   const GENERATE_QUESTIONS_TIMEOUT_MS = 300000;
 
-  // Removed debug useEffect for question counts and canGenerateQuestions
+
 
   // Debounced function to classify technical role when fields change
   useEffect(() => {
@@ -1027,6 +1030,16 @@ function UploadPage() {
       questionSet: savedQuestionSet
     });
 
+    setLastGeneratedQuestions({
+      questions: questionsSaveResult.data,
+      questionSet: savedQuestionSet,
+      jobTitle,
+    });
+
+    const roleLabel = String(jobTitle || '')
+      .replace(/^job\s*title\s*:\s*/i, '')
+      .trim();
+
     setSuccessModal({
       isOpen: true,
       title: 'Upload & Generation Complete!',
@@ -1037,7 +1050,7 @@ function UploadPage() {
         `Question Set: ${savedQuestionSet}`,
         `Total Questions: ${uniqueQuestions.size}`,
         isSkillsMode ? 'Profile: Skills-based' : `Resume: ${resumeName || 'resume'}`,
-        `Job Title: ${jobTitle}`,
+        `Job Title: ${roleLabel || jobTitle}`,
         'Status: Ready for interview preparation',
       ],
     });
@@ -1247,6 +1260,35 @@ function UploadPage() {
     return null; // Button should be enabled
   };
 
+  const handleDownloadQuestionsPdf = async () => {
+    if (!lastGeneratedQuestions || isDownloadingPdf) return;
+    try {
+      setIsDownloadingPdf(true);
+      const normalizeLevel = (level) => {
+        const n = String(level || '').trim().toLowerCase();
+        if (['beginner', 'easy', 'basic'].includes(n)) return 'easy';
+        if (['intermediate', 'medium', 'mid', 'moderate', 'coding'].includes(n)) return 'medium';
+        if (['expert', 'hard', 'advanced', 'senior'].includes(n)) return 'hard';
+        return n || 'medium';
+      };
+      const questionsList = lastGeneratedQuestions.questions.map((q) => ({
+        question: q.question_text || q.question || '',
+        level: normalizeLevel(q.difficulty_category || q.difficulty_level || ''),
+        answer: q.expected_answer || q.answer || '',
+        missing: !String(q.expected_answer || q.answer || '').trim(),
+      }));
+      await generateQuestionsPDF({
+        questionsList,
+        questionSet: lastGeneratedQuestions.questionSet,
+        jobTitle: lastGeneratedQuestions.jobTitle || '',
+      });
+    } catch (error) {
+      console.error('Error downloading questions PDF:', error);
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   // Close success modal and go to the new question set (View Questions only)
   const handleNavigateToQuestions = () => {
     setSuccessModal({ isOpen: false, title: '', message: '', details: null });
@@ -1291,12 +1333,26 @@ function UploadPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const skillsSuggestions = SUGGESTED_SKILLS_POOL.filter((s) => {
-    const normalized = s.toLowerCase();
-    const input = skillsInputValue.trim().toLowerCase();
-    const alreadySelected = selectedSkills.some((existing) => existing.toLowerCase() === normalized);
-    return !alreadySelected && (!input || normalized.includes(input));
-  });
+  const skillsSuggestions = SUGGESTED_SKILLS_POOL
+    .filter((s) => {
+      const normalized = s.toLowerCase();
+      const input = skillsInputValue.trim().toLowerCase();
+      const alreadySelected = selectedSkills.some(
+        (existing) => existing.toLowerCase() === normalized
+      );
+      if (alreadySelected) return false;
+      if (!input) return true;
+      return normalized.startsWith(input) || normalized.includes(input);
+    })
+    .sort((a, b) => {
+      const input = skillsInputValue.trim().toLowerCase();
+      if (!input) return 0;
+      const aStarts = a.toLowerCase().startsWith(input);
+      const bStarts = b.toLowerCase().startsWith(input);
+      if (aStarts !== bStarts) return aStarts ? -1 : 1;
+      return a.localeCompare(b);
+    })
+    .slice(0, 8);
 
   const addSkill = (skill) => {
     const trimmed = (skill || '').trim();
@@ -1618,7 +1674,7 @@ function UploadPage() {
                       type="button"
                       onClick={handleManualJobDescAccept}
                       disabled={loading || parsingJobDesc}
-                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm hover:bg-[var(--color-primary-dark)] disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white shadow-md hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {parsingJobDesc && (
                         <FiLoader className="w-4 h-4 animate-spin" />
@@ -1654,7 +1710,7 @@ function UploadPage() {
                       type="button"
                       onClick={handleFetchJobFromUrl}
                       disabled={loading || jobUrlLoading}
-                      className="ml-auto inline-flex items-center justify-center gap-2 px-5 py-3 text-sm font-medium rounded-xl transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--color-primary)] focus:ring-offset-[var(--color-card)] bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white shadow-md hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {jobUrlLoading && (
                         <FiLoader className="w-4 h-4 animate-spin" />
@@ -1911,12 +1967,12 @@ function UploadPage() {
                           {/* Split Mode Slider */}
                           {splitMode ? (
                               <div className="mt-4 upload-panel-reveal">
-                                <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                                  <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                                <div className="p-4 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-200/50 dark:border-yellow-800/30 rounded-lg">
+                                  <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300 mb-3">
                                     Split Mode Settings
                                   </h4>
                                   <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                                    <div className="flex items-center justify-between text-sm font-medium text-yellow-700 dark:text-yellow-300">
                                       <span>Resume</span>
                                       <span>Job Description</span>
                                     </div>
@@ -1927,11 +1983,15 @@ function UploadPage() {
                                       value={splitResumePercentage}
                                       onChange={(e) => setSplitResumePercentage(parseInt(e.target.value))}
                                       disabled={loading}
-                                      className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                      className="w-full h-2 bg-yellow-200/50 dark:bg-yellow-700/30 rounded-lg appearance-none cursor-pointer slider-yellow"
                                     />
-                                    <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                                      <span>{splitResumePercentage}%</span>
-                                      <span>{100 - splitResumePercentage}%</span>
+                                    <div className="flex justify-between text-xs font-medium text-yellow-600 dark:text-yellow-400">
+                                      <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                        {splitResumePercentage}%
+                                      </span>
+                                      <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                        {100 - splitResumePercentage}%
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
@@ -1969,12 +2029,12 @@ function UploadPage() {
                           {/* Blend Mode Slider */}
                           {blendMode ? (
                               <div className="mt-4 upload-panel-reveal">
-                                <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
-                                  <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
+                                <div className="p-4 bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/50 dark:border-purple-800/30 rounded-lg">
+                                  <h4 className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-3">
                                     Blend Mode Settings
                                   </h4>
                                   <div className="space-y-3">
-                                    <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                                    <div className="flex items-center justify-between text-sm font-medium text-purple-700 dark:text-purple-300">
                                       <span>Resume Weight</span>
                                       <span>Job Description Weight</span>
                                     </div>
@@ -1985,11 +2045,15 @@ function UploadPage() {
                                       value={blendResumePercentage}
                                       onChange={(e) => setBlendResumePercentage(parseInt(e.target.value))}
                                       disabled={loading}
-                                      className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                      className="w-full h-2 bg-purple-200/50 dark:bg-purple-700/30 rounded-lg appearance-none cursor-pointer slider-purple"
                                     />
-                                    <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                                      <span>{blendResumePercentage}%</span>
-                                      <span>{100 - blendResumePercentage}%</span>
+                                    <div className="flex justify-between text-xs font-medium text-purple-600 dark:text-purple-400">
+                                      <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                        {blendResumePercentage}%
+                                      </span>
+                                      <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                        {100 - blendResumePercentage}%
+                                      </span>
                                     </div>
                                   </div>
                                 </div>
@@ -2055,6 +2119,13 @@ function UploadPage() {
           label: 'View Questions',
           onClick: handleNavigateToQuestions
         }}
+        secondaryAction={lastGeneratedQuestions ? {
+          label: isDownloadingPdf
+            ? <><FiLoader className="inline w-4 h-4 mr-1.5 animate-spin" />Preparing PDF...</>
+            : <><FiDownload className="inline w-4 h-4 mr-1.5" />Download PDF</>,
+          onClick: handleDownloadQuestionsPdf,
+          disabled: isDownloadingPdf,
+        } : undefined}
       />
       <NoticeModal
         isOpen={noticeModal.isOpen}

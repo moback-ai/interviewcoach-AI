@@ -234,7 +234,7 @@ const CodeEditor = ({
           onMount={handleEditorDidMount}
           options={{
             fontSize: fontSize,
-            minimap: { enabled: true },
+            minimap: { enabled: false },
             scrollBeyondLastLine: false,
             automaticLayout: true,
             wordWrap: 'on',
@@ -247,18 +247,18 @@ const CodeEditor = ({
             tabSize: 2,
             insertSpaces: true,
             detectIndentation: true,
-            formatOnPaste: true,
-            formatOnType: true,
+            formatOnPaste: false,
+            formatOnType: false,
             suggestOnTriggerCharacters: true,
             acceptSuggestionOnEnter: 'on',
             quickSuggestions: true,
-            parameterHints: { enabled: true },
-            hover: { enabled: true },
+            parameterHints: { enabled: false },
+            hover: { enabled: false },
             contextmenu: true,
-            mouseWheelZoom: true,
-            smoothScrolling: true,
+            mouseWheelZoom: false,
+            smoothScrolling: false,
             cursorBlinking: 'blink',
-            cursorSmoothCaretAnimation: true,
+            cursorSmoothCaretAnimation: 'off',
           }}
         />
       </div>
@@ -275,20 +275,6 @@ const CodeEditor = ({
         </div>
 
         <div className="flex items-center space-x-2 sm:space-x-3 w-full sm:w-auto">
-          {canRun && (
-          <button
-            onClick={handleRun}
-            disabled={isRunning || !canRun}
-            className="flex-1 sm:flex-none flex items-center justify-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium text-white bg-[var(--color-primary)] hover:bg-[var(--color-primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed rounded-md transition-colors"
-          >
-            {isRunning ? (
-              <StopIcon className="w-3 h-3 sm:w-4 sm:h-4" />
-            ) : (
-              <PlayIcon className="w-3 h-3 sm:w-4 sm:h-4" />
-            )}
-            <span>{isRunning ? 'Stop' : 'Run'}</span>
-          </button>
-          )}
           <button
             onClick={handleSave}
             disabled={!code || !code.trim() || isRunning} // ✅ ADD: Disable if empty or running

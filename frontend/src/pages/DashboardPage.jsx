@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings } from 'react-icons/fi';
+import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings, FiInfo } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -353,11 +353,11 @@ function DashboardPage() {
           coding: questionSettings.coding || 0
         },
         split: questionSettings.splitMode || false,
-        resume_pct: questionSettings.splitResumePercentage || 50,
-        jd_pct: 100 - (questionSettings.splitResumePercentage || 50),
+        resume_pct: questionSettings.splitResumePercentage ?? 50,
+        jd_pct: 100 - (questionSettings.splitResumePercentage ?? 50),
         blend: questionSettings.blendMode || false,
-        blend_pct_resume: questionSettings.blendResumePercentage || 50,
-        blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50),
+        blend_pct_resume: questionSettings.blendResumePercentage ?? 50,
+        blend_pct_jd: 100 - (questionSettings.blendResumePercentage ?? 50),
       };
 
       const response = await apiPost('/generate-questions', body, { timeoutMs: 300000 });
@@ -500,10 +500,10 @@ function DashboardPage() {
         <div className="w-full max-w-7xl">
           {/* Header */}
           <div className="text-center mb-6 sm:mb-8 md:mb-10">
-            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-2 sm:mb-3 md:mb-4">
+            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-extrabold tracking-tight text-[var(--color-text-primary)] mb-1.5 sm:mb-2">
               Interview Dashboard
             </h1>
-            <p className="text-xs sm:text-sm md:text-base lg:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-3 sm:mb-4">
+            <p className="text-sm sm:text-base text-[var(--color-text-primary)] max-w-xl mx-auto leading-relaxed px-2 mb-3 sm:mb-4">
               Manage your resume and job description pairings
             </p>
           </div>
@@ -749,10 +749,23 @@ function DashboardPage() {
                      >
                        <FiRefreshCw className={`mr-2 sm:mr-3 ${regeneratingQuestions.has(pairing.id) ? 'animate-spin' : ''}`} size={18} />
                        <span className="hidden sm:inline">
-                         {regeneratingQuestions.has(pairing.id) ? 'Regenerating...' : isGeneratingQuestions ? 'Generation in Progress...' : 'Regenerate Questions'}
+                         {regeneratingQuestions.has(pairing.id) ? 'Creating...' : isGeneratingQuestions ? 'Generation in Progress...' : 'Create New Question Set'}
                        </span>
                        <span className="sm:hidden">
-                         {regeneratingQuestions.has(pairing.id) ? 'Regenerating...' : isGeneratingQuestions ? 'In Progress...' : 'Regenerate'}
+                         {regeneratingQuestions.has(pairing.id) ? 'Creating...' : isGeneratingQuestions ? 'In Progress...' : 'New Set'}
+                       </span>
+                       <span
+                         className="relative group ml-2 inline-flex items-center justify-center"
+                         onClick={(e) => e.stopPropagation()}
+                         aria-label="Creates a new question set for this resume and job. Existing sets are kept."
+                       >
+                         <FiInfo size={14} className="opacity-90 hover:opacity-100" />
+                         <span
+                           role="tooltip"
+                           className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 sm:w-64 px-3 py-2 rounded-lg bg-[var(--color-card)] text-[var(--color-text-primary)] text-xs leading-snug border border-[var(--color-border)] shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 font-normal"
+                         >
+                           Creates a new question set for this resume and job. Existing sets are kept.
+                         </span>
                        </span>
                      </button>
                    </div>
@@ -1008,12 +1021,12 @@ function DashboardPage() {
                         transition={{ duration: 0.3 }}
                         className="mt-3"
                       >
-                        <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                          <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                        <div className="p-4 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-200/50 dark:border-yellow-800/30 rounded-lg">
+                          <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300 mb-3">
                             Split Mode Settings
                           </h4>
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <div className="flex items-center justify-between text-sm font-medium text-yellow-700 dark:text-yellow-300">
                               <span>Resume</span>
                               <span>Job Description</span>
                             </div>
@@ -1023,11 +1036,15 @@ function DashboardPage() {
                               max="100"
                               value={splitResumePercentage}
                               onChange={(e) => setSplitResumePercentage(parseInt(e.target.value))}
-                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                              className="w-full h-2 bg-yellow-200/50 dark:bg-yellow-700/30 rounded-lg appearance-none cursor-pointer slider-yellow"
                             />
-                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                              <span>{splitResumePercentage}%</span>
-                              <span>{100 - splitResumePercentage}%</span>
+                            <div className="flex justify-between text-xs font-medium text-yellow-600 dark:text-yellow-400">
+                              <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                {splitResumePercentage}%
+                              </span>
+                              <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                {100 - splitResumePercentage}%
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1072,12 +1089,12 @@ function DashboardPage() {
                         transition={{ duration: 0.3 }}
                         className="mt-3"
                       >
-                        <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
-                          <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
+                        <div className="p-4 bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/50 dark:border-purple-800/30 rounded-lg">
+                          <h4 className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-3">
                             Blend Mode Settings
                           </h4>
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <div className="flex items-center justify-between text-sm font-medium text-purple-700 dark:text-purple-300">
                               <span>Resume Weight</span>
                               <span>Job Description Weight</span>
                             </div>
@@ -1087,11 +1104,15 @@ function DashboardPage() {
                               max="100"
                               value={blendResumePercentage}
                               onChange={(e) => setBlendResumePercentage(parseInt(e.target.value))}
-                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                              className="w-full h-2 bg-purple-200/50 dark:bg-purple-700/30 rounded-lg appearance-none cursor-pointer slider-purple"
                             />
-                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                              <span>{blendResumePercentage}%</span>
-                              <span>{100 - blendResumePercentage}%</span>
+                            <div className="flex justify-between text-xs font-medium text-purple-600 dark:text-purple-400">
+                              <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                {blendResumePercentage}%
+                              </span>
+                              <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                {100 - blendResumePercentage}%
+                              </span>
                             </div>
                           </div>
                         </div>

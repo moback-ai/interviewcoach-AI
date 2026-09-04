@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline';
-import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye } from 'react-icons/fi'; // Add FiLoader, FiRefreshCw, FiEye
+import { FiSearch, FiFilter, FiCode, FiFileText, FiCopy, FiCreditCard, FiLoader, FiRefreshCw, FiEye, FiSettings, FiPlay, FiDownload, FiMessageSquare } from 'react-icons/fi';
+import { Sparkles } from 'lucide-react';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import LazySyntaxHighlightedCode from '../components/common/LazySyntaxHighlightedCode';
@@ -13,6 +15,7 @@ import { getBackendOrigin } from '../utils/apiConfig';
 import NoticeModal from '../components/common/NoticeModal';
 import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
+import generateQuestionsPDF from '../utils/generateQuestionsPDF';
 
 
 const getLevelColor = (level) => {
@@ -361,6 +364,19 @@ export default function QuestionsPage() {
   const [interviewQuota, setInterviewQuota] = useState(null);
   const [noticeModal, setNoticeModal] = useState({ isOpen: false, title: '', message: '', variant: 'error' });
   const [isGeneratingAnswers, setIsGeneratingAnswers] = useState(false);
+  const [pairingContext, setPairingContext] = useState(null);
+  const [showQuestionModal, setShowQuestionModal] = useState(false);
+  const [easyQuestions, setEasyQuestions] = useState(1);
+  const [mediumQuestions, setMediumQuestions] = useState(1);
+  const [hardQuestions, setHardQuestions] = useState(1);
+  const [codingQuestions, setCodingQuestions] = useState(0);
+  const [splitMode, setSplitMode] = useState(false);
+  const [blendMode, setBlendMode] = useState(false);
+  const [splitResumePercentage, setSplitResumePercentage] = useState(50);
+  const [blendResumePercentage, setBlendResumePercentage] = useState(50);
+  const [questionValidationError, setQuestionValidationError] = useState('');
+  const [isRegeneratingQuestions, setIsRegeneratingQuestions] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   
   // Prevent duplicate event tracking
   const hasTrackedQuestionsAccessed = useRef(false);
@@ -533,6 +549,14 @@ export default function QuestionsPage() {
       );
 
       if (currentPairing) {
+        setPairingContext({
+          resume_id: currentPairing.resume_id,
+          jd_id: currentPairing.jd_id,
+          resumeName: currentPairing.resumeName,
+          jobTitle: currentPairing.jobTitle,
+          jobDescription: currentPairing.jobDescription,
+          technical: currentPairing.technical === true,
+        });
         // Find the current question set
         const currentQuestionSetData = currentPairing.questionSets.find(qs => 
           qs.questionSetNumber === questionSet
@@ -542,11 +566,220 @@ export default function QuestionsPage() {
           setInterviewHistory(currentQuestionSetData.interviews || []);
           setHasExistingInterviews(currentQuestionSetData.total_attempts > 0);
           console.log('[DEBUG] Interview history for question set', questionSet, ':', currentQuestionSetData);
+        } else {
+          setInterviewHistory([]);
+          setHasExistingInterviews(false);
         }
+      } else {
+        setPairingContext(null);
+        setInterviewHistory([]);
+        setHasExistingInterviews(false);
       }
     } catch (error) {
       console.warn('Error fetching interview history:', error);
       // Don't fail the entire page load if this fails
+    }
+  };
+
+  const deriveQuestionSettingsFromCurrentSet = () => {
+    const counts = questions.reduce((acc, item) => {
+      const rawLevel = String(item.difficulty_category || item.difficulty_level || '').trim().toLowerCase();
+      if (rawLevel === 'coding') {
+        acc.coding += 1;
+        return acc;
+      }
+      const normalized = normalizeLevel(rawLevel);
+      if (normalized === 'easy') acc.easy += 1;
+      else if (normalized === 'hard') acc.hard += 1;
+      else acc.medium += 1;
+      return acc;
+    }, { easy: 0, medium: 0, hard: 0, coding: 0 });
+
+    setEasyQuestions(Math.max(1, counts.easy || 1));
+    setMediumQuestions(Math.max(1, counts.medium || 1));
+    setHardQuestions(Math.max(1, counts.hard || 1));
+    setCodingQuestions(pairingContext?.technical === true ? counts.coding : 0);
+    setSplitMode(false);
+    setBlendMode(false);
+    setSplitResumePercentage(50);
+    setBlendResumePercentage(50);
+    setQuestionValidationError('');
+  };
+
+  const canRegenerateQuestions = () => {
+    if (splitMode && blendMode) {
+      const totalQuestions = easyQuestions + mediumQuestions + hardQuestions;
+      return totalQuestions >= 6;
+    }
+    return true;
+  };
+
+  const getRegenerateDisabledReason = () => {
+    if (splitMode && blendMode) {
+      const totalQuestions = easyQuestions + mediumQuestions + hardQuestions;
+      if (totalQuestions < 6) {
+        return pairingContext?.technical === true
+          ? 'When both Split and Blend modes are enabled, you need at least 6 total questions, excluding coding questions.'
+          : 'When both Split and Blend modes are enabled, you need at least 6 total questions.';
+      }
+    }
+    return '';
+  };
+
+  const handleOpenRegenerateModal = () => {
+    deriveQuestionSettingsFromCurrentSet();
+    setShowQuestionModal(true);
+  };
+
+  const generateQuestionsFromBackend = async (questionSettings = {}) => {
+    if (!pairingContext || !currentResumeId || !currentJdId) {
+      throw new Error('Resume, job description, and question set are required to regenerate questions.');
+    }
+
+    const session = await getSession();
+    if (!session) {
+      throw new Error('No active session');
+    }
+
+    const excludeQuestionTexts = questions
+      .map((item) => (item.question_text || item.question || '').trim())
+      .filter(Boolean);
+
+    const backendOrigin = getBackendOrigin();
+    const response = await fetch(`${backendOrigin}/api/generate-questions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        resume_id: currentResumeId,
+        jd_id: currentJdId,
+        job_title: pairingContext.jobTitle,
+        job_description: pairingContext.jobDescription,
+        exclude_question_texts: excludeQuestionTexts,
+        question_counts: {
+          beginner: questionSettings.easy || 1,
+          medium: questionSettings.medium || 1,
+          hard: questionSettings.hard || 1,
+          coding: pairingContext.technical === true ? (questionSettings.coding || 0) : 0,
+        },
+        split: questionSettings.splitMode || false,
+        resume_pct: questionSettings.splitResumePercentage || 50,
+        jd_pct: 100 - (questionSettings.splitResumePercentage || 50),
+        blend: questionSettings.blendMode || false,
+        blend_pct_resume: questionSettings.blendResumePercentage || 50,
+        blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50),
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      const err = new Error(result.message || 'Failed to generate questions');
+      if (result.code) err.code = result.code;
+      throw err;
+    }
+    return result;
+  };
+
+  const replaceQuestionsInDatabase = async (generatedQuestions) => {
+    const session = await getSession();
+    if (!session) {
+      throw new Error('No active session');
+    }
+
+    const backendOrigin = getBackendOrigin();
+    const response = await fetch(`${backendOrigin}/functions/v1/questions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        resume_id: currentResumeId,
+        jd_id: currentJdId,
+        question_set: currentQuestionSet,
+        replace: true,
+        questions: generatedQuestions,
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.message || 'Failed to save regenerated questions');
+    }
+    return result;
+  };
+
+  const handleConfirmRegenerateQuestions = async () => {
+    if (!canRegenerateQuestions()) {
+      setQuestionValidationError(getRegenerateDisabledReason());
+      return;
+    }
+
+    setQuestionValidationError('');
+    setShowQuestionModal(false);
+    setIsRegeneratingQuestions(true);
+
+    try {
+      const questionsResult = await generateQuestionsFromBackend({
+        easy: easyQuestions,
+        medium: mediumQuestions,
+        hard: hardQuestions,
+        coding: codingQuestions,
+        splitMode,
+        blendMode,
+        splitResumePercentage,
+        blendResumePercentage,
+      });
+
+      const questionsSaveResult = await replaceQuestionsInDatabase(questionsResult.data?.questions || []);
+      const savedQuestions = questionsSaveResult.data || [];
+      const uniqueQuestions = savedQuestions.reduce((acc, item) => {
+        const questionText = item.question_text || item.question;
+        if (questionText) {
+          acc.add(questionText);
+        }
+        return acc;
+      }, new Set());
+
+      setQuestions(savedQuestions);
+      setExpandedQuestions(new Set());
+      setSearchTerm('');
+      setFilterLevel('all');
+      setNoticeModal({
+        isOpen: true,
+        title: 'Questions regenerated',
+        message: `Set ${currentQuestionSet} was updated with ${uniqueQuestions.size || savedQuestions.length} refreshed question${(uniqueQuestions.size || savedQuestions.length) === 1 ? '' : 's'}.`,
+        variant: 'info',
+        primaryLabel: 'OK',
+      });
+
+      trackEvents.questionsRegenerated({
+        resume_id: currentResumeId,
+        jd_id: currentJdId,
+        question_set: currentQuestionSet,
+        regeneration_timestamp: new Date().toISOString(),
+        questions_count: savedQuestions.length,
+      });
+    } catch (error) {
+      console.error('Error regenerating questions:', error);
+      if (isAuthErrorMessage(error.message)) {
+        redirectToExpiredLogin();
+        return;
+      }
+      const isDossierMissing = error?.code === 'DOSSIER_MISSING';
+      setNoticeModal({
+        isOpen: true,
+        title: isDossierMissing ? 'Interview profile missing' : 'Could not regenerate questions',
+        message: isDossierMissing
+          ? 'No saved interview dossier was found for this pair. Create questions again from Upload.'
+          : (error.message || 'Could not regenerate questions.'),
+        variant: 'error',
+        primaryLabel: 'OK',
+      });
+    } finally {
+      setIsRegeneratingQuestions(false);
     }
   };
 
@@ -598,6 +831,29 @@ export default function QuestionsPage() {
 
   const sampleAnswersMissing = displayQuestions.some((q) => q.missing);
 
+  const handleDownloadQuestionsPdf = async () => {
+    if (!displayQuestions.length || !currentQuestionSet || isDownloadingPdf) return;
+
+    try {
+      setIsDownloadingPdf(true);
+      await generateQuestionsPDF({
+        questionsList: sortQuestionsByDifficulty(displayQuestions),
+        questionSet: currentQuestionSet,
+        jobTitle: pairingContext?.jobTitle || '',
+      });
+    } catch (error) {
+      console.error('Error downloading questions PDF:', error);
+      setNoticeModal({
+        isOpen: true,
+        title: 'Download failed',
+        message: 'Could not download the questions PDF. Please try again.',
+        variant: 'error',
+      });
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
+
   const closeNoticeModal = () => {
     setNoticeModal({
       isOpen: false,
@@ -624,7 +880,7 @@ export default function QuestionsPage() {
       return {
         title: 'Generation took too long',
         message:
-          'Sample answer generation timed out before finishing. Your questions are unchanged — retry when you are ready.',
+          'Sample answer generation timed out before finishing. Retry generates only questions that still need an answer.',
         retryable: true,
       };
     }
@@ -638,7 +894,7 @@ export default function QuestionsPage() {
       const countLabel = countMatch ? `${countMatch[1]} question(s)` : 'one or more questions';
       return {
         title: 'Sample answers incomplete',
-        message: `We couldn't finish sample answers for ${countLabel}. This usually clears on a second try — nothing on your question set was lost.`,
+        message: `We couldn't finish sample answers for ${countLabel}. Retry generates only the remaining questions — answers that already succeeded are kept.`,
         retryable: true,
       };
     }
@@ -707,6 +963,16 @@ export default function QuestionsPage() {
         } catch {
           errorData = {};
         }
+        if (Array.isArray(errorData.data?.questions) && errorData.data.questions.length) {
+          setQuestions(errorData.data.questions);
+        }
+        const savedCount = Number(errorData.data?.generated_count || 0);
+        const missingCount = Number(errorData.data?.missing_count || 0);
+        if (savedCount > 0 && missingCount > 0) {
+          throw new Error(
+            `LLM did not return complete sample answers for ${missingCount} question(s). Please try again.`
+          );
+        }
         throw new Error(errorData.message || `Failed to generate sample answers: ${response.status}`);
       }
 
@@ -716,14 +982,47 @@ export default function QuestionsPage() {
       }
 
       const savedQuestions = result.data?.questions || [];
-      const uniqueQuestionCount = savedQuestions.length;
+      const missingCount = Number(result.data?.missing_count || 0);
+      const generatedCount = Number(result.data?.generated_count ?? 0);
 
-      setQuestions(savedQuestions);
-      setExpandedQuestions(new Set());
+      if (savedQuestions.length) {
+        setQuestions(savedQuestions);
+        setExpandedQuestions(new Set());
+      }
+
+      if (result.partial || missingCount > 0) {
+        const remainingLabel = `${missingCount} question${missingCount === 1 ? '' : 's'}`;
+        setNoticeModal({
+          isOpen: true,
+          title: 'Sample answers incomplete',
+          message: generatedCount > 0
+            ? `Saved sample answers for ${generatedCount} question${generatedCount === 1 ? '' : 's'}. Retry will generate only the remaining ${remainingLabel}.`
+            : `We couldn't finish sample answers for ${remainingLabel}. Retry generates only those that are still missing.`,
+          variant: 'warning',
+          primaryLabel: 'Retry',
+          onPrimary: () => {
+            closeNoticeModal();
+            handleGenerateSampleAnswers();
+          },
+          secondaryLabel: 'Dismiss',
+          onSecondary: closeNoticeModal,
+        });
+        return;
+      }
+
+      const uniqueQuestionCount = savedQuestions.length;
+      let readyMessage;
+      if (result.data?.already_complete) {
+        readyMessage = 'All questions already have sample answers.';
+      } else if (generatedCount > 0 && generatedCount < uniqueQuestionCount) {
+        readyMessage = `Filled in sample answers for the remaining ${generatedCount} question${generatedCount === 1 ? '' : 's'}.`;
+      } else {
+        readyMessage = `Generated sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`;
+      }
       setNoticeModal({
         isOpen: true,
         title: 'Sample answers ready',
-        message: `Generated sample answers for ${uniqueQuestionCount || 'your'} question${uniqueQuestionCount === 1 ? '' : 's'}.`,
+        message: readyMessage,
         variant: 'info',
         primaryLabel: 'OK',
       });
@@ -890,17 +1189,21 @@ export default function QuestionsPage() {
     return 'Schedule Interview';
   })();
 
-  const quotaBadgeText = (() => {
-    if (!interviewQuota) return null;
-    if (interviewQuota.free_remaining > 0) {
-      const n = interviewQuota.free_remaining;
-      return `${n} free interview${n !== 1 ? 's' : ''} remaining`;
-    }
-    if (interviewQuota.payment_required) {
-      return 'Payment required for next interview';
-    }
-    return null;
-  })();
+  const activeInterview = interviewHistory.find(
+    (interview) =>
+      interview.status === 'STARTED' ||
+      interview.status === 'ACTIVE' ||
+      interview.status === 'in_progress'
+  );
+
+  const hasCompletedInterview = interviewHistory.some(
+    (interview) => interview.status === 'completed' || interview.status === 'ENDED'
+  );
+
+  const handleResumeInterview = () => {
+    if (!activeInterview?.id) return;
+    window.location.href = `/interview?interview_id=${activeInterview.id}`;
+  };
   
   return (
     <>
@@ -913,54 +1216,94 @@ export default function QuestionsPage() {
             transition={{ duration: 0.3 }}
             className="text-center mb-8 sm:mb-10"
           >
-            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-3 sm:mb-4">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-extrabold tracking-tight text-[var(--color-text-primary)] mb-3 sm:mb-4">
               Interview Questions & Answers
             </h1>
-            <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-4">
+            <p className="text-sm sm:text-base md:text-lg text-[var(--color-text-primary)]/80 max-w-2xl mx-auto leading-relaxed px-2 mb-4">
               Review generated questions for your interview preparation. Sample answers can be generated on demand.
             </p>
-            {quotaBadgeText && (
-              <p className="text-xs sm:text-sm font-medium text-[var(--color-primary)] mb-2">
-                {quotaBadgeText}
-              </p>
-            )}
-            
 
-            {/* Question Set Display */}
+            {/* Question set toolbar */}
             {currentQuestionSet && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.3, delay: 0.3 }}
-                className="flex items-center justify-center gap-4 mt-6"
+                className="flex flex-col items-center mt-4 max-w-3xl mx-auto w-full"
               >
-                <div className="flex items-center gap-2 text-sm sm:text-base text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] px-4 py-2 rounded-full border border-[var(--color-border)]">
-                  <div className="w-2 h-2 bg-[var(--color-primary)] rounded-full animate-pulse"></div>
-                  <span className="font-medium">Question Set {currentQuestionSet}</span>
+                {/* Info row */}
+                <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-sm sm:text-base text-[var(--color-text-secondary)]">
+                  <span className="inline-flex items-center gap-2">
+                    <FiFileText className="w-4 h-4 text-[var(--color-text-primary)] shrink-0" aria-hidden />
+                    <span className="font-medium text-[var(--color-text-primary)]">
+                      Question Set {currentQuestionSet}
+                    </span>
+                  </span>
+                  <span className="hidden sm:block h-4 w-px bg-[var(--color-text-primary)]/40" aria-hidden />
+                  <span className="inline-flex items-center gap-2">
+                    <FiMessageSquare className="w-4 h-4 text-[var(--color-text-primary)] shrink-0" aria-hidden />
+                    <span className="font-medium text-[var(--color-text-primary)]">
+                      {displayQuestions.length} Question{displayQuestions.length !== 1 ? 's' : ''}
+                    </span>
+                  </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-card)] px-3 py-1 rounded-full border border-[var(--color-border)]">
-                  <span className="font-medium">{displayQuestions.length}</span>
-                  <span className="opacity-75">questions</span>
-                </div>
-                {!loading && !error && sampleAnswersMissing && (
-                  <button
-                    type="button"
-                    onClick={handleGenerateSampleAnswers}
-                    disabled={isGeneratingAnswers}
-                    className="inline-flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-full bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
-                  >
-                    {isGeneratingAnswers ? (
-                      <>
-                        <FiLoader className="w-4 h-4 animate-spin" />
-                        Generating answers...
-                      </>
-                    ) : (
-                      <>
-                        <FiRefreshCw className="w-4 h-4" />
-                        Generate Sample Answers
-                      </>
-                    )}
-                  </button>
+
+                {!loading && !error && (
+                  <>
+                    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 w-full mt-4">
+                      {displayQuestions.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleDownloadQuestionsPdf}
+                          disabled={isDownloadingPdf}
+                          className="inline-flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] bg-[var(--color-input-bg)] hover:bg-[var(--color-card)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          {isDownloadingPdf ? (
+                            <>
+                              <FiLoader className="w-4 h-4 animate-spin" />
+                              Preparing PDF...
+                            </>
+                          ) : (
+                            <>
+                              <FiDownload className="w-4 h-4" />
+                              Download PDF
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {!hasExistingInterviews && pairingContext && (
+                        <button
+                          type="button"
+                          onClick={handleOpenRegenerateModal}
+                          disabled={isRegeneratingQuestions}
+                          className="inline-flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-2.5 rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] bg-[var(--color-input-bg)] hover:bg-[var(--color-card)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+                        >
+                          <FiRefreshCw className={`w-4 h-4 ${isRegeneratingQuestions ? 'animate-spin' : ''}`} />
+                          {isRegeneratingQuestions ? 'Regenerating...' : 'Regenerate Questions'}
+                        </button>
+                      )}
+                      {sampleAnswersMissing && (
+                        <button
+                          type="button"
+                          onClick={handleGenerateSampleAnswers}
+                          disabled={isGeneratingAnswers}
+                          className="inline-flex items-center gap-2 text-sm font-medium px-4 sm:px-5 py-2.5 rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shadow-sm"
+                        >
+                          {isGeneratingAnswers ? (
+                            <>
+                              <FiLoader className="w-4 h-4 animate-spin" />
+                              Generating answers...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" aria-hidden />
+                              Generate Sample Answers
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </>
                 )}
               </motion.div>
             )}
@@ -1162,10 +1505,26 @@ export default function QuestionsPage() {
             transition={{ duration: 0.3, delay: 0.4 }}
             className="flex flex-col sm:flex-row items-center justify-center gap-4 mt-8 sm:mt-12"
           >
-            {/* Show different buttons based on interview status */}
-            {hasExistingInterviews ? (
+            {/* Match Dashboard: Resume while in progress; Retake only after a completed interview */}
+            {activeInterview ? (
               <>
-                {/* Retake Interview Button */}
+                <button
+                  onClick={handleResumeInterview}
+                  className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-500 text-white shadow-lg hover:shadow-xl"
+                >
+                  <FiPlay className="w-4 h-4 sm:w-5 sm:h-5" />
+                  Resume Interview
+                </button>
+                <button
+                  onClick={() => window.location.href = '/dashboard'}
+                  className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-[var(--color-card)] hover:bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] shadow-lg hover:shadow-xl"
+                >
+                  <FiEye className="w-4 h-4 sm:w-5 sm:h-5" />
+                  View Dashboard
+                </button>
+              </>
+            ) : hasCompletedInterview ? (
+              <>
                 <button
                   onClick={handleRetakeInterview}
                   disabled={isPaymentLoading}
@@ -1176,8 +1535,6 @@ export default function QuestionsPage() {
                   <FiRefreshCw className={`w-4 h-4 sm:w-5 sm:h-5 ${isPaymentLoading ? 'animate-spin' : ''}`} />
                   {isPaymentLoading ? 'Processing...' : 'Retake Interview'}
                 </button>
-                
-                {/* View Dashboard Button */}
                 <button
                   onClick={() => window.location.href = '/dashboard'}
                   className="inline-flex items-center gap-2 px-6 py-3 sm:px-8 sm:py-4 text-sm sm:text-base font-semibold rounded-xl sm:rounded-2xl transition-all duration-200 transform hover:scale-105 bg-[var(--color-card)] hover:bg-[var(--color-input-bg)] text-[var(--color-text-primary)] border border-[var(--color-border)] shadow-lg hover:shadow-xl"
@@ -1187,7 +1544,6 @@ export default function QuestionsPage() {
                 </button>
               </>
             ) : (
-              /* Schedule Interview Button - Only show when no interviews exist */
               <button
                 onClick={handlePayment}
                 disabled={isPaymentLoading}
@@ -1204,6 +1560,274 @@ export default function QuestionsPage() {
           </motion.div>
         </div>
       </PageWavesShell>
+      {showQuestionModal && pairingContext && typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-[var(--color-card)] rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-[var(--color-border)] shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                  <FiSettings className="w-5 h-5" style={{ color: 'var(--color-primary)' }} />
+                  <h2 className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+                    Regenerate Questions
+                  </h2>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowQuestionModal(false);
+                    setQuestionValidationError('');
+                  }}
+                  className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors p-1 rounded-lg hover:bg-[var(--color-hover)]"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold" style={{ color: 'var(--color-text-primary)' }}>
+                      Question Difficulty Distribution
+                    </h3>
+                    <span className="text-sm font-medium px-3 py-1 rounded-full bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
+                      Total: {easyQuestions + mediumQuestions + hardQuestions + codingQuestions} questions
+                    </span>
+                  </div>
+
+                  <div className={`grid ${pairingContext.technical === true ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-4' : 'grid-cols-1 md:grid-cols-3'} gap-4`}>
+                    <div className="bg-green-50/50 dark:bg-green-900/10 border border-green-200/50 dark:border-green-800/30 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium text-green-700 dark:text-green-300">
+                          Easy Questions
+                        </label>
+                        <span className="text-xs text-green-600 dark:text-green-400 bg-green-100/70 dark:bg-green-800/30 px-2 py-1 rounded-full">
+                          {easyQuestions}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1"
+                        max="5"
+                        value={easyQuestions}
+                        onChange={(e) => setEasyQuestions(parseInt(e.target.value, 10))}
+                        className="w-full h-2 bg-green-200/50 dark:bg-green-700/30 rounded-lg appearance-none cursor-pointer slider-green"
+                      />
+                    </div>
+
+                    <div className="bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-200/50 dark:border-yellow-800/30 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
+                          Medium Questions
+                        </label>
+                        <span className="text-xs text-yellow-600 dark:text-yellow-400 bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                          {mediumQuestions}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1"
+                        max="5"
+                        value={mediumQuestions}
+                        onChange={(e) => setMediumQuestions(parseInt(e.target.value, 10))}
+                        className="w-full h-2 bg-yellow-200/50 dark:bg-yellow-700/30 rounded-lg appearance-none cursor-pointer slider-yellow"
+                      />
+                    </div>
+
+                    <div className="bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-sm font-medium text-red-700 dark:text-red-300">
+                          Hard Questions
+                        </label>
+                        <span className="text-xs text-red-600 dark:text-red-400 bg-red-100/70 dark:bg-red-800/30 px-2 py-1 rounded-full">
+                          {hardQuestions}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="1"
+                        max="5"
+                        value={hardQuestions}
+                        onChange={(e) => setHardQuestions(parseInt(e.target.value, 10))}
+                        className="w-full h-2 bg-red-200/50 dark:bg-red-700/30 rounded-lg appearance-none cursor-pointer slider-red"
+                      />
+                    </div>
+
+                    {pairingContext.technical === true && (
+                      <div className="bg-blue-50/50 dark:bg-blue-900/10 border border-blue-200/50 dark:border-blue-800/30 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                            Coding Questions
+                          </label>
+                          <span className="text-xs text-blue-600 dark:text-blue-400 bg-blue-100/70 dark:bg-blue-800/30 px-2 py-1 rounded-full">
+                            {codingQuestions}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="5"
+                          value={codingQuestions}
+                          onChange={(e) => setCodingQuestions(parseInt(e.target.value, 10))}
+                          className="w-full h-2 bg-blue-200/50 dark:bg-blue-700/30 rounded-lg appearance-none cursor-pointer slider-blue"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {questionValidationError && (
+                    <div className="mt-4 p-3 bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg">
+                      <p className="text-sm text-red-700 dark:text-red-300">
+                        {questionValidationError}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <label className="text-sm font-medium text-[var(--color-text-primary)]">
+                          Split Mode
+                        </label>
+                        <p className="text-xs text-[var(--color-text-secondary)]">
+                          Generate separate questions from resume vs job description
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSplitMode(!splitMode)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          splitMode ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-gray-700'
+                        } cursor-pointer`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            splitMode ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <AnimatePresence>
+                      {splitMode && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.3 }}
+                          className="mt-3"
+                        >
+                          <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                              <span>Resume</span>
+                              <span>Job Description</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={splitResumePercentage}
+                              onChange={(e) => setSplitResumePercentage(parseInt(e.target.value, 10))}
+                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider mt-3"
+                            />
+                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mt-2">
+                              <span>{splitResumePercentage}%</span>
+                              <span>{100 - splitResumePercentage}%</span>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <label className="text-sm font-medium text-[var(--color-text-primary)]">
+                          Blend Mode
+                        </label>
+                        <p className="text-xs text-[var(--color-text-secondary)]">
+                          Generate questions that blend resume and job description content
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setBlendMode(!blendMode)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          blendMode ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-gray-700'
+                        } cursor-pointer`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            blendMode ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <AnimatePresence>
+                      {blendMode && (
+                        <motion.div
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          transition={{ duration: 0.3 }}
+                          className="mt-3"
+                        >
+                          <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                              <span>Resume Weight</span>
+                              <span>Job Description Weight</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={blendResumePercentage}
+                              onChange={(e) => setBlendResumePercentage(parseInt(e.target.value, 10))}
+                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider mt-3"
+                            />
+                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mt-2">
+                              <span>{blendResumePercentage}%</span>
+                              <span>{100 - blendResumePercentage}%</span>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => {
+                    setShowQuestionModal(false);
+                    setQuestionValidationError('');
+                  }}
+                  className="flex-1 py-3 px-4 rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors font-semibold"
+                  style={{ color: 'var(--color-text-primary)' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmRegenerateQuestions}
+                  disabled={isRegeneratingQuestions || !canRegenerateQuestions()}
+                  title={!canRegenerateQuestions() ? getRegenerateDisabledReason() : ''}
+                  className="flex-1 py-3 px-4 rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-semibold"
+                >
+                  {isRegeneratingQuestions ? 'Regenerating...' : 'Update Current Set'}
+                </button>
+              </div>
+            </motion.div>
+          </div>,
+          document.body
+        )}
       <NoticeModal
         isOpen={noticeModal.isOpen}
         onClose={closeNoticeModal}

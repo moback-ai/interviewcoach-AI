@@ -2,6 +2,54 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useSupportBot } from '../hooks/useSupportBot';
 import { useTheme } from '../hooks/useTheme';
 
+/** Render light markdown inline: **bold**, *italic*, `code` — no extra dependency. */
+function renderInlineMarkdown(text) {
+  if (text == null || text === '') return null;
+  const nodes = [];
+  const tokenRe = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = tokenRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code
+          key={`md-${key++}`}
+          className="px-1 py-0.5 rounded bg-black/5 dark:bg-white/10 text-[0.9em] font-mono"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(
+        <strong key={`md-${key++}`} className="font-semibold">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(
+        <em key={`md-${key++}`} className="italic">
+          {token.slice(1, -1)}
+        </em>
+      );
+    } else {
+      nodes.push(token);
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes.length ? nodes : text;
+}
+
 const SupportBot = () => {
   const { 
     conversation, 
@@ -173,7 +221,11 @@ const SupportBot = () => {
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap leading-relaxed">{msg.message}</p>
+                        <p className="whitespace-pre-wrap leading-relaxed">
+                          {msg.type === 'bot'
+                            ? renderInlineMarkdown(msg.message)
+                            : msg.message}
+                        </p>
                         {msg.retrievedSections && msg.retrievedSections.length > 0 && (
                           <div className="mt-2 pt-2 border-t border-gray-300">
                             <p className="text-xs text-gray-500">

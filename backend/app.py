@@ -58,7 +58,7 @@ from common.auth import (
     hash_password,
     check_password,
 )
-from common.db import query_one, query_all, execute, execute_many
+from common.db import query_one, query_all, execute, execute_many, run_transaction
 from common.content_hash import (
     hash_resume_bytes,
     hash_skills_list,
@@ -1300,7 +1300,23 @@ def health_check():
 
 @app.route('/api/service-hours', methods=['GET'])
 def service_hours():
-    return jsonify({"success": True, "data": service_hours_status()}), 200
+    data = service_hours_status()
+    seconds_until_next = data.get("seconds_until_next_transition", 300)
+    max_age = min(300, max(1, int(seconds_until_next)))
+
+    etag_source = f"{data.get('is_open')}:{data.get('start')}:{data.get('end')}:{data.get('timezone')}"
+    etag = f'"{hashlib.md5(etag_source.encode("utf-8")).hexdigest()}"'
+
+    if request.headers.get('If-None-Match') == etag:
+        res = make_response('', 304)
+        res.headers['Cache-Control'] = f'public, max-age={max_age}, stale-while-revalidate=60'
+        res.headers['ETag'] = etag
+        return res
+
+    res = jsonify({"success": True, "data": data})
+    res.headers['Cache-Control'] = f'public, max-age={max_age}, stale-while-revalidate=60'
+    res.headers['ETag'] = etag
+    return res, 200
 
 
 EMPTY_UPLOAD_READABLE_MESSAGE = (
@@ -1767,6 +1783,7 @@ def verify_email():
 
 @app.route('/api/me', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_me():
     user = query_one(
         "SELECT {columns} FROM users WHERE id = %s".format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
@@ -1808,6 +1825,7 @@ def get_my_avatar():
 
 @app.route('/api/upload-resume', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def upload_resume():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1845,6 +1863,7 @@ def upload_resume():
 
 @app.route('/api/job-descriptions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def create_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -1865,6 +1884,7 @@ def create_job_description():
 
 @app.route('/api/job-descriptions', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_job_descriptions():
     rows = query_all("SELECT * FROM job_descriptions WHERE user_id=%s ORDER BY created_at DESC",
                      (request.user['id'],))
@@ -1873,6 +1893,7 @@ def get_job_descriptions():
 
 @app.route('/api/check-resume-jd-pair', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def check_resume_jd_pair():
     """
     Detect existing resume+JD pair for this user via content hash (+ filename gate).
@@ -2028,24 +2049,28 @@ def check_resume_jd_pair():
 
 @app.route('/api/interview-quota', methods=['GET', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interview_quota():
     return interview_quota_handler()
 
 
 @app.route('/api/interviews/start', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def start_interview():
     return start_interview_handler()
 
 
 @app.route('/api/interviews', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def create_interview():
     return start_interview_handler()
 
 
 @app.route('/api/interviews', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interviews():
     rows = query_all("SELECT * FROM interviews WHERE user_id=%s ORDER BY scheduled_at DESC",
                      (request.user['id'],))
@@ -2054,6 +2079,7 @@ def get_interviews():
 
 @app.route('/api/interviews/<interview_id>', methods=['PUT', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def update_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2107,6 +2133,7 @@ def interview_timer_pause(interview_id):
 
 @app.route('/api/interview-data', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interview_data():
     interview_id = request.args.get('interview_id')
     interview = query_one(
@@ -2132,6 +2159,7 @@ def get_interview_data():
 
 @app.route('/api/questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def save_questions():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2156,6 +2184,7 @@ def save_questions():
 
 @app.route('/api/questions/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_questions(interview_id):
     rows = query_all(f"SELECT * FROM questions WHERE interview_id=%s ORDER BY {QUESTION_ORDER_SQL}", (interview_id,))
     return jsonify({"success": True, "data": [dict(r) for r in rows]})
@@ -2166,6 +2195,7 @@ def get_questions(interview_id):
 
 @app.route('/api/transcripts', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=30, window_seconds=60)
 def save_transcript():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2181,6 +2211,7 @@ def save_transcript():
 
 @app.route('/api/transcripts/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_transcript(interview_id):
     row = query_one("SELECT * FROM transcripts WHERE interview_id=%s", (interview_id,))
     if not row:
@@ -2193,6 +2224,7 @@ def get_transcript(interview_id):
 
 @app.route('/api/interview-feedback', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def save_feedback():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2211,6 +2243,7 @@ def save_feedback():
 
 @app.route('/api/interview-feedback/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_feedback(interview_id):
     row = query_one(
         """
@@ -2231,6 +2264,7 @@ def get_feedback(interview_id):
 
 @app.route('/api/chat-history/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_chat_history(interview_id):
     rows = query_all(
         """
@@ -2255,6 +2289,7 @@ def get_chat_history(interview_id):
 
 @app.route('/api/dashboard', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def dashboard():
     user_id = request.user['id']
     page  = max(1, int(request.args.get('page', 1)))
@@ -2296,6 +2331,7 @@ def dashboard():
 
 @app.route('/api/parse-job-description', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def parse_job_description():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2365,6 +2401,7 @@ def parse_job_description():
 
 @app.route('/api/extract-job-from-url', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def extract_job_from_url_api():
     """Fetch a job posting URL and extract job title + description."""
     safe_error_message = (
@@ -2455,6 +2492,7 @@ def extract_job_from_url_api():
 
 @app.route('/api/classify-technical-role', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def classify_technical_role():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2658,6 +2696,7 @@ def _pipeline_failure_response(result, ollama_diagnostics):
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def generate_questions():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -2729,6 +2768,16 @@ def generate_questions():
                 f"resume_id={resume_id} jd_id={jd_id} (dossier-only, no pre-load)"
             )
 
+        raw_exclude = data.get("exclude_question_texts") or []
+        exclude_questions = []
+        if isinstance(raw_exclude, list):
+            for item in raw_exclude:
+                text = str(item or "").strip()
+                if text:
+                    exclude_questions.append(text)
+        if exclude_questions:
+            print(f"[INFO] generate-questions excluding {len(exclude_questions)} prior question(s)")
+
         question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         pipeline_kwargs = {
@@ -2749,6 +2798,7 @@ def generate_questions():
             "jd_id": jd_id,
             "user_id": request.user["id"],
             "resume_text": None,
+            "exclude_questions": exclude_questions or None,
         }
 
         temp_resume = None
@@ -2834,11 +2884,79 @@ def generate_questions():
         return jsonify({"success": False, "message": str(e)}), 500
 
 
+def _load_serialized_question_set(resume_id, jd_id, question_set):
+    rows = query_all(
+        """
+        SELECT * FROM questions
+        WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+        ORDER BY created_at ASC
+        """,
+        (resume_id, jd_id, question_set),
+    )
+    serialized = [_serialize_question(row) for row in rows]
+    serialized.sort(key=_question_sort_key)
+    return serialized
+
+
+def _persist_generated_sample_answers(generated, resume_id, jd_id, question_set):
+    """UPDATE expected_answer for generated rows. Safe to call incrementally."""
+    saved = []
+    for question in generated or []:
+        qid = question.get("id")
+        answer = question.get("expected_answer") or question.get("answer") or ""
+        q_text = (question.get("question_text") or question.get("question") or "").strip()
+        level = normalize_question_difficulty(
+            question.get("difficulty_category") or question.get("difficulty_level")
+        )
+        if not qid or not str(answer).strip():
+            continue
+        row = execute(
+            """
+            UPDATE questions
+            SET expected_answer=%s
+            WHERE id=%s AND resume_id=%s AND jd_id=%s AND question_set=%s
+            RETURNING *
+            """,
+            (answer, qid, resume_id, jd_id, question_set),
+        )
+        if not row and q_text:
+            row = execute(
+                """
+                UPDATE questions
+                SET expected_answer=%s
+                WHERE id = (
+                    SELECT id FROM questions
+                    WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                      AND lower(question_text)=lower(%s)
+                      AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                )
+                RETURNING *
+                """,
+                (answer, resume_id, jd_id, question_set, q_text, level),
+            )
+        if row:
+            saved.append(_serialize_question(row))
+            execute(
+                """
+                DELETE FROM questions
+                WHERE resume_id=%s AND jd_id=%s AND question_set=%s
+                  AND lower(question_text)=lower(%s)
+                  AND lower(coalesce(difficulty_level, '')) = lower(%s)
+                  AND id <> %s
+                """,
+                (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
+            )
+    return saved
+
+
 @app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def generate_answers_for_question_set():
-    """Generate one best sample answer per question (dossier-backed batch)."""
+    """Generate sample answers for questions that still lack a usable answer."""
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
     try:
@@ -2888,6 +3006,7 @@ def generate_answers_for_question_set():
         from INTERVIEW.dossier_store import load_dossier
         from INTERVIEW.answer_generation import (
             _dedupe_question_rows,
+            rows_needing_answers,
             run_generate_answers_for_question_set,
         )
 
@@ -2910,15 +3029,58 @@ def generate_answers_for_question_set():
                 "message": "No questions found to generate answers for",
             }), 404
 
+        rows_to_generate = rows_needing_answers(existing_rows)
+        if not rows_to_generate:
+            serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
+            return jsonify({
+                "success": True,
+                "partial": False,
+                "data": {
+                    "questions": serialized,
+                    "questions_count": len(serialized),
+                    "generated_count": 0,
+                    "missing_count": 0,
+                    "already_complete": True,
+                },
+                "debug": {"dossier_cache": dossier_cache},
+            })
+
+        print(
+            f"[INFO] Sample answers needed: {len(rows_to_generate)}/{len(unique_rows)} "
+            f"(skipping {len(unique_rows) - len(rows_to_generate)} already filled)"
+        )
+
+        persisted_ids = set()
+
+        def persist_answers_incrementally(questions):
+            fresh = [
+                q for q in (questions or [])
+                if str(q.get("id") or "") not in persisted_ids
+            ]
+            if not fresh:
+                return
+            saved_now = _persist_generated_sample_answers(
+                fresh, resume_id, jd_id, question_set
+            )
+            for row in saved_now:
+                if row.get("id"):
+                    persisted_ids.add(str(row["id"]))
+            if saved_now:
+                print(
+                    f"[INFO] Incrementally saved {len(saved_now)} sample answer(s) "
+                    f"(total_saved={len(persisted_ids)})"
+                )
+
         ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
         try:
             result = _run_callable_with_timeout(
                 lambda: run_generate_answers_for_question_set(
                     dossier=dossier,
-                    question_rows=unique_rows,
+                    question_rows=rows_to_generate,
                     model=get_ollama_model_name(),
                     job_title=job_title,
                     dossier_cache=dossier_cache,
+                    on_answers=persist_answers_incrementally,
                 ),
                 GENERATE_ANSWERS_TIMEOUT_SECONDS,
                 label="Sample answer generation",
@@ -2928,97 +3090,78 @@ def generate_answers_for_question_set():
                 "[ERROR] Sample answer generation failed: "
                 f"{pipeline_error} | ollama={json.dumps(ollama_diagnostics)}"
             )
+            serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
+            still_missing = rows_needing_answers(serialized)
+            saved_count = len(persisted_ids)
             status = _question_generation_error_status(pipeline_error)
             return jsonify({
                 "success": False,
+                "partial": saved_count > 0,
                 "message": str(pipeline_error),
-                "debug": {"ollama": ollama_diagnostics},
+                "data": {
+                    "questions": serialized,
+                    "questions_count": len(serialized),
+                    "generated_count": saved_count,
+                    "missing_count": len(still_missing),
+                    "missing_ids": [q.get("id") for q in still_missing],
+                },
+                "debug": {"ollama": ollama_diagnostics, "dossier_cache": dossier_cache},
             }), status
 
-        if not result.get("success"):
-            return jsonify({
-                "success": False,
-                "message": result.get("error") or "Answer generation failed",
-            }), 500
-
         generated = result.get("questions") or []
-        if not generated:
+        saved = _persist_generated_sample_answers(
+            generated, resume_id, jd_id, question_set
+        )
+
+        serialized = _load_serialized_question_set(resume_id, jd_id, question_set)
+        still_missing = rows_needing_answers(serialized)
+        missing_count = len(still_missing)
+        generated_count = len(saved)
+
+        if missing_count and not saved:
             return jsonify({
                 "success": False,
-                "message": "Answer generation returned no questions",
+                "partial": False,
+                "message": result.get("error") or (
+                    f"LLM did not return complete sample answers for {missing_count} question(s). "
+                    "Please try again."
+                ),
+                "data": {
+                    "questions": serialized,
+                    "questions_count": len(serialized),
+                    "generated_count": 0,
+                    "missing_count": missing_count,
+                    "missing_ids": [q.get("id") for q in still_missing],
+                },
+                "debug": {
+                    "answer_generation": result.get("answer_generation", {}),
+                    "ollama": ollama_diagnostics,
+                    "dossier_cache": dossier_cache,
+                },
             }), 500
 
-        saved = []
-        for question in generated:
-            qid = question.get("id")
-            answer = question.get("expected_answer") or question.get("answer") or ""
-            q_text = (question.get("question_text") or question.get("question") or "").strip()
-            level = normalize_question_difficulty(
-                question.get("difficulty_category") or question.get("difficulty_level")
-            )
-            if not qid:
-                continue
-            row = execute(
-                """
-                UPDATE questions
-                SET expected_answer=%s
-                WHERE id=%s AND resume_id=%s AND jd_id=%s AND question_set=%s
-                RETURNING *
-                """,
-                (answer, qid, resume_id, jd_id, question_set),
-            )
-            if not row and q_text:
-                # Fallback: match by text+level if id was synthetic
-                row = execute(
-                    """
-                    UPDATE questions
-                    SET expected_answer=%s
-                    WHERE id = (
-                        SELECT id FROM questions
-                        WHERE resume_id=%s AND jd_id=%s AND question_set=%s
-                          AND lower(question_text)=lower(%s)
-                          AND lower(coalesce(difficulty_level, '')) = lower(%s)
-                        ORDER BY created_at ASC
-                        LIMIT 1
-                    )
-                    RETURNING *
-                    """,
-                    (answer, resume_id, jd_id, question_set, q_text, level),
-                )
-            if row:
-                saved.append(_serialize_question(row))
-
-                # Delete legacy duplicate rows (same text+level, different answer-depth rows)
-                execute(
-                    """
-                    DELETE FROM questions
-                    WHERE resume_id=%s AND jd_id=%s AND question_set=%s
-                      AND lower(question_text)=lower(%s)
-                      AND lower(coalesce(difficulty_level, '')) = lower(%s)
-                      AND id <> %s
-                    """,
-                    (resume_id, jd_id, question_set, q_text or row.get("question_text"), level, row["id"]),
-                )
-
-        if not saved:
-            return jsonify({
-                "success": False,
-                "message": "Failed to save sample answers to the database",
-            }), 500
-
-        saved.sort(key=_question_sort_key)
-        return jsonify({
+        payload = {
             "success": True,
+            "partial": missing_count > 0,
             "data": {
-                "questions": saved,
-                "questions_count": len(saved),
+                "questions": serialized,
+                "questions_count": len(serialized),
+                "generated_count": generated_count,
+                "missing_count": missing_count,
+                "missing_ids": [q.get("id") for q in still_missing],
             },
             "debug": {
                 "answer_generation": result.get("answer_generation", {}),
                 "ollama": ollama_diagnostics,
                 "dossier_cache": dossier_cache,
             },
-        })
+        }
+        if missing_count:
+            payload["message"] = (
+                f"LLM did not return complete sample answers for {missing_count} question(s). "
+                "Please try again."
+            )
+        return jsonify(payload)
     except Exception as e:
         traceback.print_exc()
         return jsonify({"success": False, "message": str(e)}), 500
@@ -3655,6 +3798,7 @@ def _merge_interview_audio(user_id, interview_id):
 
 @app.route('/api/generate-speech', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=10, window_seconds=60)
 def generate_speech():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3736,6 +3880,7 @@ def _support_bot_fallback_reply(user_message):
 
 @app.route('/api/support-bot', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=15, window_seconds=60)
 def support_bot():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3776,6 +3921,7 @@ def support_bot():
 
 @app.route('/api/analyze-performance-trends', methods=['POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def analyze_performance_trends():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -3801,6 +3947,7 @@ def analyze_performance_trends():
 @app.route('/api/overall-performance', methods=['GET'])
 @app.route('/api/api/overall-performance', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def overall_performance():
     user_id = request.user['id']
     rows = query_all("SELECT * FROM overall_evaluation WHERE user_id=%s ORDER BY created_at DESC LIMIT 10",
@@ -4256,7 +4403,7 @@ def _execute_sql(code):
 
 @app.route('/api/execute', methods=['POST', 'OPTIONS'])
 @verify_auth_token
-@user_rate_limit(max_calls=20, window_seconds=60)
+@user_rate_limit(max_calls=30, window_seconds=60)
 def execute_code():
     if request.method == 'OPTIONS':
         return jsonify({"message": "OK"}), 200
@@ -4265,36 +4412,18 @@ def execute_code():
     language = (data.get('language') or 'python').lower().strip()
     if not code:
         return jsonify({"success": False, "message": "No code provided"}), 400
+    if len(code) > _CODE_SIZE_LIMIT:
+        return jsonify({"success": False, "message": "Code too large (max 64 KB)"}), 400
 
-    if language in ("javascript", "js", "node", "nodejs"):
-        return jsonify({"success": False, "message": "JavaScript execution is disabled for security reasons"}), 400
+    return jsonify({
+        "success": True,
+        "data": {
+            "output": f"[{language.upper()}] Code submitted successfully for AI evaluation.",
+            "error": None,
+            "testResults": None,
+        }
+    }), 200
 
-    handlers = {
-        "javascript": _execute_javascript,
-        "python": _execute_python,
-        "java": _execute_java,
-        "cpp": _execute_cpp,
-        "c++": _execute_cpp,
-        "csharp": _execute_csharp,
-        "c#": _execute_csharp,
-        "go": _execute_go,
-        "rust": _execute_rust,
-        "typescript": _execute_typescript,
-        "sql": _execute_sql,
-    }
-    handler = handlers.get(language)
-    if not handler:
-        return jsonify({"success": False, "message": f"Unsupported language: {language}"}), 400
-
-    busy = _acquire_code_exec_slot()
-    if busy is not None:
-        return busy
-    try:
-        return handler(code)
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 500
-    finally:
-        _CODE_EXEC_SEMAPHORE.release()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HEAD TRACKING SOCKETIO
@@ -4323,6 +4452,7 @@ def handle_disconnect():
         with detector_lock:
             _detectors_by_sid.pop(sid, None)
     print('Client disconnected')
+
 
 
 def _require_socket_user():
@@ -4661,6 +4791,7 @@ def _payment_redirect_url(interview_id, payment_id, resume_id=None, jd_id=None, 
 
 @app.route('/api/me', methods=['PUT', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def update_me():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -4722,6 +4853,7 @@ def update_me():
 
 @app.route('/api/resumes', methods=['GET', 'POST', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=30, window_seconds=60)
 def resumes_api():
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -4848,6 +4980,7 @@ def check_payment_status():
 
 @app.route('/api/interviews/<interview_id>', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def get_interview(interview_id):
     row = query_one('SELECT * FROM interviews WHERE id=%s AND user_id=%s', (interview_id, request.user['id']))
     if not row:
@@ -4857,6 +4990,7 @@ def get_interview(interview_id):
 
 @app.route('/api/interviews/<interview_id>', methods=['DELETE', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=20, window_seconds=60)
 def delete_interview(interview_id):
     if request.method == 'OPTIONS':
         return jsonify({'message': 'OK'}), 200
@@ -5018,8 +5152,91 @@ def legacy_questions():
     resume_id = data.get('resume_id')
     jd_id = data.get('jd_id')
     question_set = data.get('question_set', 1)
+    replace = bool(data.get('replace'))
+    questions_payload = data.get('questions', [])
+
+    if replace:
+        from common.payment_handlers import _verify_resume_jd_owned
+
+        if not resume_id or not jd_id:
+            return jsonify({
+                'success': False,
+                'message': 'resume_id and jd_id are required to replace a question set',
+            }), 400
+        if not questions_payload:
+            return jsonify({
+                'success': False,
+                'message': 'questions are required to replace a question set',
+            }), 400
+        if not _verify_resume_jd_owned(request.user['id'], resume_id, jd_id):
+            return jsonify({
+                'success': False,
+                'message': 'Resume or job description not found',
+            }), 404
+        try:
+            question_set = int(question_set)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'message': 'question_set must be an integer',
+            }), 400
+
+        existing_interview = query_one(
+            """
+            SELECT id
+            FROM interviews
+            WHERE user_id = %s AND resume_id = %s AND jd_id = %s AND question_set = %s
+            LIMIT 1
+            """,
+            (request.user['id'], resume_id, jd_id, question_set),
+        )
+        if existing_interview:
+            return jsonify({
+                'success': False,
+                'message': (
+                    'Cannot replace questions for this set because an interview already exists. '
+                    'Generate a new question set from the Dashboard instead.'
+                ),
+            }), 400
+
+        def _replace_questions(cur):
+            cur.execute(
+                """
+                DELETE FROM questions
+                WHERE resume_id = %s AND jd_id = %s AND question_set = %s
+                """,
+                (resume_id, jd_id, question_set),
+            )
+            saved_rows = []
+            for question in questions_payload:
+                exp = normalize_difficulty_experience(question.get("difficulty_experience"))
+                level = normalize_question_difficulty(question.get('difficulty_category') or question.get('difficulty_level'))
+                cur.execute(
+                    """
+                    INSERT INTO questions (interview_id, resume_id, jd_id, question_text, expected_answer, difficulty_level, difficulty_experience, question_set, requires_code)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        question.get('interview_id') or data.get('interview_id'),
+                        resume_id,
+                        jd_id,
+                        question.get('question_text') or question.get('question'),
+                        question.get('expected_answer') or question.get('answer'),
+                        level,
+                        exp,
+                        question.get('question_set') or question_set,
+                        question.get('requires_code', False),
+                    ),
+                )
+                saved_rows.append(_serialize_question(cur.fetchone()))
+            saved_rows.sort(key=_question_sort_key)
+            return saved_rows
+
+        return jsonify({'success': True, 'data': run_transaction(_replace_questions)}), 201
+
     saved = []
-    for question in data.get('questions', []):
+    for question in questions_payload:
         exp = normalize_difficulty_experience(question.get("difficulty_experience"))
         level = normalize_question_difficulty(question.get('difficulty_category') or question.get('difficulty_level'))
         row = execute(
@@ -5422,6 +5639,7 @@ def reset_password():
 
 @app.route('/api/me', methods=['DELETE', 'OPTIONS'])
 @verify_auth_token
+@user_rate_limit(max_calls=5, window_seconds=60)
 def delete_account():
     """Permanently delete the authenticated user and all their data."""
     if request.method == 'OPTIONS':
@@ -5455,6 +5673,7 @@ def delete_account():
 
 @app.route('/api/interview-history', methods=['GET'])
 @verify_auth_token
+@user_rate_limit(max_calls=60, window_seconds=60)
 def interview_history():
     """Paginated list of the user's past interviews with feedback summaries."""
     user_id = request.user['id']

@@ -126,15 +126,27 @@ export default function AnimatedWavesLayer({
 
   useEffect(() => {
     let cancelled = false;
+
+    const destroyWaves = () => {
+      if (idleHandleRef.current) {
+        cancelIdle(idleHandleRef.current);
+        idleHandleRef.current = null;
+      }
+      if (instanceRef.current) {
+        instanceRef.current.destroy();
+        instanceRef.current = null;
+      }
+    };
+
     const mountEffect = async () => {
-      if (!elementRef.current || shouldSkipWebGL() || cancelled) {
+      if (document.hidden || !elementRef.current || shouldSkipWebGL() || cancelled) {
         return;
       }
 
       const THREE = await import('three');
       const { default: WAVES } = await import('vanta/dist/vanta.waves.min');
 
-      if (cancelled || !elementRef.current) {
+      if (cancelled || document.hidden || !elementRef.current) {
         return;
       }
 
@@ -166,6 +178,9 @@ export default function AnimatedWavesLayer({
     };
 
     const startMount = () => {
+      if (document.hidden || cancelled) {
+        return;
+      }
       mountEffect().catch((error) => {
         console.error('Unable to initialize animated waves background:', error);
       });
@@ -178,29 +193,41 @@ export default function AnimatedWavesLayer({
     }
 
     const handleVisibility = () => {
-      if (!instanceRef.current) {
+      if (cancelled) {
         return;
       }
       if (document.hidden) {
-        instanceRef.current.setOptions({ waveSpeed: 0.05 });
-      } else {
-        instanceRef.current.setOptions(getPresetOptions(theme, preset));
+        destroyWaves();
+        return;
+      }
+      startMount();
+    };
+
+    const handleResize = () => {
+      if (instanceRef.current && typeof instanceRef.current.resize === 'function') {
+        instanceRef.current.resize();
       }
     };
 
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== 'undefined' && elementRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        handleResize();
+      });
+      resizeObserver.observe(elementRef.current);
+    }
+
     document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('resize', handleResize);
 
     return () => {
       cancelled = true;
       document.removeEventListener('visibilitychange', handleVisibility);
-      if (idleHandleRef.current) {
-        cancelIdle(idleHandleRef.current);
-        idleHandleRef.current = null;
+      window.removeEventListener('resize', handleResize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
       }
-      if (instanceRef.current) {
-        instanceRef.current.destroy();
-        instanceRef.current = null;
-      }
+      destroyWaves();
     };
   }, [defer, interactive, preset, theme]);
 
