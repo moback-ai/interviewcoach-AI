@@ -1,8 +1,4 @@
-"""Interview question mix planning: domain presets, grounding gates, and count allocation.
-
-Phase 1 module — consumed by question_generation.run_pipeline_from_api in a later phase.
-Does not call LLMs; safe for unit tests with static dossier fixtures.
-"""
+"""Interview question mix planning: domain presets, grounding gates, and count allocation."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,7 +9,6 @@ INTERVIEW_FOCI = ("technical", "product", "operations", "general")
 DEPTH_PROFILES = ("warmup", "balanced", "challenging")
 DIFFICULTY_LEVELS = ("beginner", "medium", "hard")
 
-# Ticket percentages; coding zeroed for non-technical roles after normalization.
 DOMAIN_PRESETS: dict[str, dict[str, float]] = {
     "technical": {
         "behavioral": 0.45,
