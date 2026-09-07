@@ -924,46 +924,44 @@ def _dossier_json(dossier):
 
 
 def _shared_interview_contract_text():
-    return """SHARED RULES (strict):
-- Write REAL interview probes a hiring manager would ask in a live interview for THIS job title.
-- Adapt tone to the role domain in the dossier (technical, business, creative, operations, etc.).
-- BAN definition/textbook stems: "What is", "Explain", "Define", "List advantages", "Describe the difference between".
-- BAN soft/vague stems: "Tell us about your experience with", "What was your approach to",
-  "What strategies would you employ", "How did you handle X" when X is only a bare skill name,
-  "Describe your role in" with no concrete artifact.
-- Every question MUST name at least one concrete resume artifact from the dossier:
-  company, project/initiative, outcome/metric, method, or tool named in the dossier —
-  AND tie to a JD expectation (must_have_skills, tools, responsibilities, or transferable_bridges).
-- ONE anchor bundle per question: do not combine project from one story with outcome from another.
-- Prefer experience/projects details (company, actions, outcomes) over vague soft skills.
-- Prefer overlap_skills and transferable_bridges.
-- gap_skills: NEVER claim the candidate already used them. Phrase as transfer:
-  "Given your <resume work>, how would you approach <gap skill / JD need> for this role?"
-- Never treat hiring_company as the candidate's past employer unless it also appears in companies/experience.
-- No coding tasks, puzzles, algorithms, or leetcode unless the role clearly requires coding questions
-  (those are handled separately). For these theory questions, stay non-leetcode.
-- Use ONLY the dossier. Do not invent employers, projects, skills, or past usage of gap tools.
+    return """TOP-OF-MARKET INTERVIEWER CONTRACT (World-Class AI Hiring Bar):
+- You are an expert Principal Interviewer at a Tier-1 tech company (Google, Stripe, OpenAI, Meta caliber).
+- Your questions MUST match ChatGPT Plus and Claude 3.5 Sonnet in intelligence, conversational realism, technical depth, and fluent English.
 
-DIFFICULTY LADDER (must get deeper; do not rephrase the same anecdote):
-- beginner/easy: walk through ONE concrete thing they did — name project/outcome/tool from dossier.
-- medium: how/why/process, ownership, failure modes, or measurement — still on THEIR past work, aimed at JD.
-- hard: tradeoffs and judgment applying THEIR past work to THIS role's constraints; what they would change and why.
+CRITICAL GRAMMAR & NATURAL PHRASING RULES (STRICT):
+1. NEVER copy-paste raw resume bullets starting with verbs (e.g., NEVER write "Given your experience with Architected and deployed...").
+   - Convert past experience into natural, professional phrasing: "In your MCP server deployment on GCP Cloud Run...", "At Wipro, where you implemented hybrid search (BM25 + embeddings)...", "You have built RAG pipelines using LangChain, Gemini, Pinecone, and PostgreSQL..."
+2. NEVER copy-paste verbatim JD requirements mid-sentence (e.g., NEVER write "to support Own and maintain the release calendar...").
+   - Seamlessly blend JD expectations into realistic engineering scenarios and dilemmas.
+3. NATURAL & DIRECT TONE: Write concise, highly intelligent questions (1 to 2 crisp sentences, 25-45 words max). Speak like a seasoned Staff/Principal Engineer conducting a real interview.
+
+QUESTION CALIBER BY DIFFICULTY:
+- BEGINNER (System & Data-Flow Walkthrough):
+  * Naturally group the candidate's actual tech stack (e.g., LangChain, Pinecone, PostgreSQL, GCP).
+  * Ask them to explain the end-to-end data flow, component boundaries, and why specific technologies were chosen (e.g., vector database vs relational store).
+- MEDIUM (Incident, Mechanism & Realistic Edge-Case Dilemma):
+  * Pose a concrete real-world production dilemma or subtle failure mode on their system (e.g., semantic search retrieving related docs but missing exact product IDs/error codes; cache invalidation vs stampedes during downstream service failovers).
+  * Ask for specific triage, architectural design, and trade-offs.
+- HARD (High-Scale Dilemmas & Cross-System Architectural Decisions):
+  * Present a complex cross-cutting scenario bridging their past experience with the JD's core responsibilities (e.g., release dependencies between APIs and high-latency AI services; 100k req/sec consistency vs latency breakdowns; go/no-go risk decisions).
+  * Probe first-principles trade-offs, fallback strategies, and system redesign.
+
+ZERO FLUFF POLICY:
+- BAN ALL textbook definitions ("What is X", "Explain how Y works").
+- BAN ALL generic HR clichés ("Tell me about a time you faced a challenge").
 """
 
 
 def _difficulty_depth_hint(level):
     hints = {
         "beginner": (
-            "Ask them to walk through one concrete past artifact "
-            "(named project/outcome/tool from the dossier)."
+            "Beginner / Architectural Flow: Naturally group their actual tools/technologies from the dossier. Ask for the end-to-end data/system flow, component boundaries, and why they chose a specific technology over alternatives."
         ),
         "medium": (
-            "Ask how/why they built or decided something, including failure modes or measurement, "
-            "linked to a JD expectation."
+            "Medium / Incident & Realistic Dilemma: Pose a concrete real-world operational problem or subtle edge case on their system (e.g., missing exact identifiers, latency regressions, cache stampedes, data drift). Probe how they would diagnose and redesign the pipeline."
         ),
         "hard": (
-            "Ask for tradeoffs/judgment applying their concrete past work to this role's "
-            "constraints (prefer transferable_bridges); not a generic strategy essay."
+            "Hard / Cross-System Dilemma & Architectural Decisions: Present a high-stakes cross-cutting dilemma bridging their background with this role's JD constraints (dependency management under intermittent service latency, 10x throughput scaling, or go/no-go release decisions)."
         ),
     }
     return hints.get(level, hints["medium"])
@@ -987,10 +985,20 @@ def _is_generic_definition_question(question_text):
         "tell us about your experience",
         "tell me about your experience",
         "what was your approach to",
+        "what is your approach to",
         "what strategies would you employ",
         "what considerations would you take",
         "how would you approach designing a scalable",
         "how would you balance the trade-offs between using",
+        "can you explain what",
+        "can you explain how",
+        "can you define",
+        "give an overview of",
+        "tell me about a time you faced a challenge",
+        "how do you handle difficult teammates",
+        "how do you handle conflict",
+        "what are the pros and cons of",
+        "what are the benefits of",
     )
     if any(q.startswith(b) for b in banned_starts):
         return True
@@ -1004,6 +1012,8 @@ def _is_generic_definition_question(question_text):
         "how would you leverage your experience",
         "design a scalable approach for",
         "design a scalable approach to",
+        "tell me about a time you faced",
+        "handle difficult teammates",
     )
     if any(p in q for p in soft_patterns):
         return True
@@ -1158,51 +1168,29 @@ def _dossier_example_snippets(dossier: dict) -> dict:
 
 
 def _dossier_dynamic_examples_block(dossier: dict) -> str:
-    """Universal BAD examples + GOOD examples grounded in THIS dossier."""
-    s = _dossier_example_snippets(dossier)
-    domain_line = ""
-    if s["domain"] and s["domain"] != "general":
-        domain_line = (
-            f"\nRole domain hint from dossier: {s['domain']}. "
-            "Match interview style to that domain (do not force unrelated jargon).\n"
-        )
-    bundle_lines = []
-    for i, bundle in enumerate(s.get("bundles") or [], 1):
-        bundle_lines.append(
-            f"  Anchor {i}: company={bundle.get('company')!r}, "
-            f"project={bundle.get('project')!r}, "
-            f"artifact={bundle.get('artifact')!r}"
-        )
-    bundle_block = "\n".join(bundle_lines) if bundle_lines else ""
+    """Gold-standard few-shot demonstrations showing ChatGPT-level natural phrasing."""
+    d = dossier or {}
+    skills = ", ".join((d.get("resume_skills") or ["Python", "FastAPI", "PostgreSQL"])[:6])
+    companies = ", ".join((d.get("companies") or ["their past company"])[:2])
 
-    return f"""{domain_line}
-Use ONE anchor bundle per question — do NOT combine project from anchor A with outcome from anchor B.
-Self-contained resume anchors from THIS dossier:
-{bundle_block}
-- JD expectation: {s['jd_need']}
-- Gap / stretch skill (transfer only, never as past experience): {s['gap']}
+    return f"""CANDIDATE PROFILE HIGHLIGHTS:
+- Key Technologies: {skills}
+- Past Companies / Context: {companies}
+- Must-Have Role Expectations: {", ".join((d.get("must_have_skills") or ["system architecture"])[:4])}
 
-BEGINNER (concrete walkthrough — pick ONE anchor bundle):
-- Must name a specific project/outcome from a single anchor (not a bare skill label).
-- BAD: "Tell us about your experience with {s['tool_or_method']}."
-- BAD: Mixing two anchors: "On {s['project']}, how did you approach {s['artifact_b']}?" (if they are different work)
-- GOOD: "Walk through {s['project']} at {s['company']} — what did you own and what changed?"
-- GOOD: "Regarding {s['artifact']} at {s['company']}, what did you personally build and what was the result?"
+GOLD-STANDARD EXAMPLES (Model your questions on this exact style and natural fluency):
 
-MEDIUM (mechanism / failure / measurement — ONE anchor only):
-- Ask how/why, ownership, what broke, or what you measured on that same anchor.
-- Link to a JD expectation from the dossier.
-- BAD: "Describe a time you faced a challenge at work."
-- BAD: "What challenges did you face integrating {s['gap']}?" (gap_skill — invents past use)
-- GOOD: "On {s['project']}, what failure mode worried you most in production and how did you mitigate it?"
-- GOOD: "For {s['artifact_b']} at {s['company_b']}, how did you measure success and what would you change for {s['jd_need']}?"
+1. BEGINNER (Natural Tech Grouping & System Flow):
+- BAD (robotic template): "Given your experience with Architected and deployed a RAG system, explain how it works."
+- GOOD (ChatGPT caliber): "You have built RAG pipelines using LangChain, Gemini, Pinecone, MongoDB, and PostgreSQL. Can you explain the basic flow of the system from document ingestion to generating the final response, and briefly explain when you would query the vector database versus the relational store?"
 
-HARD (judgment for THIS role — resume anchor + JD need; gap skills as transfer only):
-- Apply ONE concrete past anchor to this role's constraints; ask tradeoffs and what they would change.
-- BAD: "How would you design a scalable approach for {s['job_title']}?"
-- BAD: "Given your experience with {s['gap']}..." (gap must NOT be claimed as past experience)
-- GOOD: "Given {s['project']} at {s['company']}, what would you change to meet this role's need for {s['jd_need']} — and why?"
-- GOOD: "You may not list {s['gap']} strongly; given {s['artifact_b']}, how would you ramp up for that JD expectation?"
+2. MEDIUM (Real-World Dilemma & Practical Mechanism):
+- BAD (robotic template): "What challenge did you face with BM25 and embeddings at Wipro?"
+- GOOD (ChatGPT caliber): "In your experience combining BM25, dense embeddings, and cross-encoder re-ranking: suppose users report that the search system retrieves semantically related documents but frequently misses exact product names, error codes, or IDs. How would you redesign the retrieval pipeline to address this, and why would hybrid search and re-ranking help?"
+
+3. HARD (Cross-System Dependency & Release Decision):
+- BAD (robotic template): "If scaling your MCP server to support release calendars, what breaks?"
+- GOOD (ChatGPT caliber): "You are leading a production release where a client application depends on an API change consuming data from an AI service. The API has passed integration testing, but the AI service is experiencing intermittent latency spikes under load. How would you assess release readiness, manage the dependency risk, and structure the go/no-go decision?"
 """
 
 
@@ -1317,12 +1305,17 @@ def _build_theory_prompt(job_title, dossier, level, count, weight, mode="core",
         ),
     }.get(mode, "MODE: core.")
 
-    return f"""You are an expert technical interviewer writing live interview questions for **{job_title}**.
+    return f"""You are a Principal Technical Interviewer writing live interview questions for **{job_title}**.
 
 {_shared_interview_contract_text()}
 {_difficulty_depth_hint(level)}
 
 {mode_block}
+
+CRITICAL QUALITY BAR (Surpass ChatGPT/Gemini/Grok):
+- Every question MUST be a natural, highly intelligent, and technically rigorous interview probe (1 to 2 sentences max, 25-45 words).
+- Speak naturally like a Staff/Principal Engineer: NEVER copy-paste raw past-tense resume bullets (e.g. "Given your experience with Architected and deployed...") and NEVER paste JD bullets verbatim mid-sentence.
+- ZERO textbook definitions ("What is...", "Explain how..."). ZERO generic HR fluff.
 
 CANDIDATE/ROLE DOSSIER (LLM-synthesized; use ONLY this; do not invent employers/projects not listed):
 {dossier_blob}
@@ -1605,7 +1598,7 @@ def _build_mode_batch_prompt(
         )
         schema_block = _hybrid_schema_block(resume_dist, jd_dist, blend_dist)
 
-    return f"""You are an expert interviewer writing live interview questions for **{job_title}**.
+    return f"""You are a Principal Technical Interviewer writing live interview questions for **{job_title}**.
 
 {_shared_interview_contract_text()}
 
@@ -1614,6 +1607,12 @@ Generate ALL difficulties (and buckets if applicable) in ONE response.
 Depth MUST increase beginner → medium → hard within each bucket.
 Match the domain of THIS resume and JD — do not force unrelated industry jargon
 (tech, business, creative, operations, etc. — follow the dossier domain).
+
+CRITICAL QUALITY BAR (Surpass ChatGPT/Gemini/Grok):
+- Every question MUST be a natural, highly intelligent, and technically rigorous interview probe (1 to 2 sentences max, 25-45 words).
+- Speak naturally like a Staff/Principal Engineer: NEVER copy-paste raw past-tense resume bullets (e.g. "Given your experience with Architected and deployed...") and NEVER paste JD bullets verbatim mid-sentence.
+- ZERO textbook trivia definitions ("What is...", "Explain how...").
+- ZERO generic HR templates ("Tell me about a time you faced a challenge...").
 
 {count_contract}
 
@@ -2175,29 +2174,29 @@ def generate_coding_questions(
         else:
             weights.append(5)
 
-    prompt = f"""You are an expert technical interviewer for **{job_title}**.
+    prompt = f"""You are a Principal Technical Interviewer creating coding interview challenges for **{job_title}**.
 
-Generate CLEAR, PRECISE, IMPLEMENTABLE coding tasks (NOT theory).
+Generate REALISTIC, DOMAIN-GROUNDED coding challenges directly relevant to the candidate's specific background and technologies (NOT generic e-commerce toy queries or random textbook LeetCode).
 
-SKILL FOCUS from LLM interview dossier (prioritize overlap_skills, language from resume_skills):
+CANDIDATE SKILL & PROJECT FOCUS:
 {focus_blob}
 
-RULES:
-1. Every item MUST be a direct coding task: "Write a function…", "Write SQL…", "Parse…", "Given X return Y…".
-2. Prefer languages/tools the candidate lists in resume_skills/overlap_skills. If JD language differs, prioritize resume language but use JD-style logic from must_have_skills/tools.
-3. Unambiguous tasks with a clear expected output; short example I/O when helpful.
-4. Difficulty by weight:
-   - weight 1 (easy): simple transform/filter/parse/basic SQL
-   - weight 3 (medium): joins/aggregation, API filter, regex, multi-step transform
-   - weight 5 (hard): mini utility (retry/pagination), complex SQL, branching + error handling
-5. BAN: vague discussion, system design essays, unrelated LeetCode puzzles, multi-day projects.
-6. Do not invent languages or libraries not present in the skill focus.
+CRITICAL RULES:
+1. DOMAIN & STACK GROUNDED: The coding task MUST directly reflect the candidate's primary domain and tools (e.g., for AI/RAG engineers: hybrid retrieval ranking, vector similarity, text chunking; for Backend engineers: rate limiters, LRU caches, retry backoff, API aggregation; for Data: stream aggregation, pipeline transforms).
+2. BAN GENERIC TOYS: Do NOT generate generic `SELECT customer_id FROM transactions` or toy shopping carts unless the candidate's profile is specifically in financial transactions.
+3. CONCISE & READABLE: 40 to 60 words max. Clear, direct language without markdown header bloat.
+4. FORMAT:
+   - 1-2 sentences stating the exact function/algorithm to write and its logic.
+   - 1 short example input/output or formula (e.g., `hybrid_score = 0.4 * bm25 + 0.6 * embedding`).
+   - 1 natural edge case (e.g., handle empty inputs or zero vectors).
+
+GOLD-STANDARD EXAMPLES (Model your output after this):
+[
+  {{"question":"Given a list of retrieved documents from a search pipeline where each item contains an id, bm25_score, and embedding_score: write a Python function `rank_documents(docs, k)` that computes a weighted hybrid score (0.4 * bm25 + 0.6 * embedding) and returns the top K documents ordered from highest to lowest score. Handle empty lists gracefully.","difficulty":"coding","weight":3}}
+]
 
 Return ONLY a JSON array with EXACTLY {coding_count} items. Use these weights in order: {weights}
-[
-  {{"question":"Write a ...","difficulty":"coding","weight":1}}
-]
-No markdown. JSON ONLY."""
+No markdown fences around the JSON. JSON ONLY."""
 
     print(f"[INFO] Generating {coding_count} coding questions (dossier-backed)...")
     best = []
