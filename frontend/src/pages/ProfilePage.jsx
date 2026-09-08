@@ -24,7 +24,8 @@ import {
   FiXCircle,
   FiLoader,
   FiHash,
-  FiRefreshCw
+  FiRefreshCw,
+  FiAlertCircle
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -140,11 +141,12 @@ const ProfileSection = ({
 
       {statusMessage ? (
         <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
+          className={`rounded-xl border px-4 py-3 text-sm font-medium ${
             statusTone === 'success'
               ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-              : 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200'
+              : 'border-[var(--color-error)]/45 bg-[var(--color-error)]/12 text-[var(--color-error)]'
           }`}
+          role={statusTone === 'error' ? 'alert' : undefined}
         >
           {statusMessage}
         </div>
@@ -525,8 +527,9 @@ const PaymentsSection = () => {
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 bg-red-100 border border-red-300 rounded-lg">
-          <p className="text-red-700">{error}</p>
+        <div className="app-inline-error" role="alert">
+          <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+          <p>{error}</p>
         </div>
       )}
 
@@ -876,8 +879,9 @@ const AnalyticsSection = () => {
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-          <p className="text-red-700 dark:text-red-300">{error}</p>
+        <div className="app-inline-error" role="alert">
+          <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+          <p>{error}</p>
         </div>
       )}
 

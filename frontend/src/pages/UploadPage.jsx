@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
 import UploadBox from '../components/upload/UploadBox';
-import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX, FiDownload } from 'react-icons/fi';
+import { FiTrash2, FiLoader, FiFileText, FiCheck, FiSettings, FiX, FiDownload, FiAlertCircle } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import { uploadFile } from '../api';
 import SuccessModal from '../components/SuccessModal';
@@ -1370,7 +1370,7 @@ function UploadPage() {
     );
 
     if (isDuplicate) {
-      setSkillsError('Skill already present/selected.');
+      setSkillsError('Skill already selected.');
       setSkillsDropdownOpen(false);
       return;
     }
@@ -1580,7 +1580,9 @@ function UploadPage() {
                       )}
                     </div>
                     {skillsError && (
-                      <p className="text-sm text-red-600 dark:text-red-400">{skillsError}</p>
+                      <p className="app-field-error flex items-start gap-1.5" role="alert">
+                      <FiAlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[var(--color-error)]" aria-hidden="true" />
+                      <span>{skillsError}</span></p>
                     )}
                   </div>
                 </div>
@@ -1666,14 +1668,14 @@ function UploadPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     {jobDescError && (
-                      <p className="text-sm text-red-600 dark:text-red-400">
+                      <p className="app-field-error" role="alert">
                         {jobDescError}
                       </p>
                     )}
                     <button
                       type="button"
                       onClick={handleManualJobDescAccept}
-                      disabled={loading || parsingJobDesc}
+                      disabled={loading || parsingJobDesc || !jobTitle.trim() || !jobDescription.trim()}
                       className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white shadow-md hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {parsingJobDesc && (
@@ -1702,14 +1704,14 @@ function UploadPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     {jobDescError && (
-                      <p className="text-sm text-red-600 dark:text-red-400">
+                      <p className="app-field-error" role="alert">
                         {jobDescError}
                       </p>
                     )}
                     <button
                       type="button"
                       onClick={handleFetchJobFromUrl}
-                      disabled={loading || jobUrlLoading}
+                      disabled={loading || jobUrlLoading || !jobUrl.trim()}
                       className="ml-auto inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-[var(--color-primary)] text-white shadow-sm hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {jobUrlLoading && (
@@ -1915,8 +1917,9 @@ function UploadPage() {
 
                         {/* Validation Error Message */}
                         {!canGenerateQuestions && splitMode && blendMode && (
-                          <div className="p-3 bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg">
-                            <p className="text-sm text-red-700 dark:text-red-300">
+                          <div className="app-inline-error" role="alert">
+                            <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+                            <p>
                               {/* ✅ CHANGE: Conditional message based on coding slider visibility */}
                               {isTechnical === true && jobTitle.trim() && jobDescription.trim()
                                 ? 'When both Split and Blend modes are enabled, you need at least 6 total questions, excluding coding questions.'

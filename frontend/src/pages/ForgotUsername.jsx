@@ -63,7 +63,7 @@ function ForgotUsername() {
         )}
       >
         {errorMsg && (
-          <div className="auth-scene-alert auth-scene-alert-error">
+          <div className="auth-scene-alert auth-scene-alert-error" role="alert">
             {errorMsg}
           </div>
         )}
