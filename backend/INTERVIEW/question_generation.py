@@ -1,4 +1,4 @@
-"""Interview dossier + question generation (core/split/blend/hybrid/coding) + API pipeline."""
+"""Interview dossier + question generation (core type-mix / split / blend / hybrid / coding) + API pipeline."""
 from __future__ import annotations
 
 import ast
@@ -26,6 +26,14 @@ from INTERVIEW.Resumeparser import (
     extract_text_from_resume,
 )
 from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION, load_dossier, save_dossier
+from INTERVIEW.question_mix import (
+    allocate_type_counts_by_difficulty_targets,
+    compute_question_plan,
+    get_preset_mix,
+    infer_interview_focus,
+    normalize_mix,
+    redistribute_generation_shortfall,
+)
 
 
 QUESTION_GEN_MAX_RETRIES = 3
@@ -548,7 +556,7 @@ def _dossier_json_contract_block():
   "overlap_skills": ["skills present in BOTH resume and JD — prefer real tech, not soft skills"],
   "gap_skills": ["JD must-haves missing from the resume"],
   "transferable_bridges": [
-    "short bridge e.g. 'Salesforce REST integrations -> AWS API / service integration'"
+    "short bridge e.g. 'REST API integrations -> cloud service API integration'"
   ],
   "resume_anchors": [
     {{
@@ -570,7 +578,7 @@ Rules:
 - SELECT highlights — do not dump every resume line. Prefer fewer strong bullets over padded ones.
   Aim for 2-4 per experience/project; use 1-2 if that is all that is concrete; omit fluff rather than fill.
 - Each experience/project highlight MUST be interview-useful: concrete action + object/system + tech when present
-  (e.g. "Built TPM/Retail Execution on Salesforce Lightning with Apex batch jobs").
+  (e.g. "Built checkout payment endpoints with React, Redux, and REST clients").
 - REJECT generic process fluff in highlights, resume_highlights, and resume_anchors.actions, including:
   delivered on time, followed Agile, worked with BA/PO, documentation only, trained users,
   "developed the provided requirements", "took care of deployments" with no system/tool detail.
@@ -1297,10 +1305,43 @@ def _coerce_text_field(value, max_chars=200) -> str:
     return _shorten_text(str(value).strip(), max_chars)
 
 
+def _coerce_level_question_list(value):
+    """
+    Coerce a beginner/medium/hard field into a list of question items.
+
+    LLMs sometimes return a stringified JSON array. Never treat a raw string as
+    an iterable of question items (that yields single characters like '[').
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            loaded = json.loads(text)
+        except Exception:
+            return []
+        if isinstance(loaded, list):
+            return loaded
+        return []
+    return []
+
+
+def _level_value_is_usable(value) -> bool:
+    """True only for real list level fields (reject raw/stringified string values)."""
+    return isinstance(value, list)
+
+
 def _normalize_question_items(raw_questions, level, weight):
     """Normalize LLM output to {question, difficulty, weight}; drop empty."""
+    items = _coerce_level_question_list(raw_questions)
     out = []
-    for item in raw_questions or []:
+    for item in items:
         if isinstance(item, str):
             q_text = item.strip()
             item = {"question": q_text}
@@ -1764,9 +1805,15 @@ def _parse_level_batch_from_dict(parsed, beginner_count, medium_count, hard_coun
     """Normalize beginner/medium/hard arrays from a dict (or empty)."""
     if not isinstance(parsed, dict):
         return [], [], []
-    beginner = _normalize_question_items(parsed.get("beginner") or [], "beginner", 1)
-    medium = _normalize_question_items(parsed.get("medium") or [], "medium", 3)
-    hard = _normalize_question_items(parsed.get("hard") or [], "hard", 5)
+    beginner = _normalize_question_items(
+        _coerce_level_question_list(parsed.get("beginner")), "beginner", 1
+    )
+    medium = _normalize_question_items(
+        _coerce_level_question_list(parsed.get("medium")), "medium", 3
+    )
+    hard = _normalize_question_items(
+        _coerce_level_question_list(parsed.get("hard")), "hard", 5
+    )
     return (
         beginner[:beginner_count] if beginner_count else [],
         medium[:medium_count] if medium_count else [],
@@ -1889,22 +1936,27 @@ def _parse_hybrid_batch_response(raw, resume_dist, jd_dist, blend_dist):
     )
 
 
+def _batch_levels_look_usable(obj) -> bool:
+    """True when obj has at least one level key and every present level is a usable list."""
+    if not isinstance(obj, dict):
+        return False
+    present = False
+    for key in ("beginner", "medium", "hard"):
+        if key not in obj or obj.get(key) is None:
+            continue
+        present = True
+        if not _level_value_is_usable(obj.get(key)):
+            return False
+    return present
+
+
 def _batch_json_looks_usable(parsed) -> bool:
     if not isinstance(parsed, dict):
         return False
-    if (
-        parsed.get("beginner") is not None
-        or parsed.get("medium") is not None
-        or parsed.get("hard") is not None
-    ):
+    if _batch_levels_look_usable(parsed):
         return True
     for key in ("resume", "jd", "blend"):
-        bucket = parsed.get(key)
-        if isinstance(bucket, dict) and (
-            bucket.get("beginner") is not None
-            or bucket.get("medium") is not None
-            or bucket.get("hard") is not None
-        ):
+        if _batch_levels_look_usable(parsed.get(key)):
             return True
     return False
 
@@ -1982,10 +2034,16 @@ def _generate_batched_levels(
     blend_pct_resume=50,
     blend_pct_jd=50,
     exclude_questions=None,
+    prompt_builder=None,
 ):
     """
-    Shared exact-count runner for flat beginner/medium/hard schemas (core + blend).
+    Shared exact-count runner for flat beginner/medium/hard schemas (core + blend + typed).
     Refills until counts met or max rounds exhausted. No heuristic dedupe.
+
+    prompt_builder: optional callable with signature
+      (job_title, dossier, beginner_count, medium_count, hard_count,
+       exclude_questions=None, only_missing=None) -> prompt str
+    When None, uses _build_mode_batch_prompt (core/blend path).
     """
     beginner_count = max(0, int(beginner_count or 0))
     medium_count = max(0, int(medium_count or 0))
@@ -2027,19 +2085,30 @@ def _generate_batched_levels(
                 f"beginner={need_b} medium={need_m} hard={need_h}"
             )
 
-        prompt = _build_mode_batch_prompt(
-            job_title,
-            dossier,
-            mode=mode,
-            beginner_count=beginner_count,
-            medium_count=medium_count,
-            hard_count=hard_count,
-            blend_pct_resume=blend_pct_resume,
-            blend_pct_jd=blend_pct_jd,
-            exclude_questions=exclude,
-            only_missing=only_missing,
-            schema="levels",
-        )
+        if prompt_builder is not None:
+            prompt = prompt_builder(
+                job_title,
+                dossier,
+                beginner_count=beginner_count if round_num == 0 else req_b,
+                medium_count=medium_count if round_num == 0 else req_m,
+                hard_count=hard_count if round_num == 0 else req_h,
+                exclude_questions=exclude,
+                only_missing=only_missing,
+            )
+        else:
+            prompt = _build_mode_batch_prompt(
+                job_title,
+                dossier,
+                mode=mode,
+                beginner_count=beginner_count,
+                medium_count=medium_count,
+                hard_count=hard_count,
+                blend_pct_resume=blend_pct_resume,
+                blend_pct_jd=blend_pct_jd,
+                exclude_questions=exclude,
+                only_missing=only_missing,
+                schema="levels",
+            )
         raw, err = _call_core_batch_llm(prompt, model, label=label)
         if not raw:
             print(f"[ERROR] {mode} batch question generation failed ({label}): {err}")
@@ -2210,6 +2279,329 @@ def _generate_batched_buckets(
     }
 
 
+def _typed_levels_request_counts(beginner_count, medium_count, hard_count, only_missing=None):
+    """Resolve beginner/medium/hard counts for a typed batch prompt."""
+    if only_missing and isinstance(only_missing, dict) and "beginner" in only_missing:
+        return (
+            int(only_missing.get("beginner") or 0),
+            int(only_missing.get("medium") or 0),
+            int(only_missing.get("hard") or 0),
+        )
+    return (
+        max(0, int(beginner_count or 0)),
+        max(0, int(medium_count or 0)),
+        max(0, int(hard_count or 0)),
+    )
+
+
+def _typed_difficulty_ladder_text() -> str:
+    return """DIFFICULTY LADDER (must get deeper; do not rephrase the same ask):
+- beginner/easy: concrete walkthrough or applied starter probe.
+- medium: how/why, ownership, failure modes, measurement, or decision process.
+- hard: tradeoffs and judgment under this role's constraints."""
+
+
+def _concepts_domain_hint(domain: str) -> str:
+    key = (domain or "").strip().lower()
+    if key in ("product", "design"):
+        return (
+            "Domain focus for concepts: product sense — market/user value, accessibility (a11y), "
+            "and metrics/outcomes. Prefer applied product judgment over textbook definitions."
+        )
+    if key in ("operations", "ops", "business"):
+        return (
+            "Domain focus for concepts: operations — process design, compliance, reliability, "
+            "and handoffs. Prefer applied operational judgment over textbook definitions."
+        )
+    if key in ("technical", "engineering", "software", "tech"):
+        return (
+            "Domain focus for concepts: technical fundamentals for THIS role — tools, systems, "
+            "and methods in the JD. Prefer applied usage over textbook definitions."
+        )
+    return (
+        "Domain focus for concepts: role-relevant fundamentals from the JD. "
+        "Prefer applied judgment over textbook definitions."
+    )
+
+
+def _dossier_slice_for_type(dossier: dict | None, question_type: str) -> dict:
+    """
+    Slim dossier payload for a typed prompt — avoids conflating behavioral + concepts rules.
+    """
+    d = dossier or {}
+    job_title = d.get("job_title") or ""
+    domain = d.get("domain") or ""
+    if question_type == "behavioral":
+        return {
+            "job_title": job_title,
+            "domain": domain,
+            "resume_anchors": (d.get("resume_anchors") or [])[:10],
+            "experience": (d.get("experience") or [])[:5],
+            "projects": (d.get("projects") or [])[:5],
+            "companies": (d.get("companies") or [])[:5],
+            "resume_highlights": (d.get("resume_highlights") or [])[:5],
+            "overlap_skills": (d.get("overlap_skills") or [])[:6],
+            "responsibilities": (d.get("responsibilities") or [])[:3],
+        }
+    if question_type == "concepts":
+        return {
+            "job_title": job_title,
+            "domain": domain,
+            "seniority": d.get("seniority") or "",
+            "must_have_skills": (d.get("must_have_skills") or [])[:8],
+            "overlap_skills": (d.get("overlap_skills") or [])[:10],
+            "jd_highlights": (d.get("jd_highlights") or [])[:8],
+            "responsibilities": (d.get("responsibilities") or [])[:6],
+            "tools": (d.get("tools") or [])[:6],
+            "nice_to_have_skills": (d.get("nice_to_have_skills") or [])[:5],
+        }
+    if question_type == "situational":
+        return {
+            "job_title": job_title,
+            "domain": domain,
+            "gap_skills": (d.get("gap_skills") or [])[:8],
+            "transferable_bridges": (d.get("transferable_bridges") or [])[:6],
+            "overlap_skills": (d.get("overlap_skills") or [])[:6],
+            "responsibilities": (d.get("responsibilities") or [])[:4],
+            "resume_anchors": (d.get("resume_anchors") or [])[:5],
+            "experience": (d.get("experience") or [])[:3],
+        }
+    return {"job_title": job_title, "domain": domain}
+
+
+def _build_behavioral_batch_prompt(
+    job_title,
+    dossier,
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    exclude_questions=None,
+    only_missing=None,
+):
+    b, m, h = _typed_levels_request_counts(
+        beginner_count, medium_count, hard_count, only_missing
+    )
+    slice_blob = _dossier_json(_dossier_slice_for_type(dossier, "behavioral"))
+    exclude_block = _exclude_questions_block(exclude_questions)
+    anchor_block = _dossier_anchor_assignment_block(dossier or {})
+    return f"""You are an expert interviewer writing BEHAVIORAL interview questions for **{job_title}**.
+
+TYPE: behavioral (experience / story probes from the candidate's past work).
+RULES (strict):
+- Every question MUST name one concrete resume artifact: company, project, outcome, method, or tool from the dossier slice.
+- Prefer STAR-friendly probes: Situation/Task they owned, Action they took, Result they can describe.
+- Do NOT use hypothetical framing ("how would you…", "what would you do if…"). Ask about what they DID.
+- BAN definition/textbook stems: "What is", "Explain", "Define", "List advantages".
+- BAN soft stems: "Tell us about your experience with" + bare skill name.
+- ONE resume anchor per question; spread across the RESUME ANCHOR POOL before reusing.
+- Briefly aim the probe at role relevance using overlap_skills / responsibilities when natural.
+- No coding tasks. Use ONLY the dossier slice. Invent nothing.
+{_typed_difficulty_ladder_text()}
+
+{anchor_block}
+{exclude_block}
+CANDIDATE BEHAVIORAL DOSSIER SLICE (use ONLY this):
+{slice_blob}
+
+{_levels_schema_block(b, m, h)}"""
+
+
+def _build_concepts_batch_prompt(
+    job_title,
+    dossier,
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    exclude_questions=None,
+    only_missing=None,
+):
+    b, m, h = _typed_levels_request_counts(
+        beginner_count, medium_count, hard_count, only_missing
+    )
+    slim = _dossier_slice_for_type(dossier, "concepts")
+    slice_blob = _dossier_json(slim)
+    exclude_block = _exclude_questions_block(exclude_questions)
+    domain_hint = _concepts_domain_hint(str(slim.get("domain") or ""))
+    return f"""You are an expert interviewer writing CONCEPTS / FUNDAMENTALS questions for **{job_title}**.
+
+TYPE: concepts (applied domain knowledge from the JD — not a difficulty label).
+RULES (strict):
+- Ground every question in must_have_skills, overlap_skills, jd_highlights, tools, or responsibilities.
+- Ask for APPLIED understanding: how they would use, choose, measure, or reason about a JD concept in THIS role.
+- BAN pure textbook stems: "What is X", "Define X", "List advantages of X", "Explain the difference between".
+- Resume stories are OPTIONAL — do not force a resume project into every question.
+- Prefer overlap_skills when present; otherwise probe must_have_skills as role expectations.
+- No coding tasks / leetcode. Use ONLY the dossier slice. Invent nothing.
+{domain_hint}
+{_typed_difficulty_ladder_text()}
+
+{exclude_block}
+ROLE CONCEPTS DOSSIER SLICE (use ONLY this):
+{slice_blob}
+
+{_levels_schema_block(b, m, h)}"""
+
+
+def _build_situational_batch_prompt(
+    job_title,
+    dossier,
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    exclude_questions=None,
+    only_missing=None,
+):
+    b, m, h = _typed_levels_request_counts(
+        beginner_count, medium_count, hard_count, only_missing
+    )
+    slice_blob = _dossier_json(_dossier_slice_for_type(dossier, "situational"))
+    exclude_block = _exclude_questions_block(exclude_questions)
+    return f"""You are an expert interviewer writing SITUATIONAL interview questions for **{job_title}**.
+
+TYPE: situational (scenario + decision probes, especially around gaps and bridges).
+RULES (strict):
+- Every question MUST open with a concrete scenario or decision point for THIS role.
+- Ground in gap_skills and/or transferable_bridges from the dossier slice.
+- gap_skills: NEVER claim the candidate already used them. Phrase as transfer:
+  "Given your <nearest resume work>, how would you approach <gap skill / JD need>?"
+- Prefer transferable_bridges that link a resume capability to a JD expectation.
+- BAN definition/textbook stems. BAN pure past-story behavioral walks with no scenario.
+- No coding tasks. Use ONLY the dossier slice. Invent nothing.
+{_typed_difficulty_ladder_text()}
+
+{exclude_block}
+SITUATIONAL DOSSIER SLICE (use ONLY this):
+{slice_blob}
+
+{_levels_schema_block(b, m, h)}"""
+
+
+def _merge_level_dicts(*level_dicts) -> dict:
+    """Concatenate beginner/medium/hard lists from multiple type generators."""
+    merged = {"beginner": [], "medium": [], "hard": []}
+    for d in level_dicts:
+        if not isinstance(d, dict):
+            continue
+        for level in ("beginner", "medium", "hard"):
+            merged[level].extend(list(d.get(level) or []))
+    return merged
+
+
+def _empty_level_dict() -> dict:
+    return {"beginner": [], "medium": [], "hard": []}
+
+
+def _count_level_dict(level_dict: dict) -> int:
+    if not isinstance(level_dict, dict):
+        return 0
+    return sum(len(level_dict.get(level) or []) for level in ("beginner", "medium", "hard"))
+
+
+def generate_behavioral_questions(
+    job_title,
+    dossier,
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    model="llama3",
+    exclude_questions=None,
+):
+    """Generate behavioral questions grounded in resume anchors / experience."""
+    if beginner_count + medium_count + hard_count <= 0:
+        return _empty_level_dict()
+    return _generate_batched_levels(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="behavioral",
+        label_prefix="behavioral_batch",
+        exclude_questions=exclude_questions,
+        prompt_builder=_build_behavioral_batch_prompt,
+    )
+
+
+def generate_concepts_questions(
+    job_title,
+    dossier,
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    model="llama3",
+    exclude_questions=None,
+):
+    """Generate concepts/fundamentals questions grounded in JD skill lists."""
+    if beginner_count + medium_count + hard_count <= 0:
+        return _empty_level_dict()
+    return _generate_batched_levels(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="concepts",
+        label_prefix="concepts_batch",
+        exclude_questions=exclude_questions,
+        prompt_builder=_build_concepts_batch_prompt,
+    )
+
+
+def generate_situational_questions(
+    job_title,
+    dossier,
+    beginner_count=0,
+    medium_count=0,
+    hard_count=0,
+    model="llama3",
+    exclude_questions=None,
+):
+    """Generate situational questions grounded in gaps / transferable bridges."""
+    if beginner_count + medium_count + hard_count <= 0:
+        return _empty_level_dict()
+    return _generate_batched_levels(
+        job_title,
+        dossier,
+        beginner_count,
+        medium_count,
+        hard_count,
+        model,
+        mode="situational",
+        label_prefix="situational_batch",
+        exclude_questions=exclude_questions,
+        prompt_builder=_build_situational_batch_prompt,
+    )
+
+
+def _generate_typed_bucket(
+    question_type: str,
+    job_title: str,
+    dossier: dict,
+    levels: dict,
+    model: str,
+    exclude_questions=None,
+):
+    """Dispatch one typed generator for a beginner/medium/hard level dict."""
+    b = int((levels or {}).get("beginner") or 0)
+    m = int((levels or {}).get("medium") or 0)
+    h = int((levels or {}).get("hard") or 0)
+    if question_type == "behavioral":
+        return generate_behavioral_questions(
+            job_title, dossier, b, m, h, model=model, exclude_questions=exclude_questions
+        )
+    if question_type == "concepts":
+        return generate_concepts_questions(
+            job_title, dossier, b, m, h, model=model, exclude_questions=exclude_questions
+        )
+    if question_type == "situational":
+        return generate_situational_questions(
+            job_title, dossier, b, m, h, model=model, exclude_questions=exclude_questions
+        )
+    return _empty_level_dict()
+
+
 def generate_core_questions(
     structured_resume,
     job_title,
@@ -2222,24 +2614,155 @@ def generate_core_questions(
     exclude_questions=None,
 ):
     """
-    Generate core questions via batched LLM calls (dossier fed once per round).
-    Refills until exact per-level counts are met or max rounds exhausted.
-    No post-generation heuristic dedupe — quality enforced via prompt only.
+    Core path (no Split/Blend): domain-aware type mix with specialized prompts.
+
+    Uses question_mix.compute_question_plan for Behavioral / Concepts / Situational
+    counts. Coding remains a separate slider handled by run_pipeline_from_api.
+    Easy/Medium/Hard slider totals are preserved via margin-preserving allocation.
     """
     if dossier is None:
         raise ValueError("dossier is required for question generation")
 
-    return _generate_batched_levels(
-        job_title,
+    beginner_count = max(0, int(beginner_count or 0))
+    medium_count = max(0, int(medium_count or 0))
+    hard_count = max(0, int(hard_count or 0))
+    theory_total = beginner_count + medium_count + hard_count
+    if theory_total <= 0:
+        return _empty_level_dict()
+
+    focus = infer_interview_focus(
         dossier,
+        job_title=job_title,
+        job_description=job_description,
+    )
+    # Zero coding in the type mix — coding count comes from question_counts.coding.
+    mix = normalize_mix(get_preset_mix(focus), is_technical=False)
+    plan = compute_question_plan(
+        theory_total,
+        dossier,
+        interview_focus=focus,
+        type_mix_override=mix,
+        job_title=job_title,
+        job_description=job_description,
+        is_technical=False,
+    )
+    type_difficulty = allocate_type_counts_by_difficulty_targets(
+        plan.type_counts,
         beginner_count,
         medium_count,
         hard_count,
-        model,
-        mode="core",
-        label_prefix="core_batch",
-        exclude_questions=exclude_questions,
     )
+
+    print(
+        f"[INFO] Core type-mix plan focus={plan.interview_focus} "
+        f"type_counts={plan.type_counts} eligibility={plan.eligibility}"
+    )
+    for notice in plan.notices:
+        print(f"[INFO] Mix notice: {notice}")
+
+    theory_types = ("behavioral", "concepts", "situational")
+    results_by_type = {}
+    for question_type in theory_types:
+        levels = type_difficulty.get(question_type) or {}
+        needed = sum(int(levels.get(k) or 0) for k in ("beginner", "medium", "hard"))
+        if needed <= 0:
+            results_by_type[question_type] = _empty_level_dict()
+            continue
+        print(
+            f"[INFO] Generating {question_type} questions: "
+            f"beginner={levels.get('beginner', 0)} "
+            f"medium={levels.get('medium', 0)} "
+            f"hard={levels.get('hard', 0)}"
+        )
+        results_by_type[question_type] = _generate_typed_bucket(
+            question_type,
+            job_title,
+            dossier,
+            levels,
+            model,
+            exclude_questions=exclude_questions,
+        )
+
+    # Generation shortfall: ask next eligible type for missing counts.
+    for question_type in theory_types:
+        planned = sum(
+            int((type_difficulty.get(question_type) or {}).get(k) or 0)
+            for k in ("beginner", "medium", "hard")
+        )
+        got = _count_level_dict(results_by_type.get(question_type))
+        shortfall = max(0, planned - got)
+        if shortfall <= 0:
+            continue
+        adjusted, notices = redistribute_generation_shortfall(
+            {
+                t: sum(
+                    int((type_difficulty.get(t) or {}).get(k) or 0)
+                    for k in ("beginner", "medium", "hard")
+                )
+                for t in ("behavioral", "concepts", "situational", "coding")
+            },
+            question_type,
+            shortfall,
+            plan.eligibility,
+        )
+        for notice in notices:
+            print(f"[WARN] {notice}")
+        for target in ("situational", "concepts", "behavioral"):
+            if target == question_type:
+                continue
+            extra = max(
+                0,
+                int(adjusted.get(target, 0))
+                - sum(
+                    int((type_difficulty.get(target) or {}).get(k) or 0)
+                    for k in ("beginner", "medium", "hard")
+                ),
+            )
+            if extra <= 0 or not plan.eligibility.get(target):
+                continue
+            fill_levels = allocate_type_counts_by_difficulty_targets(
+                {
+                    target: extra,
+                    "behavioral": 0,
+                    "concepts": 0,
+                    "situational": 0,
+                    "coding": 0,
+                },
+                beginner_count,
+                medium_count,
+                hard_count,
+            ).get(target) or {}
+            print(
+                f"[INFO] Shortfall fill: {extra} via {target} "
+                f"(from {question_type} shortfall={shortfall})"
+            )
+            fill = _generate_typed_bucket(
+                target,
+                job_title,
+                dossier,
+                fill_levels,
+                model,
+                exclude_questions=exclude_questions,
+            )
+            results_by_type[target] = _merge_level_dicts(
+                results_by_type.get(target) or _empty_level_dict(),
+                fill,
+            )
+            break
+
+    merged = _merge_level_dicts(
+        results_by_type.get("behavioral") or _empty_level_dict(),
+        results_by_type.get("concepts") or _empty_level_dict(),
+        results_by_type.get("situational") or _empty_level_dict(),
+    )
+    print(
+        f"[DONE] Core type-mix merged -> "
+        f"Beginner: {len(merged['beginner'])}, "
+        f"Medium: {len(merged['medium'])}, "
+        f"Hard: {len(merged['hard'])}"
+    )
+    return merged
+
 
 # === CODING QUESTIONS GENERATION ===
 
