@@ -30,16 +30,16 @@ from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION, load_dossier, save_d
 
 QUESTION_GEN_MAX_RETRIES = 3
 DOSSIER_LLM_MAX_RETRIES = 8
-DOSSIER_LLM_MAX_TOKENS = 3072
+DOSSIER_LLM_MAX_TOKENS = 4096
 DOSSIER_LLM_TEMPERATURE = 0.2
-DOSSIER_TARGET_MAX_CHARS = 9000
+DOSSIER_TARGET_MAX_CHARS = 14000
 JD_PREP_EXCERPT_MAX = 5000
 HIGHLIGHTS_MAX = 4
 JD_HIGHLIGHTS_MAX = 8
 HIGHLIGHT_ITEM_MAX = 140
-RESUME_TEXT_DOSSIER_MAX = 10000
+RESUME_TEXT_DOSSIER_MAX = 16000
 QUESTION_REPAIR_MAX_PASSES = 1
-QUESTION_BATCH_MAX_TOKENS = 3072
+QUESTION_BATCH_MAX_TOKENS = 4096
 QUESTION_BATCH_TEMPERATURE = 0.3
 QUESTION_BATCH_MAX_REFILL_ROUNDS = 8
 
@@ -925,12 +925,27 @@ def _dossier_json(dossier):
 
 def _shared_interview_contract_text():
     return """SHARED RULES (strict):
-- Write REAL interview probes a hiring manager would ask in a live interview for THIS job title.
+- Write REAL, high-signal interview probes a hiring manager would ask in a live interview for THIS job title.
 - Adapt tone to the role domain in the dossier (technical, business, creative, operations, etc.).
+- CONCISENESS & LENGTH: Every question MUST be 1–2 crisp sentences (target 25–55 words maximum). Do NOT write lengthy multi-part essays.
 - BAN definition/textbook stems: "What is", "Explain", "Define", "List advantages", "Describe the difference between".
 - BAN soft/vague stems: "Tell us about your experience with", "What was your approach to",
   "What strategies would you employ", "How did you handle X" when X is only a bare skill name,
   "Describe your role in" with no concrete artifact.
+- BAN raw resume bullet copy-pasting, verb splicing & robotic boilerplate prefixes:
+  * BAN repetitive boilerplate stems:
+    - NEVER start questions with "For the [X] at [Y]...", "On your [X] at [Y]...", "During your work on [X] at [Y]...", or "When scaling [X] at [Y]...".
+    - NEVER start with "Given your experience with [verb]..." (e.g., "Given your experience with developed/built/managed").
+    - NEVER paste raw past-tense bullet text (e.g., NEVER say "Regarding Architected and deployed..." or "During Implemented...").
+  * Always open questions naturally with varied sentence structures like a human interviewer.
+  * Always refer to past projects/systems as natural noun phrases (e.g., "your FastAPI backend services", "the hybrid search pipeline", "the ETL data processing pipeline").
+  * NEVER force an unrelated scenario onto a technology:
+    - DO NOT apply vector search/semantic retrieval failure scenarios to general REST APIs or backend services.
+    - Match the technical scenario to the actual tech stack:
+      * APIs / Backend: probe async concurrency, rate limiting, connection pooling, timeout handling, request validation, or auth token security.
+      * Databases / Storage: probe query optimization, indexing, cache invalidation in Redis, transaction isolation, or replica sync.
+      * AI / Search / RAG: probe vector indexing, embedding recall vs precision, token limits, re-ranking latency, or hallucination guards.
+      * Cloud / DevOps: probe container autoscaling, CI/CD rollbacks, zero-downtime deployments, or circuit-breaking.
 - Every question MUST name at least one concrete resume artifact from the dossier:
   company, project/initiative, outcome/metric, method, or tool named in the dossier —
   AND tie to a JD expectation (must_have_skills, tools, responsibilities, or transferable_bridges).
@@ -945,25 +960,25 @@ def _shared_interview_contract_text():
 - Use ONLY the dossier. Do not invent employers, projects, skills, or past usage of gap tools.
 
 DIFFICULTY LADDER (must get deeper; do not rephrase the same anecdote):
-- beginner/easy: walk through ONE concrete thing they did — name project/outcome/tool from dossier.
-- medium: how/why/process, ownership, failure modes, or measurement — still on THEIR past work, aimed at JD.
-- hard: tradeoffs and judgment applying THEIR past work to THIS role's constraints; what they would change and why.
+- beginner/easy: Walk through ONE concrete system/project from the dossier — probe data flow, component ownership, and why key technologies were chosen.
+- medium: Probe architecture mechanisms, real-world failure modes, latency bottlenecks, debugging edge cases, or measurement linked to role expectations.
+- hard: Deep senior/lead judgment — complex trade-offs, dependency risk management (e.g. latency spikes under load during releases), circuit-breaking, scalability constraints, and go/no-go decisions.
 """
 
 
 def _difficulty_depth_hint(level):
     hints = {
         "beginner": (
-            "Ask them to walk through one concrete past artifact "
-            "(named project/outcome/tool from the dossier)."
+            "Walk through one concrete past system/project from the dossier — probe data flow, "
+            "component ownership, and why key technology choices were made."
         ),
         "medium": (
-            "Ask how/why they built or decided something, including failure modes or measurement, "
-            "linked to a JD expectation."
+            "Ask how/why they built or decided something under real production conditions — probe failure modes, "
+            "search/data bottlenecks, latency mitigation, or metric measurement linked to a JD expectation."
         ),
         "hard": (
-            "Ask for tradeoffs/judgment applying their concrete past work to this role's "
-            "constraints (prefer transferable_bridges); not a generic strategy essay."
+            "Probe senior/lead architectural trade-offs, release readiness, dependency risk management, "
+            "or handling edge-case system constraints; not a generic strategy essay."
         ),
     }
     return hints.get(level, hints["medium"])
@@ -991,6 +1006,14 @@ def _is_generic_definition_question(question_text):
         "what considerations would you take",
         "how would you approach designing a scalable",
         "how would you balance the trade-offs between using",
+        "given your experience with developed",
+        "given your experience with built",
+        "given your experience with implemented",
+        "given your experience with designed",
+        "given your experience with created",
+        "given your experience with managed",
+        "given your experience with led",
+        "given your experience with engineered",
     )
     if any(q.startswith(b) for b in banned_starts):
         return True
@@ -1004,6 +1027,9 @@ def _is_generic_definition_question(question_text):
         "how would you leverage your experience",
         "design a scalable approach for",
         "design a scalable approach to",
+        "can you describe what is",
+        "what are the key differences between",
+        "what is the definition of",
     )
     if any(p in q for p in soft_patterns):
         return True
@@ -1190,14 +1216,33 @@ def _blend_weight_guidance(blend_pct_resume: int = 50, blend_pct_jd: int = 50) -
         )
 
 
+def _detect_profile_domain_category(dossier: dict) -> str:
+    domain = (dossier.get("domain") or "").lower()
+    skills = " ".join([str(s).lower() for s in (dossier.get("resume_skills") or [])])
+    tools = " ".join([str(t).lower() for t in (dossier.get("tools") or [])])
+    title = (dossier.get("job_title") or "").lower()
+    all_text = f"{domain} {title} {skills} {tools}"
+
+    if any(k in all_text for k in ("product", "pm", "marketing", "growth", "strategy", "scrum", "a/b test", "conversion")):
+        return "product_business"
+    if any(k in all_text for k in ("react", "vue", "angular", "frontend", "ui", "ux", "css", "html", "tailwind", "next.js", "web vital", "canvas")):
+        return "frontend_ui"
+    if any(k in all_text for k in ("langchain", "llm", "rag", "embedding", "pinecone", "gemini", "gpt", "transformer", "machine learning", "nlp", "ai ", "search")):
+        return "ai_ml_search"
+    if any(k in all_text for k in ("kafka", "airflow", "spark", "etl", "data engineer", "pipeline", "streaming")):
+        return "data_pipeline"
+    return "backend_systems"
+
+
 def _dossier_dynamic_examples_block(
     dossier: dict,
     mode: str = "core",
     blend_pct_resume: int = 50,
     blend_pct_jd: int = 50,
 ) -> str:
-    """Universal BAD examples + GOOD examples grounded in THIS dossier."""
+    """Universal BAD examples + GOOD examples grounded in THIS dossier and domain."""
     s = _dossier_example_snippets(dossier)
+    cat = _detect_profile_domain_category(dossier)
     domain_line = ""
     if s["domain"] and s["domain"] != "general":
         domain_line = (
@@ -1217,46 +1262,84 @@ def _dossier_dynamic_examples_block(
     b_jd = 50 if blend_pct_jd is None else int(blend_pct_jd)
     is_jd_heavy_blend = mode in ("blend", "hybrid") and b_jd > b_res
 
-    if is_jd_heavy_blend:
+    if cat == "product_business":
         examples_section = f"""
-BEGINNER (JD-primary walkthrough — lead with JD expectation):
-- BAD: "Walk through {s['project']} at {s['company']}." (too resume-heavy for {blend_pct_jd}% JD weight)
-- GOOD: "Our role requires {s['jd_need']}. How does your experience with {s['project']} at {s['company']} demonstrate your ability to deliver this?"
+BEGINNER (product/strategy walkthrough — grounded in metrics):
+- BAD: "For the APIs at {s['company']}, can you walk us through the data flow..." (wrong domain!)
+- GOOD: "At {s['company']}, when leading {s['project']}, what quantitative success metrics did you establish to measure user adoption, and how did you track them?"
 
-MEDIUM (JD-primary mechanism / challenge — lead with JD requirement):
-- BAD: "On {s['project']}, what failure mode worried you most?" (ignores the {blend_pct_jd}% JD weight)
-- GOOD: "For this role's key responsibility of {s['jd_need']}, what specific approach would you take given your past work on {s['artifact_b']} at {s['company_b']}?"
+MEDIUM (experimentation & operational dilemma):
+- BAD: "Suppose an endpoint experiences connection pool exhaustion..." (wrong domain!)
+- GOOD: "During A/B experimentation on {s['project']}, suppose an experiment increased user engagement but caused a drop in downstream conversion. How would you investigate the root cause and decide whether to roll out?"
 
-HARD (JD-primary judgment & tradeoffs — lead with JD constraint/goal):
-- BAD: "Given {s['project']} at {s['company']}, what would you change?" (resume-heavy framing)
-- GOOD: "In this role, you will face {s['jd_need']}. Given your background with {s['project']} at {s['company']}, what tradeoffs would you navigate to meet this requirement?"
+HARD (roadmap prioritization & business trade-offs):
+- BAD: "When scaling Redis to handle concurrency..." (wrong domain!)
+- GOOD: "When defining the product roadmap for {s['jd_need']}, how would you balance short-term revenue-generating feature requests against long-term user retention and core product health?"
 """
-    else:
+    elif cat == "frontend_ui":
         examples_section = f"""
-BEGINNER (concrete walkthrough — pick ONE anchor bundle):
-- Must name a specific project/outcome from a single anchor (not a bare skill label).
-- BAD: "Tell us about your experience with {s['tool_or_method']}."
-- BAD: Mixing two anchors: "On {s['project']}, how did you approach {s['artifact_b']}?" (if they are different work)
-- GOOD: "Walk through {s['project']} at {s['company']} — what did you own and what changed?"
-- GOOD: "Regarding {s['artifact']} at {s['company']}, what did you personally build and what was the result?"
+BEGINNER (component architecture & state data flow):
+- BAD: "For the APIs at {s['company']}, can you walk us through..." (boilerplate backend stem!)
+- GOOD: "At {s['company']}, when architecting {s['project']} using {s['tool_or_method']}, how did you structure component state management and API data fetching to minimize unnecessary re-renders?"
 
-MEDIUM (mechanism / failure / measurement — ONE anchor only):
-- Ask how/why, ownership, what broke, or what you measured on that same anchor.
-- Link to a JD expectation from the dossier.
-- BAD: "Describe a time you faced a challenge at work."
-- BAD: "What challenges did you face integrating {s['gap']}?" (gap_skill — invents past use)
-- GOOD: "On {s['project']}, what failure mode worried you most in production and how did you mitigate it?"
-- GOOD: "For {s['artifact_b']} at {s['company_b']}, how did you measure success and what would you change for {s['jd_need']}?"
+MEDIUM (UI performance & rendering bottleneck):
+- BAD: "Suppose the system experiences database connection pool exhaustion..." (wrong tier!)
+- GOOD: "In {s['project']}, when users experience sluggish rendering during high-frequency real-time updates, how would you profile the browser bottleneck and optimize the component tree?"
 
-HARD (judgment for THIS role — resume anchor + JD need; gap skills as transfer only):
-- Apply ONE concrete past anchor to this role's constraints; ask tradeoffs and what they would change.
-- BAD: "How would you design a scalable approach for {s['job_title']}?"
-- BAD: "Given your experience with {s['gap']}..." (gap must NOT be claimed as past experience)
-- GOOD: "Given {s['project']} at {s['company']}, what would you change to meet this role's need for {s['jd_need']} — and why?"
-- GOOD: "You may not list {s['gap']} strongly; given {s['artifact_b']}, how would you ramp up for that JD expectation?"
+HARD (frontend scale, architecture & state synchronization):
+- BAD: "When scaling Redis to handle concurrency..." (wrong tier!)
+- GOOD: "When scaling {s['project']} across multiple feature teams, what architectural patterns would you enforce for shared state synchronization and code-splitting without degrading initial page load times?"
+"""
+    elif cat == "ai_ml_search":
+        examples_section = f"""
+BEGINNER (AI/RAG data flow & model integration):
+- BAD: "For the APIs at {s['company']}, can you walk us through..." (boilerplate stem)
+- GOOD: "At {s['company']}, when implementing {s['project']} with {s['tool_or_method']}, can you walk us through the end-to-end data flow from document ingestion to response generation, and why you selected this approach?"
+
+MEDIUM (retrieval failure & hallucination mitigation):
+- BAD: "Describe a time you faced a challenge on {s['project']}." (HR cliché)
+- GOOD: "In {s['project']} using {s['tool_or_method']}, suppose the retrieval pipeline retrieves semantically related results but frequently misses exact identifiers or error codes. How would you diagnose and redesign the retrieval layer?"
+
+HARD (production AI latency, dependency risk & context limits):
+- BAD: "How would you design a scalable approach for {s['job_title']}?" (generic)
+- GOOD: "You are leading a production release for {s['jd_need']}. When upstream LLM APIs experience intermittent latency spikes or token limits under heavy traffic, what circuit-breaking and fallback strategies would you enforce?"
+"""
+    elif cat == "data_pipeline":
+        examples_section = f"""
+BEGINNER (data flow & pipeline DAG architecture):
+- BAD: "Tell us about your experience with {s['tool_or_method']}." (generic)
+- GOOD: "At {s['company']}, when building the data processing pipeline for {s['project']} using {s['tool_or_method']}, how did you structure the workflow DAG and error retry logic?"
+
+MEDIUM (backpressure & pipeline failure modes):
+- BAD: "Describe a time you faced a challenge." (HR cliché)
+- GOOD: "Suppose an ETL pipeline in {s['project']} begins experiencing consumer lag and backpressure under sudden volume spikes. How would you isolate the bottleneck and redesign partitioning?"
+
+HARD (data consistency, scale & streaming trade-offs):
+- BAD: "When scaling APIs to handle concurrency..." (generic)
+- GOOD: "When managing large-scale data ingestion for {s['jd_need']}, what trade-offs did you navigate between batch vs stream processing to maintain low latency while ensuring exactly-once processing?"
+"""
+    else:  # backend_systems
+        examples_section = f"""
+BEGINNER (backend architecture & request data flow):
+- BAD: "For the APIs at {s['company']}, can you walk us through..." (boilerplate stem)
+- GOOD: "At {s['company']}, when designing {s['project']} using {s['tool_or_method']}, how did you structure request routing, validation, and database queries to ensure low latency under load?"
+
+MEDIUM (operational failure mode & connection pooling):
+- BAD: "On your APIs at {s['company']}, suppose users report that the system retrieves semantically related results..." (semantic search scenario forced on REST APIs!)
+- GOOD: "Suppose a high-traffic endpoint in {s['project']} begins experiencing database connection pool exhaustion under sudden traffic bursts. How would you isolate the root cause and redesign the connection pooling or caching strategy?"
+
+HARD (distributed scale, caching & data consistency):
+- BAD: "When scaling APIs to handle concurrency..." (generic)
+- GOOD: "When scaling {s['project']} at {s['company']} to handle high-concurrency workloads, how did you balance cache invalidation strategies in Redis against database replication lag to maintain data consistency?"
 """
 
     return f"""{domain_line}
+ANTI-MEMORIZATION RULE (mandatory):
+- The examples below illustrate the TONE, NATURAL OPENINGS, and TECHNICAL DEPTH of great interview questions.
+- You MUST create a UNIQUE scenario grounded specifically in THIS candidate's actual tools and duties.
+- DO NOT blindly copy the example failure words (e.g. only ask about Redis cache lag if Redis is in the dossier; only ask about A/B testing if the role is product/analytics).
+- Frame questions as natural, conversational technical dilemmas.
+
 Use ONE anchor bundle per question — do NOT combine project from anchor A with outcome from anchor B.
 Self-contained resume anchors from THIS dossier:
 {bundle_block}
