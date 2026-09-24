@@ -39,6 +39,10 @@ export const isAuthErrorMessage = (message = '') => {
 export const redirectToExpiredLogin = () => {
   clearStoredAuth();
 
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('ic-session-expired'));
+  }
+
   if (window.location.pathname === '/login') {
     return;
   }

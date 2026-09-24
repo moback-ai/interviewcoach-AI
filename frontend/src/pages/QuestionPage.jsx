@@ -346,11 +346,20 @@ const processTextWithCode = (text, baseIndex) => {
 };
 
 export default function QuestionsPage() {
-  const [searchParams] = useSearchParams(); // ✅ Add this
+  const [searchParams, setSearchParams] = useSearchParams();
   const [expandedQuestions, setExpandedQuestions] = useState(new Set());
   const [filterLevel, setFilterLevel] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [isPaymentLoading, setIsPaymentLoading] = useState(false);
+
+  const handleSelectQuestionSet = (newSet) => {
+    const nextSet = Number(newSet);
+    if (!nextSet || nextSet === currentQuestionSet) return;
+    setExpandedQuestions(new Set());
+    const newParams = new URLSearchParams(searchParams);
+    newParams.set('question_set', nextSet.toString());
+    setSearchParams(newParams);
+  };
   // Database state
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -432,18 +441,21 @@ export default function QuestionsPage() {
         const questionsForThisCombination = questionSetsResult.data || [];
         
         // Extract unique question sets for this combination and sort them
-        const questionSets = [...new Set(questionsForThisCombination.map(q => q.question_set))].sort((a, b) => b - a);
-        setAvailableQuestionSets(questionSets);
+        const rawSets = questionsForThisCombination
+          .map(q => Number(q.question_set))
+          .filter(num => Number.isInteger(num) && num > 0);
+        const questionSets = [...new Set(rawSets)].sort((a, b) => a - b);
+        setAvailableQuestionSets(questionSets.length > 0 ? questionSets : [1]);
         
         console.log('[DEBUG] Available question sets for this combination:', questionSets);
         
         // ✅ Use the question_set from URL if available, otherwise fall back to most recent
         let targetQuestionSet = null;
         if (questionSetFromUrl) {
-          targetQuestionSet = parseInt(questionSetFromUrl);
+          targetQuestionSet = parseInt(questionSetFromUrl, 10);
           console.log('[DEBUG] Using question_set from URL:', targetQuestionSet);
         } else {
-          targetQuestionSet = questionSets.length > 0 ? questionSets[0] : null;
+          targetQuestionSet = questionSets.length > 0 ? questionSets[questionSets.length - 1] : 1;
           console.log('[DEBUG] No question_set in URL, using most recent:', targetQuestionSet);
         }
         
@@ -750,7 +762,7 @@ export default function QuestionsPage() {
       setNoticeModal({
         isOpen: true,
         title: 'Questions regenerated',
-        message: `Set ${currentQuestionSet} was updated with ${uniqueQuestions.size || savedQuestions.length} refreshed question${(uniqueQuestions.size || savedQuestions.length) === 1 ? '' : 's'}.`,
+        message: `Question Set ${currentQuestionSet} was updated with ${uniqueQuestions.size || savedQuestions.length} refreshed question${(uniqueQuestions.size || savedQuestions.length) === 1 ? '' : 's'}.`,
         variant: 'info',
         primaryLabel: 'OK',
       });
@@ -1251,6 +1263,31 @@ export default function QuestionsPage() {
                 {!loading && !error && (
                   <>
                     <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 w-full mt-4">
+                      {availableQuestionSets.length > 0 && (
+                        <div className="relative inline-flex items-center">
+                          <select
+                            id="action-row-question-set-select"
+                            value={currentQuestionSet || ''}
+                            onChange={(e) => handleSelectQuestionSet(e.target.value)}
+                            disabled={loading}
+                            className="appearance-none inline-flex items-center text-sm font-medium pl-4 sm:pl-5 pr-10 sm:pr-10 py-2.5 min-w-[170px] rounded-lg border border-[var(--color-border)] text-[var(--color-text-primary)] bg-[var(--color-input-bg)] hover:bg-[var(--color-card)] hover:border-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm cursor-pointer"
+                            aria-label="Select Question Set"
+                          >
+                            {availableQuestionSets.map((setNum) => (
+                              <option 
+                                key={setNum} 
+                                value={setNum}
+                                className="bg-[var(--color-card)] text-[var(--color-text-primary)]"
+                              >
+                                Question Set {setNum}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                            <ChevronDownIcon className="w-4 h-4 text-[var(--color-text-secondary)]" />
+                          </div>
+                        </div>
+                      )}
                       {displayQuestions.length > 0 && (
                         <button
                           type="button"
@@ -1373,7 +1410,7 @@ export default function QuestionsPage() {
               >
                 <FiLoader className="w-12 h-12 sm:w-16 sm:h-16 text-[var(--color-text-secondary)] mx-auto mb-4 sm:mb-6 animate-spin" />
                 <p className="text-[var(--color-text-secondary)] text-base sm:text-lg mb-2">
-                  {currentQuestionSet ? `Loading questions from Set ${currentQuestionSet}...` : 'Loading question sets for this resume & job combination...'}
+                  {currentQuestionSet ? `Loading questions from Question Set ${currentQuestionSet}...` : 'Loading question sets for this resume & job combination...'}
                 </p>
               </motion.div>
             ) : error ? (

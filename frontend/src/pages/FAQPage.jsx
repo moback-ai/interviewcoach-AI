@@ -161,6 +161,8 @@ function FAQPage() {
     }
 
     let frameId = null;
+    let attempts = 0;
+    const maxAttempts = 15;
     const targetId = location.hash.slice(1);
 
     const scrollToHashTarget = () => {
@@ -171,7 +173,10 @@ function FAQPage() {
         return;
       }
 
-      frameId = window.requestAnimationFrame(scrollToHashTarget);
+      attempts += 1;
+      if (attempts < maxAttempts) {
+        frameId = window.requestAnimationFrame(scrollToHashTarget);
+      }
     };
 
     frameId = window.requestAnimationFrame(scrollToHashTarget);

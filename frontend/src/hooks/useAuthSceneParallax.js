@@ -4,6 +4,7 @@ export function useAuthSceneParallax() {
   const shellRef = useRef(null);
   const motionFrameRef = useRef(null);
   const prefersReducedMotionRef = useRef(false);
+  const lastMoveTimeRef = useRef(0);
 
   useEffect(() => {
     prefersReducedMotionRef.current = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -32,7 +33,7 @@ export function useAuthSceneParallax() {
     }
 
     if (motionFrameRef.current) {
-      window.cancelAnimationFrame(motionFrameRef.current);
+      return;
     }
 
     motionFrameRef.current = window.requestAnimationFrame(() => {
@@ -45,6 +46,12 @@ export function useAuthSceneParallax() {
     if (event.pointerType === 'touch' || prefersReducedMotionRef.current) {
       return;
     }
+
+    const now = performance.now();
+    if (now - lastMoveTimeRef.current < 32) {
+      return;
+    }
+    lastMoveTimeRef.current = now;
 
     const shell = shellRef.current;
     if (!shell) {

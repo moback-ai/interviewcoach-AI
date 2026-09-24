@@ -38,6 +38,16 @@ function Navbar({ disableNavigation = false }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const dropdownRef = useRef(null);
 
+  const isAuthPage = [
+    '/login',
+    '/signup',
+    '/forgot-password',
+    '/forgot-username',
+    '/reset-password',
+    '/verify-email',
+  ].includes(location.pathname);
+  const showAuthenticatedNav = !!user && !isAuthPage;
+
   const handleLogout = async () => {
     if (disableNavigation) return; // Prevent logout during question generation
     
@@ -148,7 +158,7 @@ function Navbar({ disableNavigation = false }) {
         {/* Desktop Nav */}
         <nav className="hidden md:flex items-center space-x-4 lg:space-x-6 text-sm font-medium">
           {renderNavLink("/", "Home")}
-          {user && renderNavLink("/dashboard", "Dashboard")}
+          {showAuthenticatedNav && renderNavLink("/dashboard", "Dashboard")}
           {renderNavLink("/upload", "Upload")}
           {renderNavLink("/faq", "Help & FAQ")}
           {renderNavButton("Contact", () => navigateToSection('contact'))}
@@ -160,7 +170,7 @@ function Navbar({ disableNavigation = false }) {
           <ThemeToggle disabled={disableNavigation} />
 
           {/* Desktop User Icon */}
-          {user ? (
+          {showAuthenticatedNav ? (
             <div className="hidden md:block relative" ref={dropdownRef}>
               <button
                 onClick={() => !disableNavigation && setDropdownOpen(!dropdownOpen)}
@@ -239,13 +249,13 @@ function Navbar({ disableNavigation = false }) {
         <div className="md:hidden px-3 sm:px-4 md:px-6 pb-4 border-t border-[var(--color-border)]">
           <nav className="flex flex-col space-y-3 sm:space-y-4 text-sm font-medium pt-4">
             {renderNavLink("/", "Home", () => setMenuOpen(false))}
-            {user && renderNavLink("/dashboard", "Dashboard", () => setMenuOpen(false))}
+            {showAuthenticatedNav && renderNavLink("/dashboard", "Dashboard", () => setMenuOpen(false))}
             {renderNavLink("/upload", "Upload", () => setMenuOpen(false))}
             {renderNavLink("/faq", "Help & FAQ", () => setMenuOpen(false))}
             {renderNavButton("Contact", () => navigateToSection('contact'))}
 
             {/* User Info (mobile only) */}
-            {user ? (
+            {showAuthenticatedNav ? (
               <div className="mt-4 border-t pt-4 border-[var(--color-border)] space-y-3">
                 <div className="flex items-center space-x-2 text-[var(--color-text-primary)]">
                   <FiUser />

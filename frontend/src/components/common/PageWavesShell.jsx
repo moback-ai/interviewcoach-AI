@@ -2,9 +2,9 @@ import StyleBackdrop from './StyleBackdrop';
 import { APP_BACKGROUND_STYLE_ID } from '../../lib/backgroundStyles';
 
 const PRESET_TO_STYLE_ID = {
-  subtle: 'soft-cloud',
-  upload: 'calm-upload',
-  landing: 'landing-breeze',
+  subtle: APP_BACKGROUND_STYLE_ID,
+  upload: APP_BACKGROUND_STYLE_ID,
+  landing: APP_BACKGROUND_STYLE_ID,
 };
 
 export default function PageWavesShell({

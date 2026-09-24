@@ -42,7 +42,7 @@ function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   useTheme();
-  const { login, resendVerificationEmail } = useAuth();
+  const { user, login, resendVerificationEmail, clearAuth } = useAuth();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -133,6 +133,7 @@ function Login() {
       return;
     }
 
+    clearAuth?.();
     setCoachNotice(createAuthCoachNotice({
       tone: 'warning',
       title: 'Session expired',
@@ -153,7 +154,7 @@ function Login() {
         state: location.state ?? null,
       }
     );
-  }, [location.pathname, location.search, location.state, navigate]);
+  }, [location.pathname, location.search, location.state, navigate, clearAuth]);
 
   const handleLogin = async (event) => {
     event.preventDefault();

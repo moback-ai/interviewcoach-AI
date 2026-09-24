@@ -12,10 +12,11 @@ export default function StyleBackdrop({
   const isPageContext = className.includes('style-backdrop--page');
   const useInteractiveWaves = interactive;
 
-  if (style.shell === 'css') {
+  if (style.shell === 'css' || isPageContext) {
+    const cssClass = style.shell === 'css' && style.cssClass ? style.cssClass : 'bg-style-aurora-dream';
     return (
       <div className={`${rootClass} style-backdrop--css`} aria-hidden="true">
-        <div className={`style-backdrop__css-canvas ${style.cssClass}`} />
+        <div className={`style-backdrop__css-canvas ${cssClass}`} />
       </div>
     );
   }

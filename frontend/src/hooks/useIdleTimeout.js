@@ -127,26 +127,24 @@ export const useIdleTimeout = (idleTimeoutMinutes = 10, warningTimeSeconds = 30)
 
     // Events that indicate user activity
     const activityEvents = [
-      'mousedown',
-      'mousemove',
-      'keypress',
+      'pointerdown',
+      'click',
+      'keydown',
       'scroll',
       'touchstart',
-      'click',
-      'keydown'
+      'wheel',
     ];
 
-    // Add event listeners
+    // Add event listeners with passive option to avoid scroll blocking
     const handleActivity = () => {
-      // Only reset if enough time has passed since last activity (debounce)
       const timeSinceLastActivity = Date.now() - lastActivityRef.current;
-      if (timeSinceLastActivity > 1000) { // Debounce: reset only if > 1 second since last activity
+      if (timeSinceLastActivity > 2000) {
         resetTimer();
       }
     };
 
     activityEvents.forEach(event => {
-      document.addEventListener(event, handleActivity, true);
+      document.addEventListener(event, handleActivity, { capture: true, passive: true });
     });
 
     // Initialize timer on mount
@@ -155,7 +153,7 @@ export const useIdleTimeout = (idleTimeoutMinutes = 10, warningTimeSeconds = 30)
     // Cleanup
     return () => {
       activityEvents.forEach(event => {
-        document.removeEventListener(event, handleActivity, true);
+        document.removeEventListener(event, handleActivity, { capture: true, passive: true });
       });
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
       if (warningTimerRef.current) clearTimeout(warningTimerRef.current);

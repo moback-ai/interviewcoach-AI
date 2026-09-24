@@ -1129,6 +1129,7 @@ const PaymentHistoryLink = () => {
 };
 
 function ProfilePage() {
+  const navigate = useNavigate();
   const { user, updateProfile } = useAuth();
   const [activeSection, setActiveSection] = useState('profile');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1140,6 +1141,26 @@ function ProfilePage() {
   const [savedAvatarReloadKey, setSavedAvatarReloadKey] = useState(0);
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
+
+  useEffect(() => {
+    let cancelled = false;
+    const verifyUserSession = async () => {
+      try {
+        const session = await getSession();
+        if (!session && !cancelled) {
+          navigate('/login?expired=true', { replace: true });
+        }
+      } catch {
+        if (!cancelled) {
+          navigate('/login?expired=true', { replace: true });
+        }
+      }
+    };
+    verifyUserSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   useEffect(() => {
     setProfileData(buildProfileState(user));

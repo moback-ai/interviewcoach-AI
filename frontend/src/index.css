@@ -155,7 +155,6 @@ body::before {
   mask-image: linear-gradient(to bottom, black, transparent 92%);
   opacity: 0.5;
   z-index: -1;
-  animation: ai-grid-drift 24s linear infinite;
 }
 
 body::after {
@@ -168,7 +167,6 @@ body::after {
     repeating-linear-gradient(0deg, transparent 0 54px, color-mix(in srgb, var(--color-accent) 8%, transparent) 55px, transparent 56px);
   opacity: 0.22;
   z-index: -1;
-  animation: ai-scan 14s ease-in-out infinite alternate;
 }
 
 ::selection {
@@ -284,10 +282,8 @@ body::after {
 
 .page-waves-shell__backdrop-aurora {
   border-radius: 999px;
-  filter: blur(72px);
-  opacity: 0.58;
-  will-change: transform, opacity;
-  animation: page-aurora-drift 18s ease-in-out infinite alternate;
+  filter: blur(48px);
+  opacity: 0.5;
 }
 
 .page-waves-shell__backdrop-aurora-a {
@@ -995,9 +991,8 @@ body::after {
 .auth-studio-page-aurora {
   position: absolute;
   border-radius: 999px;
-  filter: blur(80px);
-  opacity: 0.55;
-  animation: page-aurora-drift 20s ease-in-out infinite alternate;
+  filter: blur(48px);
+  opacity: 0.5;
 }
 
 .auth-studio-page-aurora-a {
@@ -4552,7 +4547,8 @@ body::after {
 
 .auth-scene-orb {
   border-radius: 999px;
-  filter: blur(30px);
+  filter: blur(14px);
+  will-change: transform;
   opacity: 0.9;
   animation: auth-scene-orb-float 16s ease-in-out infinite;
 }
@@ -5319,7 +5315,6 @@ body::after {
     radial-gradient(circle at 82% 18%, rgba(129, 140, 248, 0.38), transparent 40%),
     radial-gradient(circle at 70% 78%, rgba(45, 212, 191, 0.28), transparent 44%),
     linear-gradient(160deg, #e8f7ff 0%, #eef2ff 48%, #f8fbff 100%);
-  animation: bg-style-aurora-shift 18s ease-in-out infinite alternate;
 }
 
 .dark .bg-style-aurora-dream {
@@ -5356,7 +5351,6 @@ body::after {
     radial-gradient(circle at 88% 24%, rgba(244, 114, 182, 0.34), transparent 42%),
     radial-gradient(circle at 52% 40%, rgba(250, 204, 21, 0.18), transparent 50%),
     linear-gradient(135deg, #fff7ed 0%, #fdf2f8 46%, #eff6ff 100%);
-  animation: bg-style-sunset-pulse 22s ease-in-out infinite alternate;
 }
 
 .dark .bg-style-sunset-glow {
@@ -5365,7 +5359,6 @@ body::after {
     radial-gradient(circle at 88% 24%, rgba(244, 114, 182, 0.22), transparent 42%),
     radial-gradient(circle at 52% 40%, rgba(250, 204, 21, 0.12), transparent 50%),
     linear-gradient(135deg, #1a0f12 0%, #1f1228 46%, #0f1a2e 100%);
-  animation: bg-style-sunset-pulse 22s ease-in-out infinite alternate;
 }
 
 .bg-style-minimal-glass {
@@ -5378,16 +5371,6 @@ body::after {
   background:
     radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 36%),
     linear-gradient(180deg, rgba(6, 16, 28, 0.98), rgba(8, 22, 38, 0.94));
-}
-
-@keyframes bg-style-aurora-shift {
-  0% { filter: hue-rotate(0deg) saturate(1); }
-  100% { filter: hue-rotate(12deg) saturate(1.08); }
-}
-
-@keyframes bg-style-sunset-pulse {
-  0% { opacity: 0.92; transform: scale(1); }
-  100% { opacity: 1; transform: scale(1.02); }
 }
 
 .bg-style-thumb-ocean-waves {
