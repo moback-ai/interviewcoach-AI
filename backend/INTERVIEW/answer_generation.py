@@ -14,10 +14,21 @@ from INTERVIEW.generation_utils import (
 # Bedrock Converse override is capped at 8192 in common/llm/bedrock.py
 ANSWER_BATCH_MAX_TOKENS = 8192
 ANSWER_BATCH_TEMPERATURE = 0.3
-ANSWER_BATCH_MAX_RETRIES = 3
-ANSWER_BATCH_CHUNK_SIZE = 8  # keep room for long / coding answers
+ANSWER_BATCH_MAX_RETRIES = 2
+ANSWER_BATCH_CHUNK_SIZE = 5  # keep room for long / coding answers
 DOSSIER_ANSWER_MAX_CHARS = 9000
-MIN_ANSWER_CHARS = 80
+MIN_ANSWER_CHARS = 60
+
+
+def _repair_and_clean_answer(raw_answer: str) -> str:
+    """Auto-repair unclosed markdown code fences and clean whitespace."""
+    if not raw_answer:
+        return ""
+    text = str(raw_answer).strip()
+    fence_count = text.count("```")
+    if fence_count % 2 != 0:
+        text = text + "\n```"
+    return text
 
 
 def _compact_dossier_for_answers(dossier: dict | None) -> str:
@@ -95,7 +106,7 @@ def _chunk_questions(questions: list[dict]) -> list[list[dict]]:
     other = [q for q in questions if not q.get("requires_code")]
     chunks: list[list[dict]] = []
 
-    coding_chunk_size = max(3, ANSWER_BATCH_CHUNK_SIZE // 2)
+    coding_chunk_size = 2
     for i in range(0, len(coding), coding_chunk_size):
         chunks.append(coding[i : i + coding_chunk_size])
     for i in range(0, len(other), ANSWER_BATCH_CHUNK_SIZE):
@@ -155,45 +166,107 @@ Example shape:
 
 
 def _extract_answers_map(raw: str, question_ids: list[str]) -> dict[str, str]:
-    """Parse LLM JSON into id -> answer. Accepts answers array fallback."""
+    """Parse LLM JSON into id -> answer with robust format handling and auto-repair."""
     parsed = _parse_llm_json_object(raw)
     out: dict[str, str] = {}
+    normalized_target_ids = {str(qid).strip().lower(): qid for qid in question_ids}
 
     if isinstance(parsed, dict):
-        for qid in question_ids:
-            val = parsed.get(qid)
-            if isinstance(val, str) and val.strip():
-                out[qid] = val.strip()
-            elif isinstance(val, dict):
-                ans = val.get("answer") or val.get("expected_answer") or val.get("sample_answer")
-                if isinstance(ans, str) and ans.strip():
-                    out[qid] = ans.strip()
-
-        if not out and isinstance(parsed.get("answers"), dict):
-            for qid in question_ids:
-                val = parsed["answers"].get(qid)
+        # 1. Direct key match or case/hyphen-insensitive match
+        for key, val in parsed.items():
+            k_clean = str(key).strip().lower()
+            matching_qid = normalized_target_ids.get(k_clean)
+            if not matching_qid:
+                k_no_hyphen = k_clean.replace("-", "").replace("_", "")
+                for norm_k, orig_qid in normalized_target_ids.items():
+                    if norm_k.replace("-", "").replace("_", "") == k_no_hyphen:
+                        matching_qid = orig_qid
+                        break
+            if matching_qid:
                 if isinstance(val, str) and val.strip():
-                    out[qid] = val.strip()
+                    out[matching_qid] = _repair_and_clean_answer(val)
+                elif isinstance(val, dict):
+                    ans = (
+                        val.get("answer")
+                        or val.get("expected_answer")
+                        or val.get("sample_answer")
+                        or val.get("solution")
+                    )
+                    if isinstance(ans, str) and ans.strip():
+                        out[matching_qid] = _repair_and_clean_answer(ans)
+
+        # 2. Top-level single-item response (frequent when only 1 question is remaining/retrying)
+        if not out and len(question_ids) == 1:
+            single_qid = question_ids[0]
+            for ans_key in ("answer", "expected_answer", "sample_answer", "solution", "response"):
+                val = parsed.get(ans_key)
+                if isinstance(val, str) and val.strip():
+                    out[single_qid] = _repair_and_clean_answer(val)
+                    break
+            if not out:
+                val_id = str(parsed.get("id") or parsed.get("question_id") or "").strip().lower()
+                if val_id and val_id in normalized_target_ids:
+                    ans = parsed.get("answer") or parsed.get("expected_answer") or parsed.get("sample_answer")
+                    if isinstance(ans, str) and ans.strip():
+                        out[normalized_target_ids[val_id]] = _repair_and_clean_answer(ans)
+                elif len(parsed) == 1:
+                    sole_val = list(parsed.values())[0]
+                    if isinstance(sole_val, str) and len(sole_val.strip()) >= 40:
+                        out[single_qid] = _repair_and_clean_answer(sole_val)
+
+        # 3. Nested "answers" object or list
+        if not out and isinstance(parsed.get("answers"), dict):
+            for key, val in parsed["answers"].items():
+                k_clean = str(key).strip().lower()
+                matching_qid = normalized_target_ids.get(k_clean)
+                if matching_qid and isinstance(val, str) and val.strip():
+                    out[matching_qid] = _repair_and_clean_answer(val)
+
         if not out and isinstance(parsed.get("answers"), list):
             for item in parsed["answers"]:
                 if not isinstance(item, dict):
                     continue
-                qid = str(item.get("id") or item.get("question_id") or "")
+                item_id = str(item.get("id") or item.get("question_id") or "").strip().lower()
+                matching_qid = normalized_target_ids.get(item_id)
                 ans = item.get("answer") or item.get("expected_answer") or item.get("sample_answer")
-                if qid in question_ids and isinstance(ans, str) and ans.strip():
-                    out[qid] = ans.strip()
+                if matching_qid and isinstance(ans, str) and ans.strip():
+                    out[matching_qid] = _repair_and_clean_answer(ans)
+                elif not matching_qid and len(question_ids) == 1 and isinstance(ans, str) and ans.strip():
+                    out[question_ids[0]] = _repair_and_clean_answer(ans)
+
+    elif isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, dict):
+                item_id = str(item.get("id") or item.get("question_id") or "").strip().lower()
+                matching_qid = normalized_target_ids.get(item_id)
+                ans = item.get("answer") or item.get("expected_answer") or item.get("sample_answer")
+                if matching_qid and isinstance(ans, str) and ans.strip():
+                    out[matching_qid] = _repair_and_clean_answer(ans)
+                elif not matching_qid and len(question_ids) == 1 and isinstance(ans, str) and ans.strip():
+                    out[question_ids[0]] = _repair_and_clean_answer(ans)
 
     if out:
         return out
 
+    # 4. Regex fallback for unescaped JSON strings
     for qid in question_ids:
         pattern = rf'"{re.escape(qid)}"\s*:\s*"((?:\\.|[^"\\])*)"'
         m = re.search(pattern, raw or "", flags=re.DOTALL)
         if m:
             try:
-                out[qid] = json.loads(f'"{m.group(1)}"').strip()
+                out[qid] = _repair_and_clean_answer(json.loads(f'"{m.group(1)}"').strip())
             except Exception:
-                out[qid] = m.group(1).replace('\\"', '"').strip()
+                out[qid] = _repair_and_clean_answer(m.group(1).replace('\\"', '"').strip())
+
+    if not out and len(question_ids) == 1:
+        pattern = r'"(?:answer|expected_answer|sample_answer)"\s*:\s*"((?:\\.|[^"\\])*)"'
+        m = re.search(pattern, raw or "", flags=re.DOTALL)
+        if m:
+            try:
+                out[question_ids[0]] = _repair_and_clean_answer(json.loads(f'"{m.group(1)}"').strip())
+            except Exception:
+                out[question_ids[0]] = _repair_and_clean_answer(m.group(1).replace('\\"', '"').strip())
+
     return out
 
 
@@ -202,16 +275,20 @@ def _is_usable_answer(answer: str, requires_code: bool = False) -> bool:
     if len(text) < MIN_ANSWER_CHARS:
         return False
     if requires_code:
-        # Prefer real code blocks; still accept long plain-code answers
         has_fence = "```" in text
         has_codey = any(
             token in text
-            for token in ("def ", "function ", "class ", "SELECT ", "const ", "import ", "public ")
+            for token in (
+                "def ", "function ", "class ", "SELECT ", "const ", "let ", "var ",
+                "import ", "public ", "private ", "protected ", "fn ", "func ",
+                "struct ", "interface ", "void ", "int ", "double ", "return ",
+                "from ", "SELECT", "FROM", "WHERE", "CREATE ", "UPDATE ", "INSERT ",
+                "WITH ", "async ", "await ", "lambda", "def(", "func(", "public:",
+                "=>", "->", "package ", "type ", "println", "print("
+            )
         )
-        if not has_fence and not has_codey:
+        if not has_fence and not has_codey and len(text) < 100:
             return False
-        if has_fence and text.count("```") < 2:
-            return False  # truncated fence
     return True
 
 

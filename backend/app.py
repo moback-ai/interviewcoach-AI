@@ -2954,7 +2954,7 @@ def _persist_generated_sample_answers(generated, resume_id, jd_id, question_set)
 @app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
-@user_rate_limit(max_calls=5, window_seconds=60)
+@user_rate_limit(max_calls=15, window_seconds=60)
 def generate_answers_for_question_set():
     """Generate sample answers for questions that still lack a usable answer."""
     if request.method == 'OPTIONS':
