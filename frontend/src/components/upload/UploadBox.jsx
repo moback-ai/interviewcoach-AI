@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { FiUploadCloud, FiFileText, FiX, FiLoader } from 'react-icons/fi';
+import { FiUploadCloud, FiFileText, FiX, FiLoader, FiAlertCircle } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const formatSize = (bytes) => {
@@ -202,7 +202,12 @@ const UploadBox = ({
         ))}
       </AnimatePresence>
 
-      {error && <p className="text-sm text-[var(--color-error)] mt-2">{error}</p>}
+      {error && (
+        <div className="app-inline-error mt-2" role="alert">
+          <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+          <span>{error}</span>
+        </div>
+      )}
     </motion.div>
   );
 };

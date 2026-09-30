@@ -720,7 +720,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
               id: Date.now(), // Use timestamp as unique ID
               speaker: 'system',
               message: `Transcription failed: ${result.message || 'Unknown error'}`,
-              timestamp: new Date().toLocaleTimeString()
+              timestamp: new Date().toLocaleTimeString(),
+              isError: true
             };
             setConversation(prev => [...prev, errorMessage]);
             setIsLoading(false);
@@ -732,7 +733,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             id: Date.now(), // Use timestamp as unique ID
             speaker: 'system',
             message: `Transcription error: ${error.message || 'Unknown error'}`,
-            timestamp: new Date().toLocaleTimeString()
+            timestamp: new Date().toLocaleTimeString(),
+            isError: true
           };
           setConversation(prev => [...prev, errorMessage]);
           setIsLoading(false);
@@ -794,7 +796,8 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
             error.name === 'MediaDevicesUnsupported' || error.name === 'MediaDevicesUnavailable'
               ? getMediaAccessErrorMessage('audio')
               : `Microphone error: ${error.message || 'Unknown error'}`,
-          timestamp: new Date().toLocaleTimeString()
+          timestamp: new Date().toLocaleTimeString(),
+          isError: true
         };
         setConversation(prev => [...prev, errorMessage]);
         setIsRecording(false);
@@ -1211,47 +1214,72 @@ function ChatWindow({ conversation, setConversation, isLoading, setIsLoading, is
                 ease: "easeInOut",
                 repeatType: "reverse"
               }}
-              className={`flex ${message.speaker === 'interviewer' ? 'justify-start' : 'justify-end'}`}
+              className={`flex ${
+                message.isError || message.speaker === 'system'
+                  ? 'justify-start'
+                  : message.speaker === 'interviewer'
+                    ? 'justify-start'
+                    : 'justify-end'
+              }`}
             >
               <div
                 className={`max-w-[90%] sm:max-w-[85%] rounded-xl sm:rounded-2xl shadow-lg ${
-                  message.isThinking
-                    ? 'p-3 sm:p-4 md:p-5 border-2 sm:border-3 border-[var(--color-primary)]'
-                    : 'p-3 sm:p-4 md:p-5 border border-[var(--color-border)]'
+                  message.isError
+                    ? 'p-3 sm:p-4 md:p-5 border-2 border-[var(--color-error)] bg-[color-mix(in_srgb,var(--color-error)_12%,var(--color-card))]'
+                    : message.isThinking
+                      ? 'p-3 sm:p-4 md:p-5 border-2 sm:border-3 border-[var(--color-primary)]'
+                      : 'p-3 sm:p-4 md:p-5 border border-[var(--color-border)]'
                 } ${
-                  message.speaker === 'candidate' ? 'border border-[var(--color-primary)]' : ''
+                  !message.isError && message.speaker === 'candidate' ? 'border border-[var(--color-primary)]' : ''
                 }`}
-                style={{
-                  backgroundColor: message.speaker === 'interviewer' 
-                    ? 'var(--color-input-bg)' 
-                    : 'var(--color-primary)',
-                  color: message.speaker === 'interviewer' 
-                    ? 'var(--color-text-primary)' 
-                    : 'white',
-                }}
+                style={
+                  message.isError
+                    ? {
+                        color: 'var(--color-error)',
+                      }
+                    : {
+                        backgroundColor: message.speaker === 'interviewer'
+                          ? 'var(--color-input-bg)'
+                          : 'var(--color-primary)',
+                        color: message.speaker === 'interviewer'
+                          ? 'var(--color-text-primary)'
+                          : 'white',
+                      }
+                }
+                role={message.isError ? 'alert' : undefined}
               >
                 <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 mb-2 sm:mb-3">
-                  <span 
+                  <span
                     className={`text-xs font-bold px-2 sm:px-3 py-1 rounded-full tracking-wide ${
-                      message.speaker === 'interviewer'
-                        ? 'bg-[var(--color-border)] text-[var(--color-text-secondary)]'
-                        : 'bg-white/20 text-white'
+                      message.isError
+                        ? 'bg-[color-mix(in_srgb,var(--color-error)_18%,transparent)] text-[var(--color-error)]'
+                        : message.speaker === 'interviewer'
+                          ? 'bg-[var(--color-border)] text-[var(--color-text-secondary)]'
+                          : 'bg-white/20 text-white'
                     }`}
                   >
-                    {message.speaker === 'interviewer'
-                      ? 'INTERVIEWER'
-                      : message.speaker === 'system'
-                        ? 'SYSTEM'
-                        : 'YOU'}
+                    {message.isError
+                      ? 'ERROR'
+                      : message.speaker === 'interviewer'
+                        ? 'INTERVIEWER'
+                        : message.speaker === 'system'
+                          ? 'SYSTEM'
+                          : 'YOU'}
                   </span>
-                  <span 
+                  <span
                     className="text-xs font-medium opacity-70"
-                    style={{ color: message.speaker === 'interviewer' ? 'var(--color-text-secondary)' : 'rgba(255,255,255,0.7)' }}
+                    style={{
+                      color: message.isError
+                        ? 'var(--color-error)'
+                        : message.speaker === 'interviewer'
+                          ? 'var(--color-text-secondary)'
+                          : 'rgba(255,255,255,0.7)',
+                    }}
                   >
                     {message.timestamp}
                   </span>
                 </div>
-                <p className="text-xs sm:text-sm md:text-base leading-relaxed font-medium">
+                <p className={`text-xs sm:text-sm md:text-base leading-relaxed font-medium ${message.isError ? 'text-[var(--color-error)]' : ''}`}>
                   {message.speaker === 'interviewer'
                     ? stripMarkdownForDisplay(message.message)
                     : message.message}

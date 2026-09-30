@@ -541,8 +541,8 @@ function InterviewFeedbackPage() {
               <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/20 flex items-center justify-center mx-auto mb-4">
                 <AlertCircle size={32} className="text-red-500" />
               </div>
-              <h1 className="text-2xl font-bold mb-2">Error Loading Feedback</h1>
-              <p className="text-[var(--color-text-secondary)] mb-6">{error}</p>
+              <h1 className="text-2xl font-bold mb-2 text-[var(--color-error)]">Error Loading Feedback</h1>
+              <p className="text-[var(--color-error)] font-medium mb-6 max-w-lg mx-auto" role="alert">{error}</p>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <button
                   onClick={() => window.location.reload()}
