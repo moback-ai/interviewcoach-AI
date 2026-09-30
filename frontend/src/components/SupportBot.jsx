@@ -2,6 +2,54 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useSupportBot } from '../hooks/useSupportBot';
 import { useTheme } from '../hooks/useTheme';
 
+/** Render light markdown inline: **bold**, *italic*, `code` — no extra dependency. */
+function renderInlineMarkdown(text) {
+  if (text == null || text === '') return null;
+  const nodes = [];
+  const tokenRe = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+
+  while ((match = tokenRe.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith('`') && token.endsWith('`')) {
+      nodes.push(
+        <code
+          key={`md-${key++}`}
+          className="px-1 py-0.5 rounded bg-black/5 dark:bg-white/10 text-[0.9em] font-mono"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      nodes.push(
+        <strong key={`md-${key++}`} className="font-semibold">
+          {token.slice(2, -2)}
+        </strong>
+      );
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(
+        <em key={`md-${key++}`} className="italic">
+          {token.slice(1, -1)}
+        </em>
+      );
+    } else {
+      nodes.push(token);
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes.length ? nodes : text;
+}
+
 const SupportBot = () => {
   const { 
     conversation, 
@@ -173,7 +221,11 @@ const SupportBot = () => {
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        <p className="whitespace-pre-wrap leading-relaxed">{msg.message}</p>
+                        <p className="whitespace-pre-wrap leading-relaxed">
+                          {msg.type === 'bot'
+                            ? renderInlineMarkdown(msg.message)
+                            : msg.message}
+                        </p>
                         {msg.retrievedSections && msg.retrievedSections.length > 0 && (
                           <div className="mt-2 pt-2 border-t border-gray-300">
                             <p className="text-xs text-gray-500">
@@ -211,16 +263,16 @@ const SupportBot = () => {
 
               {/* Error Message */}
               {error && (
-                <div className="px-4 py-3 bg-red-50 border-t border-red-200">
+                <div className="px-4 py-3 bg-red-100 dark:bg-red-900/30 border-t-2 border-red-400 dark:border-red-600" role="alert">
                   <div className="flex items-start space-x-2">
-                    <svg className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <div className="flex-1">
-                      <p className="text-red-800 text-sm">{error}</p>
+                      <p className="text-red-800 dark:text-red-200 text-sm font-semibold">{error}</p>
                       <button
                         onClick={clearError}
-                        className="text-red-600 hover:text-red-800 text-xs underline mt-1"
+                        className="text-red-700 dark:text-red-300 hover:text-red-900 dark:hover:text-red-100 text-xs font-medium underline mt-1"
                       >
                         Dismiss
                       </button>

@@ -7,12 +7,22 @@ import ChatWindow from '@/components/interview/ChatWindow';
 import HeadTrackingAlert from '@/components/interview/HeadTrackingAlert';
 import WarningModal from '@/components/interview/WarningModal';
 import WaveAnimation from '@/components/interview/WaveAnimation';
-import { getSession } from '../lib/authClient';
+import { authFetchInit, getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
-import { getMediaAccessErrorMessage, requestUserMedia } from '../utils/mediaDevices';
+import {
+  applyInterviewCameraConstraints,
+  getInterviewCameraConstraints,
+  getMediaAccessErrorMessage,
+  requestUserMedia,
+} from '../utils/mediaDevices';
 import { useOperation } from '../contexts/OperationContext';
+import { isAuthErrorMessage, redirectToExpiredLogin } from '../utils/authInterceptor';
 import { devLog } from '../utils/devLog';
 import { useInterviewTimer } from '@/hooks/useInterviewTimer';
+
+/** Matches backend STARTED_INTERVIEW_STATUSES (+ legacy in_progress). */
+const RESUMABLE_INTERVIEW_STATUSES = new Set(['STARTED', 'ACTIVE', 'in_progress']);
+const COMPLETED_INTERVIEW_STATUSES = new Set(['ENDED', 'completed']);
 
 function InterviewPage() {
   const { setIsOperationInProgress } = useOperation();
@@ -22,6 +32,7 @@ function InterviewPage() {
   const [isValidated, setIsValidated] = useState(false);
   useInterviewTimer(interviewId, isValidated);
   const [isValidating, setIsValidating] = useState(true); // ✅ RENAMED: Validation loading
+  const [validationError, setValidationError] = useState(null);
   
   // ✅ ADD: Separate loading state for ChatWindow
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -75,6 +86,10 @@ function InterviewPage() {
   const calibrationInProgressRef = useRef(false);
   
   const streamRef = useRef(null);
+  const headTrackingEnabledRef = useRef(headTrackingEnabled);
+  headTrackingEnabledRef.current = headTrackingEnabled;
+  const pausedForHiddenTabRef = useRef(false);
+  const cameraSessionRef = useRef(0);
   /** Aligns with Speak button + Head tracking: lock UI during audio, recording, API work, response pipeline, or mic cooldown */
   const interviewInteractionLocked =
     isAudioPlaying ||
@@ -129,141 +144,214 @@ function InterviewPage() {
     startMonitoring
   } = useHeadTracking(headTrackingEnabled, handleCalibrationSuccess);
 
-  useEffect(() => {
-    const startCamera = async (retryCount = 0) => {
-      try {
-        // Wait for video element to be mounted
+  const stopCamera = useCallback(() => {
+    cameraSessionRef.current += 1;
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, [videoRef]);
+
+  const startCamera = useCallback(async (retryCount = 0) => {
+    if (!isValidated || isValidating) {
+      return;
+    }
+    if (document.hidden && !headTrackingEnabledRef.current) {
+      pausedForHiddenTabRef.current = true;
+      return;
+    }
+
+    if (retryCount === 0) {
+      cameraSessionRef.current += 1;
+    }
+    const session = cameraSessionRef.current;
+
+    try {
+      if (!videoRef.current) {
+        devLog('⏳ Waiting for video element to mount...');
+        setTimeout(() => {
+          if (session !== cameraSessionRef.current) {
+            return;
+          }
+          if (retryCount < MAX_RETRIES) {
+            startCamera(retryCount + 1);
+          } else {
+            setCameraError('Video element not found. Please refresh the page.');
+            setIsCameraLoading(false);
+          }
+        }, 500);
+        return;
+      }
+
+      devLog('🎥 Requesting camera access...');
+      setIsCameraLoading(true);
+      setCameraError(null);
+
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      const stream = await requestUserMedia(
+        getInterviewCameraConstraints(headTrackingEnabledRef.current)
+      );
+
+      if (session !== cameraSessionRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      if (!videoRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        throw new Error('Video element was removed');
+      }
+
+      videoRef.current.srcObject = stream;
+      streamRef.current = stream;
+
+      await new Promise((resolve, reject) => {
         if (!videoRef.current) {
-          devLog('⏳ Waiting for video element to mount...');
-          // Retry after a short delay
-          setTimeout(() => {
-            if (retryCount < MAX_RETRIES) {
-              startCamera(retryCount + 1);
-            } else {
-              setCameraError('Video element not found. Please refresh the page.');
-              setIsCameraLoading(false);
-            }
-          }, 500);
+          reject(new Error('Video element not available'));
           return;
         }
 
-        devLog('🎥 Requesting camera access...');
-        setIsCameraLoading(true);
-        setCameraError(null);
+        const video = videoRef.current;
 
-        // Stop any existing stream first
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-        }
-
-        const stream = await requestUserMedia({
-          video: { 
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            facingMode: 'user'
-          }, 
-          audio: false
-        });
-
-        // Double-check video element is still available
-        if (!videoRef.current) {
-          stream.getTracks().forEach(track => track.stop());
-          throw new Error('Video element was removed');
-        }
-
-        // Set stream and wait for video to be ready
-        videoRef.current.srcObject = stream;
-        streamRef.current = stream;
-
-        // Wait for video to actually load
-        await new Promise((resolve, reject) => {
-          if (!videoRef.current) {
-            reject(new Error('Video element not available'));
+        const handleLoadedMetadata = () => {
+          video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+          video.removeEventListener('error', handleError);
+          if (session !== cameraSessionRef.current) {
+            resolve();
             return;
           }
-
-          const video = videoRef.current;
-          
-          const handleLoadedMetadata = () => {
-            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            video.removeEventListener('error', handleError);
-            devLog('✅ Camera stream loaded successfully');
-            setIsCameraLoading(false);
-            setCameraError(null);
-            cameraRetryCountRef.current = 0;
-            resolve();
-          };
-
-          const handleError = () => {
-            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            video.removeEventListener('error', handleError);
-            reject(new Error('Video element failed to load stream'));
-          };
-
-          if (video.readyState >= 1) {
-            // Video already has metadata
-            handleLoadedMetadata();
-          } else {
-            video.addEventListener('loadedmetadata', handleLoadedMetadata);
-            video.addEventListener('error', handleError);
-            
-            // Timeout after 5 seconds
-            setTimeout(() => {
-              video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-              video.removeEventListener('error', handleError);
-              reject(new Error('Video load timeout'));
-            }, 5000);
-          }
-        });
-
-      } catch (error) {
-        console.error('❌ Error accessing camera:', error);
-        cameraRetryCountRef.current = retryCount + 1;
-
-        // Handle specific error types
-        let errorMessage = 'Failed to access camera. ';
-        
-        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-          errorMessage += 'Please allow camera permissions and refresh the page.';
-          setCameraError(errorMessage);
+          devLog('✅ Camera stream loaded successfully');
           setIsCameraLoading(false);
-        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-          errorMessage += 'No camera found. Please connect a camera and refresh the page.';
-          setCameraError(errorMessage);
-          setIsCameraLoading(false);
-        } else if (error.name === 'MediaDevicesUnsupported' || error.name === 'MediaDevicesUnavailable') {
-          setCameraError(getMediaAccessErrorMessage('camera'));
-          setIsCameraLoading(false);
-        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-          errorMessage += 'Camera is being used by another application. Please close other apps and refresh.';
-          setCameraError(errorMessage);
-          setIsCameraLoading(false);
-        } else if (retryCount < MAX_RETRIES) {
-          // Retry for other errors
-          devLog(`🔄 Retrying camera access (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
-          setTimeout(() => {
-            startCamera(retryCount + 1);
-          }, 1000 * (retryCount + 1)); // Exponential backoff
+          setCameraError(null);
+          cameraRetryCountRef.current = 0;
+          resolve();
+        };
+
+        const handleError = () => {
+          video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+          video.removeEventListener('error', handleError);
+          reject(new Error('Video element failed to load stream'));
+        };
+
+        if (video.readyState >= 1) {
+          handleLoadedMetadata();
         } else {
-          errorMessage += 'Please refresh the page and try again.';
-          setCameraError(errorMessage);
-          setIsCameraLoading(false);
+          video.addEventListener('loadedmetadata', handleLoadedMetadata);
+          video.addEventListener('error', handleError);
+
+          setTimeout(() => {
+            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+            video.removeEventListener('error', handleError);
+            reject(new Error('Video load timeout'));
+          }, 5000);
+        }
+      });
+    } catch (error) {
+      if (session !== cameraSessionRef.current) {
+        return;
+      }
+
+      console.error('❌ Error accessing camera:', error);
+      cameraRetryCountRef.current = retryCount + 1;
+
+      let errorMessage = 'Failed to access camera. ';
+
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        errorMessage += 'Please allow camera permissions and refresh the page.';
+        setCameraError(errorMessage);
+        setIsCameraLoading(false);
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        errorMessage += 'No camera found. Please connect a camera and refresh the page.';
+        setCameraError(errorMessage);
+        setIsCameraLoading(false);
+      } else if (error.name === 'MediaDevicesUnsupported' || error.name === 'MediaDevicesUnavailable') {
+        setCameraError(getMediaAccessErrorMessage('camera'));
+        setIsCameraLoading(false);
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        errorMessage += 'Camera is being used by another application. Please close other apps and refresh.';
+        setCameraError(errorMessage);
+        setIsCameraLoading(false);
+      } else if (retryCount < MAX_RETRIES) {
+        devLog(`🔄 Retrying camera access (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+        setTimeout(() => {
+          if (session === cameraSessionRef.current) {
+            startCamera(retryCount + 1);
+          }
+        }, 1000 * (retryCount + 1));
+      } else {
+        errorMessage += 'Please refresh the page and try again.';
+        setCameraError(errorMessage);
+        setIsCameraLoading(false);
+      }
+    }
+  }, [isValidated, isValidating, videoRef]);
+
+  useEffect(() => {
+    if (!isValidated || isValidating) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const syncCamera = async () => {
+      if (document.hidden && !headTrackingEnabledRef.current) {
+        stopCamera();
+        pausedForHiddenTabRef.current = true;
+        return;
+      }
+
+      pausedForHiddenTabRef.current = false;
+
+      if (!streamRef.current) {
+        await startCamera();
+        return;
+      }
+
+      const applied = await applyInterviewCameraConstraints(
+        streamRef.current,
+        headTrackingEnabledRef.current
+      );
+      if (!cancelled && !applied) {
+        await startCamera();
+      }
+    };
+
+    syncCamera();
+    return () => {
+      cancelled = true;
+    };
+  }, [isValidated, isValidating, headTrackingEnabled, startCamera, stopCamera]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.hidden) {
+        if (!headTrackingEnabledRef.current) {
+          stopCamera();
+          pausedForHiddenTabRef.current = true;
+        }
+        return;
+      }
+
+      if (pausedForHiddenTabRef.current || !streamRef.current) {
+        pausedForHiddenTabRef.current = false;
+        if (isValidated && !isValidating) {
+          startCamera();
         }
       }
     };
 
-    // Only start camera after validation is complete
-    if (isValidated && !isValidating) {
-      startCamera();
-    }
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [startCamera, stopCamera, isValidated, isValidating]);
 
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-    };
-  }, [isValidated, isValidating, videoRef]); // wait for validation before starting camera
+  useEffect(() => () => stopCamera(), [stopCamera]);
 
 
   // Show head tracking popup when user enables the toggle
@@ -443,89 +531,110 @@ function InterviewPage() {
     };
   }, [calibrationCheckTimer]);
 
-  // Interview validation - FIXED to only run once
+  // Interview validation — cookie-aware auth; never dump failures to /upload
   useEffect(() => {
     const validateInterview = async () => {
-      // ✅ FIXED: Only validate once
       if (hasValidated.current) {
         return;
       }
-      
+
       hasValidated.current = true;
-      
+
       try {
-        setIsValidating(true); // ✅ FIXED: Use validation-specific loading state
-        
-        // Get interview_id from URL
-        const interviewId = searchParams.get('interview_id');
-        
-        if (!interviewId) {
+        setIsValidating(true);
+        setValidationError(null);
+
+        const interviewIdFromUrl = searchParams.get('interview_id');
+
+        if (!interviewIdFromUrl) {
           devLog('❌ No interview_id provided');
-          navigate('/upload');
+          setValidationError('No interview was specified. Open Resume from your dashboard.');
           return;
         }
-        
-        devLog('🔍 Validating interview:', interviewId);
-        
-        // Get user session
+
+        devLog('🔍 Validating interview:', interviewIdFromUrl);
+
         const session = await getSession();
-        if (!session?.access_token) {
+        if (!session) {
           devLog('❌ No session found');
-          navigate('/upload');
+          navigate('/login', {
+            replace: true,
+            state: { from: `/interview?interview_id=${interviewIdFromUrl}` },
+          });
           return;
         }
-        
-        // Check if interview exists and get its status
-        const response = await fetch(`${getBackendOrigin()}/functions/v1/interviews/${interviewId}`, {
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`
-          }
-        });
-        
-        const result = await response.json();
-        
+
+        const response = await fetch(
+          `${getBackendOrigin()}/functions/v1/interviews/${interviewIdFromUrl}`,
+          {
+            method: 'GET',
+            ...authFetchInit({ 'Content-Type': 'application/json' }),
+          },
+        );
+
+        let result = {};
+        try {
+          result = await response.json();
+        } catch {
+          result = {};
+        }
+
         devLog('📋 Interview validation result:', result);
-        
+
+        if (response.status === 401 || isAuthErrorMessage(result.error || result.message || '')) {
+          redirectToExpiredLogin();
+          return;
+        }
+
         if (!response.ok || !result.success) {
           devLog('❌ Interview not found or access denied');
-          navigate('/upload');
+          setValidationError(
+            result.message || 'This interview could not be found or you do not have access to it.',
+          );
           return;
         }
-        
+
         const interview = result.data;
-        
-        // ✅ UPDATED: Handle PENDING status
-        if (interview.status === 'PENDING') {
-          devLog('⏳ Interview is pending payment confirmation...');
-          // Show loading state while waiting for payment confirmation
-          setIsValidating(true);
-          // You could add polling here or just show a message
+        const status = interview?.status;
+
+        if (status === 'PENDING') {
+          devLog('⏳ Interview is pending payment confirmation');
+          setValidationError(
+            'This interview is still waiting for payment confirmation. Check your dashboard or payment status.',
+          );
           return;
         }
 
-        if (interview.status === 'ENDED') {
+        if (COMPLETED_INTERVIEW_STATUSES.has(status)) {
           devLog('✅ Interview already completed, redirecting to feedback page');
-          navigate(`/interview-feedback?interview_id=${interviewId}`);
+          navigate(`/interview-feedback?interview_id=${interviewIdFromUrl}`, { replace: true });
           return;
         }
 
-        if (interview.status !== 'STARTED') {
-          devLog('❌ Interview status is not STARTED:', interview.status);
-          navigate('/upload');
+        if (!RESUMABLE_INTERVIEW_STATUSES.has(status)) {
+          devLog('❌ Interview status is not resumable:', status);
+          setValidationError(
+            `This interview cannot be resumed (status: ${status || 'unknown'}). Return to the dashboard to continue.`,
+          );
           return;
         }
-        
+
         devLog('✅ Interview validated successfully:', interview);
         setIsValidated(true);
-        
       } catch (error) {
         console.error('❌ Interview validation error:', error);
-        navigate('/upload');
+        if (isAuthErrorMessage(error.message)) {
+          redirectToExpiredLogin();
+          return;
+        }
+        setValidationError(
+          error.message || 'Could not validate this interview session. Please try again from the dashboard.',
+        );
       } finally {
-        setIsValidating(false); // ✅ FIXED: Use validation-specific loading state
+        setIsValidating(false);
       }
     };
-    
+
     validateInterview();
   }, [navigate, searchParams]);
 
@@ -566,9 +675,30 @@ function InterviewPage() {
     );
   }
 
-  // Show error if not validated
+  // Show error if not validated (auth redirects happen above; avoid silent /upload bounce)
   if (!isValidated) {
-    return null; // Will redirect to /upload
+    return (
+      <div className="min-h-screen bg-[var(--color-bg)] flex items-center justify-center px-4">
+        <div className="max-w-md w-full text-center space-y-4">
+          <p className="text-[var(--color-error)] font-semibold text-lg">
+            Unable to resume interview
+          </p>
+          <div className="app-inline-error text-left" role="alert">
+            <svg className="app-inline-error-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{validationError || 'This interview session could not be opened.'}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard', { replace: true })}
+            className="inline-flex items-center justify-center px-4 py-2.5 rounded-lg bg-[var(--color-primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            Back to dashboard
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Original interview page content

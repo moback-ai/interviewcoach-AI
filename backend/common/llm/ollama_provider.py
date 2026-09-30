@@ -21,29 +21,77 @@ def resolve_ollama_model_name(model: str | None = None) -> str:
     return requested
 
 
-def _chat_options() -> dict[str, Any]:
-    raw = optional_env("OLLAMA_NUM_PREDICT", "384")
-    try:
-        num_predict = max(64, min(int(raw or 384), 1024))
-    except (TypeError, ValueError):
-        num_predict = 384
-    return {"num_predict": num_predict, "temperature": 0.6}
+def _chat_options(max_tokens: int | None = None, temperature: float | None = None) -> dict[str, Any]:
+    if max_tokens is not None:
+        try:
+            num_predict = max(64, min(int(max_tokens), 8192))
+        except (TypeError, ValueError):
+            num_predict = 384
+    else:
+        raw = optional_env("OLLAMA_NUM_PREDICT", "384")
+        try:
+            num_predict = max(64, min(int(raw or 384), 8192))
+        except (TypeError, ValueError):
+            num_predict = 384
+    if temperature is not None:
+        try:
+            temp = max(0.0, min(float(temperature), 1.0))
+        except (TypeError, ValueError):
+            temp = 0.6
+    else:
+        raw_temp = optional_env("LLM_TEMPERATURE", "0.6")
+        try:
+            temp = max(0.0, min(float(raw_temp), 1.0))
+        except (TypeError, ValueError):
+            temp = 0.6
+    return {"num_predict": num_predict, "temperature": temp}
 
 
 class OllamaLLMProvider:
     name = "ollama"
 
-    def chat(self, *, model: str | None, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def chat(
+        self,
+        *,
+        model: str | None,
+        messages: list[dict[str, Any]],
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> dict[str, Any]:
         if ollama is None:
             raise RuntimeError(f"Ollama unavailable: {_OLLAMA_IMPORT_ERROR}")
         resolved = resolve_ollama_model_name(model)
-        return ollama.chat(
+        response = ollama.chat(
             model=resolved,
             messages=messages,
-            options=_chat_options(),
+            options=_chat_options(max_tokens=max_tokens, temperature=temperature),
         )
+        if not isinstance(response, dict):
+            return response
+        # Normalize Ollama eval counts into a shared usage shape when present.
+        if "usage" not in response:
+            input_tokens = response.get("prompt_eval_count")
+            output_tokens = response.get("eval_count")
+            if input_tokens is not None or output_tokens is not None:
+                inp = int(input_tokens or 0)
+                out = int(output_tokens or 0)
+                response["usage"] = {
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "total_tokens": inp + out,
+                }
+        response.setdefault("provider", self.name)
+        response.setdefault("model", resolved)
+        return response
 
-    def chat_stream(self, *, model: str | None, messages: list[dict[str, Any]]) -> Iterator[str]:
+    def chat_stream(
+        self,
+        *,
+        model: str | None,
+        messages: list[dict[str, Any]],
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
         if ollama is None:
             raise RuntimeError(f"Ollama unavailable: {_OLLAMA_IMPORT_ERROR}")
         resolved = resolve_ollama_model_name(model)
@@ -51,7 +99,7 @@ class OllamaLLMProvider:
             model=resolved,
             messages=messages,
             stream=True,
-            options=_chat_options(),
+            options=_chat_options(max_tokens=max_tokens, temperature=temperature),
         ):
             part = (chunk.get("message") or {}).get("content") or ""
             if part:

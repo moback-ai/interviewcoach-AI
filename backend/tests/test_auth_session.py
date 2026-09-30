@@ -76,12 +76,13 @@ def test_me_accepts_session_cookie(client, auth_token):
     assert response.get_json()["user"]["email"] == "test@example.com"
 
 
-def test_execute_rejects_javascript(client, auth_token):
+def test_execute_accepts_submissions(client, auth_token):
     client.set_cookie("ic_session", auth_token, domain="localhost")
     response = client.post(
         "/api/execute",
         data=json.dumps({"code": "console.log(1)", "language": "javascript"}),
         content_type="application/json",
     )
-    assert response.status_code == 400
-    assert "disabled" in response.get_json().get("message", "").lower()
+    assert response.status_code == 200
+    assert response.get_json()["success"] is True
+    assert "submitted successfully" in response.get_json()["data"]["output"].lower()

@@ -84,10 +84,10 @@ export const BACKGROUND_STYLES = [
   },
 ];
 
-export const DEFAULT_BACKGROUND_STYLE_ID = 'soft-cloud';
+export const DEFAULT_BACKGROUND_STYLE_ID = 'aurora-dream';
 
-/** Protected app pages — soft interactive waves. */
-export const APP_BACKGROUND_STYLE_ID = 'soft-cloud';
+/** Protected app pages — CSS-only aurora (no WebGL). */
+export const APP_BACKGROUND_STYLE_ID = 'aurora-dream';
 
 export function getBackgroundStyleById(styleId) {
   return BACKGROUND_STYLES.find((style) => style.id === styleId)
