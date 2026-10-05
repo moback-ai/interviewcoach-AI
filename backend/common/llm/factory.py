@@ -33,12 +33,34 @@ def provider_name() -> str:
     return get_provider().name
 
 
-def chat(*, model: str | None, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    return get_provider().chat(model=model, messages=messages)
+def chat(
+    *,
+    model: str | None,
+    messages: list[dict[str, Any]],
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> dict[str, Any]:
+    return get_provider().chat(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
 
 
-def chat_stream(*, model: str | None, messages: list[dict[str, Any]]) -> Iterator[str]:
-    yield from get_provider().chat_stream(model=model, messages=messages)
+def chat_stream(
+    *,
+    model: str | None,
+    messages: list[dict[str, Any]],
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> Iterator[str]:
+    yield from get_provider().chat_stream(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
 
 
 def get_llm_diagnostics() -> dict[str, Any]:

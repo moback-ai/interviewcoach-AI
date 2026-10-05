@@ -24,7 +24,8 @@ import {
   FiXCircle,
   FiLoader,
   FiHash,
-  FiRefreshCw
+  FiRefreshCw,
+  FiAlertCircle
 } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -140,11 +141,12 @@ const ProfileSection = ({
 
       {statusMessage ? (
         <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
+          className={`rounded-xl border px-4 py-3 text-sm font-medium ${
             statusTone === 'success'
               ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
-              : 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-200'
+              : 'border-[var(--color-error)]/45 bg-[var(--color-error)]/12 text-[var(--color-error)]'
           }`}
+          role={statusTone === 'error' ? 'alert' : undefined}
         >
           {statusMessage}
         </div>
@@ -422,17 +424,17 @@ const PaymentsSection = () => {
     switch (status) {
       case 'succeeded':
       case 'success':
-        return 'text-green-600 bg-green-100';
+        return 'text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/40 border border-green-200 dark:border-green-800';
       case 'failed':
       case 'checkout_creation_failed':
-        return 'text-red-600 bg-red-100';
+        return 'text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40 border border-red-200 dark:border-red-800';
       case 'expired':
-        return 'text-gray-600 bg-gray-100';
+        return 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700';
       case 'pending':
       case 'processing':
-        return 'text-yellow-600 bg-yellow-100';
+        return 'text-yellow-700 dark:text-yellow-300 bg-yellow-100 dark:bg-yellow-900/40 border border-yellow-200 dark:border-yellow-800';
       default:
-        return 'text-gray-600 bg-gray-100';
+        return 'text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700';
     }
   };
 
@@ -525,8 +527,9 @@ const PaymentsSection = () => {
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 bg-red-100 border border-red-300 rounded-lg">
-          <p className="text-red-700">{error}</p>
+        <div className="app-inline-error" role="alert">
+          <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+          <p>{error}</p>
         </div>
       )}
 
@@ -876,8 +879,9 @@ const AnalyticsSection = () => {
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 bg-red-100 border border-red-300 rounded-lg">
-          <p className="text-red-700">{error}</p>
+        <div className="app-inline-error" role="alert">
+          <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+          <p>{error}</p>
         </div>
       )}
 
@@ -1318,10 +1322,10 @@ function ProfilePage() {
           </div>
         </div>
 
-        <div className="flex">
+        <div>
           {/* Sidebar */}
           <div className={`
-            fixed md:static inset-y-0 left-0 z-40 w-64 bg-[var(--color-card)] border-r border-[var(--color-border)] transform transition-transform duration-300 ease-in-out
+            fixed top-16 bottom-0 left-0 z-40 w-64 bg-[var(--color-card)] border-r border-[var(--color-border)] transform transition-transform duration-300 ease-in-out overflow-y-auto
             ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
           `}>
             <div className="p-6">
@@ -1371,7 +1375,7 @@ function ProfilePage() {
           )}
 
           {/* Main Content */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 md:pl-64">
             <div className="max-w-4xl mx-auto px-6 py-8">
               {/* Desktop Header */}
               <div className="hidden md:block mb-8">

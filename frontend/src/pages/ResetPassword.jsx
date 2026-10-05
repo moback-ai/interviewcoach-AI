@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { FiArrowLeft, FiCheckCircle, FiLock } from 'react-icons/fi';
+import { FiCheckCircle, FiLock } from 'react-icons/fi';
 import Navbar from '../components/Navbar';
 import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
@@ -55,21 +55,21 @@ function ResetPassword() {
         description="Choose a password you’ll remember but others can’t guess. Once it’s updated, we’ll send you straight back to sign in."
         footer={(
           <p className="text-sm text-center text-[var(--color-text-secondary)]">
-            Back to{' '}
+            Remembered your password?{' '}
             <Link to="/login" className="auth-scene-link-inline">
-              login
+              Return to sign in
             </Link>
           </p>
         )}
       >
         {!token && (
-          <div className="auth-scene-alert auth-scene-alert-error">
+          <div className="auth-scene-alert auth-scene-alert-error" role="alert">
             Reset token is missing or invalid.
           </div>
         )}
 
         {errorMsg && (
-          <div className="auth-scene-alert auth-scene-alert-error">
+          <div className="auth-scene-alert auth-scene-alert-error" role="alert">
             {errorMsg}
           </div>
         )}
@@ -126,11 +126,6 @@ function ResetPassword() {
             {loading ? 'Resetting...' : 'Reset password'}
           </button>
         </form>
-
-        <Link to="/login" className="auth-scene-link-row">
-          <FiArrowLeft size={15} />
-          <span>Return to sign in</span>
-        </Link>
       </AuthSceneShell>
     </>
   );

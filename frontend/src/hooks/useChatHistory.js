@@ -1,61 +1,24 @@
 import { useState, useCallback } from 'react';
 import { getSession } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
-
-const normalizeChatSpeaker = (speaker = '') => {
-  const normalized = String(speaker).trim().toLowerCase();
-  if (['assistant', 'interviewer', 'bot'].includes(normalized)) return 'interviewer';
-  if (['user', 'candidate', 'you'].includes(normalized)) return 'candidate';
-  return normalized || 'system';
-};
+import {
+  mapStructuredMessages,
+  parseHistoryContent,
+} from '../utils/chatHistoryParse';
 
 const defaultInterviewUiState = () => ({
   interviewStage: 'introduction',
   hasAnsweredResumeQuestion: false,
   canEndInterview: false,
+  awaitingManualEnd: false,
 });
 
-const parseHistoryContent = (content) => {
-  const lines = content.split('\n');
-  const conversation = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-
-    const colonIndex = line.indexOf(':');
-    if (colonIndex === -1) {
-      if (conversation.length > 0) {
-        const lastMessage = conversation[conversation.length - 1];
-        lastMessage.message += '\n' + line;
-      }
-      continue;
-    }
-
-    const speaker = normalizeChatSpeaker(line.substring(0, colonIndex));
-    const message = line.substring(colonIndex + 1).trim();
-
-    const previous = conversation[conversation.length - 1];
-    if (previous?.speaker === speaker && previous?.message === message) {
-      continue;
-    }
-
-    conversation.push({
-      id: conversation.length + 1,
-      speaker,
-      message,
-      timestamp: new Date().toLocaleTimeString(),
-    });
-  }
-
-  return conversation;
-};
+export { mapStructuredMessages, parseHistoryContent } from '../utils/chatHistoryParse';
 
 export const useChatHistory = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Load chat history from database
   const loadChatHistory = useCallback(async (interviewId) => {
     if (!interviewId) return null;
 
@@ -73,10 +36,10 @@ export const useChatHistory = () => {
         {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json'
-          }
-        }
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        },
       );
 
       if (!response.ok) {
@@ -88,17 +51,20 @@ export const useChatHistory = () => {
         interviewStage: data.interview_stage || 'introduction',
         hasAnsweredResumeQuestion: !!data.has_answered_resume_question,
         canEndInterview: !!data.can_end_interview,
+        awaitingManualEnd: !!data.awaiting_manual_end,
       };
-      
+
+      const structured = mapStructuredMessages(data.messages);
+      if (structured.length > 0) {
+        return { conversation: structured, ...uiState };
+      }
+
       if (data.history && data.history.length > 0) {
         const content = data.history[0].content;
-        console.log('🔍 Raw content from DB:', content);
         const conversation = parseHistoryContent(content);
-        console.log(`Loaded ${conversation.length} messages from database:`, conversation);
         return { conversation, ...uiState };
       }
 
-      console.log('No chat history found. Returning local welcome message only (no DB write).');
       return {
         conversation: [{
           id: 1,
@@ -108,7 +74,6 @@ export const useChatHistory = () => {
         }],
         ...uiState,
       };
-
     } catch (err) {
       console.error('Error loading chat history:', err);
       setError(err.message);
@@ -121,7 +86,6 @@ export const useChatHistory = () => {
     }
   }, []);
 
-  // Save chat history to database
   const saveChatHistory = useCallback(async (interviewId, conversation) => {
     if (!interviewId || !conversation || conversation.length === 0) return false;
 
@@ -134,33 +98,36 @@ export const useChatHistory = () => {
         throw new Error('No active session');
       }
 
-      // Convert conversation array to string format
-      const content = conversation
-        .map(msg => `${msg.speaker}:${msg.message}`)
-        .join('\n');
+      const messages = conversation.map((msg) => ({
+        role:
+          msg.speaker === 'interviewer'
+            ? 'assistant'
+            : msg.speaker === 'candidate'
+              ? 'user'
+              : (msg.speaker || 'system'),
+        content: msg.message ?? '',
+      }));
 
       const response = await fetch(
         `${getBackendOrigin()}/functions/v1/chat-history`,
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
           },
           body: JSON.stringify({
             interview_id: interviewId,
-            content: content
-          })
-        }
+            messages,
+          }),
+        },
       );
 
       if (!response.ok) {
         throw new Error(`Failed to save chat history: ${response.status}`);
       }
 
-      console.log('Chat history saved successfully');
       return true;
-
     } catch (err) {
       console.error('Error saving chat history:', err);
       setError(err.message);
@@ -170,7 +137,6 @@ export const useChatHistory = () => {
     }
   }, []);
 
-  // Append new message to existing chat history
   const appendToChatHistory = useCallback(async (interviewId, speaker, message) => {
     if (!interviewId || !speaker || !message) return false;
 
@@ -183,30 +149,34 @@ export const useChatHistory = () => {
         throw new Error('No active session');
       }
 
-      const newContent = `${speaker}:${message}`;
+      const role =
+        speaker === 'interviewer'
+          ? 'assistant'
+          : speaker === 'candidate'
+            ? 'user'
+            : speaker;
 
       const response = await fetch(
         `${getBackendOrigin()}/functions/v1/chat-history`,
         {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
           },
           body: JSON.stringify({
             interview_id: interviewId,
-            content: newContent
-          })
-        }
+            messages: [{ role, content: message }],
+            append: true,
+          }),
+        },
       );
 
       if (!response.ok) {
         throw new Error(`Failed to append to chat history: ${response.status}`);
       }
 
-      console.log('Message appended to chat history');
       return true;
-
     } catch (err) {
       console.error('Error appending to chat history:', err);
       setError(err.message);
@@ -216,14 +186,12 @@ export const useChatHistory = () => {
     }
   }, []);
 
-  // ✅ NEW: Delete chat history for an interview
   const deleteChatHistory = useCallback(async (interviewId) => {
     if (!interviewId) {
       console.error('❌ No interview ID provided for deletion');
       return false;
     }
 
-    console.log('🗑️ Starting chat history deletion for interview:', interviewId);
     setLoading(true);
     setError(null);
 
@@ -233,29 +201,26 @@ export const useChatHistory = () => {
         throw new Error('No active session');
       }
 
-      console.log('🔑 Session found, making DELETE request...');
       const response = await fetch(
         `${getBackendOrigin()}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'DELETE',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'Content-Type': 'application/json'
-          }
-        }
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+        },
       );
 
-      console.log('📡 DELETE response status:', response.status);
       const responseData = await response.json();
-      console.log('📡 DELETE response data:', responseData);
 
       if (!response.ok) {
-        throw new Error(`Failed to delete chat history: ${response.status} - ${responseData.error || responseData.message}`);
+        throw new Error(
+          `Failed to delete chat history: ${response.status} - ${responseData.error || responseData.message}`,
+        );
       }
 
-      console.log('✅ Chat history deleted successfully');
       return true;
-
     } catch (err) {
       console.error('❌ Error deleting chat history:', err);
       setError(err.message);
@@ -271,6 +236,6 @@ export const useChatHistory = () => {
     loadChatHistory,
     saveChatHistory,
     appendToChatHistory,
-    deleteChatHistory // ✅ NEW: Export delete function
+    deleteChatHistory,
   };
 };

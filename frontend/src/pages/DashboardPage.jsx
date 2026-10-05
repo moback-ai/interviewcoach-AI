@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings } from 'react-icons/fi';
+import { FiFileText, FiBriefcase, FiPlay, FiEye, FiRefreshCw, FiCalendar, FiBarChart2, FiSettings, FiInfo, FiAlertCircle } from 'react-icons/fi';
 import { useOperation } from '../contexts/OperationContext';
 import Navbar from '../components/Navbar';
 import PageWavesShell from '../components/common/PageWavesShell';
@@ -201,7 +201,7 @@ function DashboardPage() {
         splitMode,
         blendMode,
         splitResumePercentage,
-        blendResumePercentage
+        blendResumePercentage,
       });
       
       // ... rest of the existing logic
@@ -255,10 +255,15 @@ function DashboardPage() {
 
     } catch (error) {
       console.error('Error in regenerate questions workflow:', error);
+      const isDossierMissing = error?.code === 'DOSSIER_MISSING';
       setNoticeModal({
         isOpen: true,
-        title: 'Could not generate questions',
-        message: error.message,
+        title: isDossierMissing
+          ? 'Interview profile missing'
+          : 'Could not generate questions',
+        message: isDossierMissing
+          ? 'No saved interview dossier was found for this pair. Create questions again from Upload.'
+          : (error.message || 'Could not generate questions.'),
         variant: 'error',
       });
     } finally {
@@ -275,6 +280,22 @@ function DashboardPage() {
 
   const handleDownloadResume = async (pairing, e) => {
     e.stopPropagation(); // Prevent triggering the pairing selection
+
+    const resumeName = String(pairing.resumeName || '').trim().toLowerCase();
+    const resumeUrl = String(pairing.resumeUrl || '').trim();
+    const isSkillsProfile =
+      resumeName === 'skills-based profile' ||
+      !resumeUrl ||
+      /app\.skills-based/i.test(resumeUrl);
+    if (isSkillsProfile) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'No file to download',
+        message: 'This pairing uses a skills-based profile, so there is no resume file to download.',
+        variant: 'info',
+      });
+      return;
+    }
     
     // Prevent multiple clicks
     if (downloadingResume.has(pairing.id)) {
@@ -316,11 +337,13 @@ function DashboardPage() {
     }
   };
 
-  // Helper function to call backend API for question generation
+  // Regenerates from the cached dossier only (resume_id + jd_id).
+  // Never sends resume_url — first-build owns resume/skills + dossier creation.
   const generateQuestionsFromBackend = async (pairing, questionSettings = {}) => {
     try {
-      const response = await apiPost('/generate-questions', {
-        resume_url: pairing.resumeUrl,
+      const body = {
+        resume_id: pairing.resume_id,
+        jd_id: pairing.jd_id,
         job_title: pairing.jobTitle,
         job_description: pairing.jobDescription,
         question_counts: {
@@ -330,12 +353,14 @@ function DashboardPage() {
           coding: questionSettings.coding || 0
         },
         split: questionSettings.splitMode || false,
-        resume_pct: questionSettings.splitResumePercentage || 50,
-        jd_pct: 100 - (questionSettings.splitResumePercentage || 50),
+        resume_pct: questionSettings.splitResumePercentage ?? 50,
+        jd_pct: 100 - (questionSettings.splitResumePercentage ?? 50),
         blend: questionSettings.blendMode || false,
-        blend_pct_resume: questionSettings.blendResumePercentage || 50,
-        blend_pct_jd: 100 - (questionSettings.blendResumePercentage || 50)
-      }, { timeoutMs: 180000 });
+        blend_pct_resume: questionSettings.blendResumePercentage ?? 50,
+        blend_pct_jd: 100 - (questionSettings.blendResumePercentage ?? 50),
+      };
+
+      const response = await apiPost('/generate-questions', body, { timeoutMs: 300000 });
 
       return response;
     } catch (error) {
@@ -452,9 +477,9 @@ function DashboardPage() {
         <Navbar />
         <PageWavesShell contentClassName="pt-20 px-4 flex items-center justify-center">
           <div className="text-center max-w-md mx-auto px-4">
-            <div className="bg-[var(--color-error)]/10 border border-[var(--color-error)] rounded-lg p-6">
+            <div className="bg-[var(--color-error)]/10 border border-[var(--color-error)] rounded-lg p-6" role="alert">
               <h3 className="text-lg font-semibold text-[var(--color-error)] mb-2">Error Loading Dashboard</h3>
-              <p className="text-[var(--color-text-secondary)] mb-4">{error}</p>
+              <p className="text-[var(--color-error)] font-medium mb-4">{error}</p>
               <button
                 onClick={fetchDashboardData}
                 className="bg-[var(--color-primary)] text-white px-4 py-2 rounded-lg hover:opacity-90 transition-opacity cursor-pointer"
@@ -475,10 +500,10 @@ function DashboardPage() {
         <div className="w-full max-w-7xl">
           {/* Header */}
           <div className="text-center mb-6 sm:mb-8 md:mb-10">
-            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-extrabold tracking-tight text-[var(--color-primary)] mb-2 sm:mb-3 md:mb-4">
+            <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl xl:text-5xl font-extrabold tracking-tight text-[var(--color-text-primary)] mb-1.5 sm:mb-2">
               Interview Dashboard
             </h1>
-            <p className="text-xs sm:text-sm md:text-base lg:text-lg text-[var(--color-text-secondary)] max-w-2xl mx-auto leading-relaxed px-2 mb-3 sm:mb-4">
+            <p className="text-sm sm:text-base text-[var(--color-text-primary)] max-w-xl mx-auto leading-relaxed px-2 mb-3 sm:mb-4">
               Manage your resume and job description pairings
             </p>
           </div>
@@ -648,6 +673,24 @@ function DashboardPage() {
                       </div>
                     </div>
                   </div>
+
+                  {(() => {
+                    const setCount = pairing.questionSets?.length || 0;
+                    const totalQuestions = (pairing.questionSets || []).reduce(
+                      (sum, qs) => sum + (Array.isArray(qs.questions) ? qs.questions.length : 0),
+                      0
+                    );
+                    return (
+                      <div className="mt-3 sm:mt-4 flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2.5 py-1 text-[11px] sm:text-xs font-medium text-[var(--color-text-secondary)]">
+                          {setCount} question set{setCount !== 1 ? 's' : ''}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-[color-mix(in_srgb,var(--color-primary)_28%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] px-2.5 py-1 text-[11px] sm:text-xs font-semibold text-[var(--color-primary)]">
+                          {totalQuestions} question{totalQuestions !== 1 ? 's' : ''} total
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                                                {/* Question Sets and Action Buttons - Only show when selected */}
@@ -664,9 +707,23 @@ function DashboardPage() {
                          </div>
                          Question Sets
                        </h3>
-                       <span className="text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] px-2 sm:px-3 py-1 rounded-full border border-[var(--color-border)] self-start sm:self-auto">
-                         {pairing.questionSets.length} set{pairing.questionSets.length !== 1 ? 's' : ''}
-                       </span>
+                       {(() => {
+                         const setCount = pairing.questionSets.length;
+                         const totalQuestions = pairing.questionSets.reduce(
+                           (sum, qs) => sum + (Array.isArray(qs.questions) ? qs.questions.length : 0),
+                           0
+                         );
+                         return (
+                           <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                             <span className="text-xs sm:text-sm text-[var(--color-text-secondary)] bg-[var(--color-input-bg)] px-2 sm:px-3 py-1 rounded-full border border-[var(--color-border)]">
+                               {setCount} set{setCount !== 1 ? 's' : ''}
+                             </span>
+                             <span className="text-xs sm:text-sm font-medium text-[var(--color-primary)] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] px-2 sm:px-3 py-1 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_28%,var(--color-border))]">
+                               {totalQuestions} question{totalQuestions !== 1 ? 's' : ''}
+                             </span>
+                           </div>
+                         );
+                       })()}
                      </div>
                      <div className="grid gap-3 sm:gap-4">
                        {pairing.questionSets.map((questionSet) => (
@@ -692,10 +749,23 @@ function DashboardPage() {
                      >
                        <FiRefreshCw className={`mr-2 sm:mr-3 ${regeneratingQuestions.has(pairing.id) ? 'animate-spin' : ''}`} size={18} />
                        <span className="hidden sm:inline">
-                         {regeneratingQuestions.has(pairing.id) ? 'Regenerating...' : isGeneratingQuestions ? 'Generation in Progress...' : 'Regenerate Questions'}
+                         {regeneratingQuestions.has(pairing.id) ? 'Creating...' : isGeneratingQuestions ? 'Generation in Progress...' : 'Create New Question Set'}
                        </span>
                        <span className="sm:hidden">
-                         {regeneratingQuestions.has(pairing.id) ? 'Regenerating...' : isGeneratingQuestions ? 'In Progress...' : 'Regenerate'}
+                         {regeneratingQuestions.has(pairing.id) ? 'Creating...' : isGeneratingQuestions ? 'In Progress...' : 'New Set'}
+                       </span>
+                       <span
+                         className="relative group ml-2 inline-flex items-center justify-center"
+                         onClick={(e) => e.stopPropagation()}
+                         aria-label="Creates a new question set for this resume and job. Existing sets are kept."
+                       >
+                         <FiInfo size={14} className="opacity-90 hover:opacity-100" />
+                         <span
+                           role="tooltip"
+                           className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 sm:w-64 px-3 py-2 rounded-lg bg-[var(--color-card)] text-[var(--color-text-primary)] text-xs leading-snug border border-[var(--color-border)] shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-20 font-normal"
+                         >
+                           Creates a new question set for this resume and job. Existing sets are kept.
+                         </span>
                        </span>
                      </button>
                    </div>
@@ -711,40 +781,37 @@ function DashboardPage() {
       {/* Job Description Modal — portaled so fixed positioning is not trapped by App route motion wrapper */}
       {isModalOpen && modalContent && typeof document !== 'undefined' &&
         createPortal(
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-2 sm:p-4">
-          <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg max-w-xs sm:max-w-md md:max-w-2xl w-full max-h-[90vh] sm:max-h-[80vh] overflow-hidden shadow-xl">
+          <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-3 sm:p-4"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) closeModal();
+            }}
+          >
+          <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl max-w-xs sm:max-w-md md:max-w-2xl w-full max-h-[92vh] sm:max-h-[88vh] overflow-hidden shadow-xl flex flex-col">
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-3 sm:p-4 md:p-6 border-b border-[var(--color-border)]">
-              <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)]">
+            <div className="flex items-center justify-between gap-3 p-3 sm:p-4 md:p-5 border-b border-[var(--color-border)] shrink-0">
+              <h3 className="text-base sm:text-lg font-semibold text-[var(--color-text-primary)] min-w-0 truncate">
                 {modalContent.title}
               </h3>
               <button
+                type="button"
                 onClick={closeModal}
-                className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-200 p-1 cursor-pointer"
+                aria-label="Close job description"
+                className="text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors duration-200 p-1 cursor-pointer shrink-0"
               >
                 <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            
-            {/* Modal Content */}
-            <div className="p-3 sm:p-4 md:p-6 overflow-y-auto max-h-[calc(90vh-120px)] sm:max-h-[calc(80vh-120px)]">
+
+            {/* Modal Content — scrolls fully; top X closes */}
+            <div className="p-3 sm:p-4 md:p-6 overflow-y-auto flex-1 min-h-0">
               <div className="prose prose-sm max-w-none">
                 <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] leading-relaxed whitespace-pre-wrap">
                   {modalContent.description}
                 </p>
               </div>
-            </div>
-            
-            {/* Modal Footer */}
-            <div className="flex justify-end p-3 sm:p-4 md:p-6 border-t border-[var(--color-border)]">
-              <button
-                onClick={closeModal}
-                className="px-3 sm:px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90 transition-opacity duration-200 text-sm sm:text-base cursor-pointer"
-              >
-                Close
-              </button>
             </div>
           </div>
         </div>,
@@ -896,8 +963,9 @@ function DashboardPage() {
 
                 {/* Validation Error Message */}
                 {!canGenerateQuestions() && splitMode && blendMode && (
-                  <div className="mt-4 p-3 bg-red-50/50 dark:bg-red-900/10 border border-red-200/50 dark:border-red-800/30 rounded-lg">
-                    <p className="text-sm text-red-700 dark:text-red-300">
+                  <div className="mt-4 app-inline-error" role="alert">
+                    <FiAlertCircle className="app-inline-error-icon" aria-hidden="true" />
+                    <p>
                       {/* ✅ CHANGE: Conditional message based on coding slider visibility */}
                       {selectedPairingForRegen.technical === true
                         ? 'When both Split and Blend modes are enabled, you need at least 6 total questions, excluding coding questions.'
@@ -954,12 +1022,12 @@ function DashboardPage() {
                         transition={{ duration: 0.3 }}
                         className="mt-3"
                       >
-                        <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                          <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                        <div className="p-4 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-200/50 dark:border-yellow-800/30 rounded-lg">
+                          <h4 className="text-sm font-medium text-yellow-700 dark:text-yellow-300 mb-3">
                             Split Mode Settings
                           </h4>
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <div className="flex items-center justify-between text-sm font-medium text-yellow-700 dark:text-yellow-300">
                               <span>Resume</span>
                               <span>Job Description</span>
                             </div>
@@ -969,11 +1037,15 @@ function DashboardPage() {
                               max="100"
                               value={splitResumePercentage}
                               onChange={(e) => setSplitResumePercentage(parseInt(e.target.value))}
-                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                              className="w-full h-2 bg-yellow-200/50 dark:bg-yellow-700/30 rounded-lg appearance-none cursor-pointer slider-yellow"
                             />
-                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                              <span>{splitResumePercentage}%</span>
-                              <span>{100 - splitResumePercentage}%</span>
+                            <div className="flex justify-between text-xs font-medium text-yellow-600 dark:text-yellow-400">
+                              <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                {splitResumePercentage}%
+                              </span>
+                              <span className="bg-yellow-100/70 dark:bg-yellow-800/30 px-2 py-1 rounded-full">
+                                {100 - splitResumePercentage}%
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1018,12 +1090,12 @@ function DashboardPage() {
                         transition={{ duration: 0.3 }}
                         className="mt-3"
                       >
-                        <div className="p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
-                          <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-3">
+                        <div className="p-4 bg-purple-50/50 dark:bg-purple-900/10 border border-purple-200/50 dark:border-purple-800/30 rounded-lg">
+                          <h4 className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-3">
                             Blend Mode Settings
                           </h4>
                           <div className="space-y-3">
-                            <div className="flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
+                            <div className="flex items-center justify-between text-sm font-medium text-purple-700 dark:text-purple-300">
                               <span>Resume Weight</span>
                               <span>Job Description Weight</span>
                             </div>
@@ -1033,11 +1105,15 @@ function DashboardPage() {
                               max="100"
                               value={blendResumePercentage}
                               onChange={(e) => setBlendResumePercentage(parseInt(e.target.value))}
-                              className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                              className="w-full h-2 bg-purple-200/50 dark:bg-purple-700/30 rounded-lg appearance-none cursor-pointer slider-purple"
                             />
-                            <div className="flex justify-between text-sm font-medium text-[var(--color-text-primary)]">
-                              <span>{blendResumePercentage}%</span>
-                              <span>{100 - blendResumePercentage}%</span>
+                            <div className="flex justify-between text-xs font-medium text-purple-600 dark:text-purple-400">
+                              <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                {blendResumePercentage}%
+                              </span>
+                              <span className="bg-purple-100/70 dark:bg-purple-800/30 px-2 py-1 rounded-full">
+                                {100 - blendResumePercentage}%
+                              </span>
                             </div>
                           </div>
                         </div>

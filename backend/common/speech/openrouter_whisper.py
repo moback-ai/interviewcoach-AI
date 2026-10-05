@@ -29,7 +29,10 @@ def transcribe_openrouter(audio_path: str) -> dict:
 
     with open(audio_path, "rb") as handle:
         files = {"file": (os.path.basename(audio_path), handle, "application/octet-stream")}
+        whisper_lang = optional_env("WHISPER_LANGUAGE", "en")
         data = {"model": _openrouter_model()}
+        if whisper_lang:
+            data["language"] = whisper_lang
         headers = {
             "Authorization": f"Bearer {api_key}",
             "HTTP-Referer": optional_env("DOMAIN", "https://ugaanlabs.ai"),

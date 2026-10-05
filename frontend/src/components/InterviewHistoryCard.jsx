@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw } from 'react-icons/fi';
+import { FiClock, FiCheckCircle, FiXCircle, FiPlay, FiRefreshCw, FiList } from 'react-icons/fi';
 import NoticeModal from './common/NoticeModal';
 import { fetchInterviewQuota, scheduleInterview } from '../utils/scheduleInterview';
 
@@ -74,6 +74,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
       case 'ENDED':
         return 'Completed';
       case 'in_progress':
+      case 'ACTIVE':
         return 'In Progress';
       case 'scheduled':
         return 'Scheduled';
@@ -86,7 +87,35 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
     }
   };
 
+  const isResumableStatus = (status) =>
+    status === 'STARTED' || status === 'ACTIVE' || status === 'in_progress';
+
+  const activeInterview = questionSet.interviews.find((interview) =>
+    isResumableStatus(interview.status)
+  );
+
   const handleRetakeClick = () => {
+    if (activeInterview) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Active Interview In Progress',
+        message: 'You already have an active interview in progress for this question set. Please resume your current interview before starting a new retake.',
+        variant: 'info',
+        actionButton: (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ),
+      });
+      return;
+    }
     setRetakeModalOpen(true);
   };
 
@@ -101,10 +130,28 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
       });
     } catch (error) {
       console.error('Error scheduling interview:', error);
+      const isAlreadyActive =
+        error.message?.toLowerCase().includes('active interview') ||
+        error.message?.toLowerCase().includes('in progress') ||
+        error.message?.toLowerCase().includes('resume');
+
       setNoticeModal({
         isOpen: true,
-        title: retakeFrom ? 'Could not start retake' : 'Could not schedule interview',
-        message: error.message,
+        title: isAlreadyActive ? 'Active Interview In Progress' : (retakeFrom ? 'Retake Unavailable' : 'Could Not Schedule Interview'),
+        message: error.message || 'An unexpected error occurred while scheduling your interview.',
+        variant: isAlreadyActive ? 'info' : 'error',
+        actionButton: (isAlreadyActive && activeInterview) ? (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ) : null,
       });
       setLoading(false);
     }
@@ -114,12 +161,35 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
 
   const handleRetakeConfirm = async () => {
     setRetakeModalOpen(false);
+    if (activeInterview) {
+      setNoticeModal({
+        isOpen: true,
+        title: 'Active Interview In Progress',
+        message: 'You already have an active interview in progress for this question set. Please resume your current interview before starting a new retake.',
+        variant: 'info',
+        actionButton: (
+          <button
+            type="button"
+            onClick={() => {
+              setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null });
+              window.location.href = `/interview?interview_id=${activeInterview.id}`;
+            }}
+            className="w-full py-2.5 px-4 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <FiPlay size={14} /> Resume Interview
+          </button>
+        ),
+      });
+      return;
+    }
     const originalInterviewId = questionSet.interviews[0]?.id;
     if (!originalInterviewId) {
       setNoticeModal({
         isOpen: true,
-        title: 'Retake unavailable',
+        title: 'Retake Unavailable',
         message: 'No original interview found for retake',
+        variant: 'info',
+        actionButton: null,
       });
       return;
     }
@@ -135,28 +205,39 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
   const hasCompletedInterviews = questionSet.interviews.some(interview => 
     interview.status === 'completed' || interview.status === 'ENDED'
   );
-  
 
+  const questionCount = Array.isArray(questionSet.questions)
+    ? questionSet.questions.length
+    : Number(questionSet.questionCount) || 0;
 
   return (
     <>
       <div className="bg-[var(--color-input-bg)] rounded-xl border border-[var(--color-border)] p-3 sm:p-4 md:p-6 shadow-md hover:shadow-lg transition-all duration-300">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 sm:mb-4 gap-3 sm:gap-0">
-          <div className="flex items-center space-x-2 sm:space-x-3">
-            <div className="bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white rounded-xl w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center shadow-lg">
+          <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+            <div className="bg-gradient-to-br from-[var(--color-primary)] to-[var(--color-accent)] text-white rounded-xl w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 flex items-center justify-center shadow-lg shrink-0">
               <span className="text-sm sm:text-base md:text-lg font-bold">{questionSet.questionSetNumber}</span>
             </div>
-            <div>
-              <h4 className="text-sm sm:text-base font-semibold text-[var(--color-text-primary)]">
-                Question Set {questionSet.questionSetNumber}
-              </h4>
-              <p className="text-xs sm:text-sm text-[var(--color-text-secondary)]">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="text-sm sm:text-base font-semibold text-[var(--color-text-primary)]">
+                  Question Set {questionSet.questionSetNumber}
+                </h4>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_28%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_10%,var(--color-card))] px-2 py-0.5 text-[10px] sm:text-xs font-semibold text-[var(--color-primary)]"
+                  title={`${questionCount} question${questionCount !== 1 ? 's' : ''} in this set`}
+                >
+                  <FiList size={11} className="opacity-80" />
+                  {questionCount} question{questionCount !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-[var(--color-text-secondary)] mt-0.5">
                 {questionSet.total_attempts} attempt{questionSet.total_attempts !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
-          
+
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
             {/* Schedule Interview Button - Show when no interviews exist */}
@@ -222,7 +303,7 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
                 <div className="flex items-center space-x-1 sm:space-x-2">
                   <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                     interview.status === 'completed' || interview.status === 'ENDED' ? 'bg-green-100 text-green-800' :
-                    interview.status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
+                    interview.status === 'in_progress' || interview.status === 'ACTIVE' ? 'bg-yellow-100 text-yellow-800' :
                     interview.status === 'scheduled' ? 'bg-blue-100 text-blue-800' :
                     interview.status === 'STARTED' ? 'bg-orange-100 text-orange-800' :
                     'bg-gray-100 text-gray-800'
@@ -234,8 +315,8 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
                       Retake
                     </span>
                   )}
-                  {/* Resume Interview Button - Only show for started interviews */}
-                  {interview.status === 'STARTED' && (
+                  {/* Resume Interview Button - in-progress interviews (STARTED / ACTIVE) */}
+                  {isResumableStatus(interview.status) && (
                     <button
                       onClick={() => window.location.href = `/interview?interview_id=${interview.id}`}
                       disabled={isDisabled}
@@ -356,10 +437,11 @@ const InterviewHistoryCard = ({ questionSet, pairing, isRegenerating, isAnyRegen
         )}
       <NoticeModal
         isOpen={noticeModal.isOpen}
-        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '' })}
+        onClose={() => setNoticeModal({ isOpen: false, title: '', message: '', variant: 'error', actionButton: null })}
         title={noticeModal.title}
         message={noticeModal.message}
-        variant="error"
+        variant={noticeModal.variant || 'error'}
+        actionButton={noticeModal.actionButton}
       />
     </>
   );

@@ -37,8 +37,11 @@ CREATE TABLE resumes (
     file_url TEXT NOT NULL,
     file_name TEXT NOT NULL,
     stored_path TEXT,
+    content_hash TEXT,
     uploaded_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE INDEX idx_resumes_user_content_hash ON resumes(user_id, content_hash);
 
 -- Job Descriptions
 CREATE TABLE job_descriptions (
@@ -48,8 +51,27 @@ CREATE TABLE job_descriptions (
     description TEXT NOT NULL,
     file_url TEXT,
     technical BOOLEAN NOT NULL DEFAULT true,
+    content_hash TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE INDEX idx_jd_user_content_hash ON job_descriptions(user_id, content_hash);
+
+-- Interview dossiers (one cached dossier per resume + JD pair)
+CREATE TABLE interview_dossiers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    resume_id UUID NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+    jd_id UUID NOT NULL REFERENCES job_descriptions(id) ON DELETE CASCADE,
+    job_title TEXT,
+    source TEXT,
+    dossier JSONB NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (resume_id, jd_id)
+);
+
+CREATE INDEX idx_interview_dossiers_user_pair ON interview_dossiers(user_id, resume_id, jd_id);
 
 -- Interviews
 CREATE TABLE interviews (

@@ -26,6 +26,7 @@ Infrastructure and AWS scripts are **not** in this repo — see [infra/README.md
 | Document | Purpose |
 |----------|---------|
 | [DEPLOY.md](DEPLOY.md) | Release flow, health checks, rollback, business hours |
+| [PAYMENTS_CHECKOUT.md](PAYMENTS_CHECKOUT.md) | Abandoned checkout expiry + DevSecOps sweeper handoff |
 | [SYNC_DEVSECOPS.md](SYNC_DEVSECOPS.md) | What lives in each repo (app vs DevSecOps) |
 | [SECURITY_SCANNING.md](SECURITY_SCANNING.md) | Security CI on PRs |
 | [DEV_ACCESS.md](DEV_ACCESS.md) | CloudWatch log access (developers) |
