@@ -31,6 +31,7 @@ Infrastructure and AWS scripts are **not** in this repo — see [infra/README.md
 | [SECURITY_SCANNING.md](SECURITY_SCANNING.md) | Security CI on PRs |
 | [DEV_ACCESS.md](DEV_ACCESS.md) | CloudWatch log access (developers) |
 | [SECRETS_ONLY.md](SECRETS_ONLY.md) | How prod config loads (local dev vs Secrets Manager) |
+| [BEDROCK_GPT56_TERRA.md](BEDROCK_GPT56_TERRA.md) | GPT-5.6 Terra on Bedrock (ap-south-1): IDs, IAM, reasoning effort, smoke test, troubleshooting |
 
 ---
 

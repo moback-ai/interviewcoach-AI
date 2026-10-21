@@ -222,6 +222,7 @@ def save_json_output(data, output_path):
 
 
 def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temperature=None):
+    from common.llm.bedrock import is_fatal_llm_error
     from common.llm.factory import chat as llm_chat
 
     resolved_model = resolve_ollama_model_name(model)
@@ -240,6 +241,9 @@ def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temp
             return response
         except Exception as e:
             print(f"[WARNING] LLM attempt {attempt+1} failed for model '{resolved_model}': {e}")
+            if is_fatal_llm_error(e):
+                # Config / IAM / unknown-model errors will not fix themselves on retry.
+                raise
     raise RuntimeError("LLM API failed after multiple attempts.")
 
 
