@@ -17,6 +17,7 @@ bcrypt==4.2.1
 # HTTP / AWS
 requests==2.33.0
 boto3>=1.34,<2
+openai>=1.99,<3
 redis>=5.0,<6
 
 # Support bot embeddings (in-API)
