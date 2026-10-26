@@ -133,5 +133,43 @@ class ProdHealthTests(unittest.TestCase):
         mock_local.assert_not_called()
 
 
+    def _client_with(self, llm_ready: bool, stt_ready: bool = True):
+        import app as app_module
+
+        app_module.app.config["TESTING"] = True
+        llm = {"ready": llm_ready, "reachable": True, "model_available": llm_ready,
+               "model": "x", "error": "" if llm_ready else "Bedrock Throttled"}
+        stt = {"chain": ["openrouter"], "openrouter": {"ready": stt_ready}}
+        patches = [
+            patch("common.health._redis_ready", return_value=(True, "")),
+            patch("common.health._db_ready", return_value=(True, "")),
+            patch("common.health.get_llm_diagnostics", return_value=llm),
+            patch("common.health.get_stt_diagnostics", return_value=stt),
+        ]
+        for p_ in patches:
+            p_.start()
+            self.addCleanup(p_.stop)
+        return app_module.app.test_client()
+
+    def test_llm_outage_degrades_but_keeps_instance_in_service(self):
+        client = self._client_with(llm_ready=False, stt_ready=False)
+        ready = client.get("/api/health/ready")
+        self.assertEqual(ready.status_code, 200)
+        body = ready.get_json()
+        self.assertTrue(body["ready"])
+        self.assertEqual(sorted(body["readiness"]["degraded"]), ["llm", "stt"])
+        self.assertEqual(body["readiness"]["failures"], [])
+        full = client.get("/api/health").get_json()
+        self.assertEqual(full["status"], "degraded")
+        self.assertFalse(full["services"]["llm"]["ready"])
+
+    def test_strict_mode_restores_failing_readiness_on_llm_outage(self):
+        runtime_config._CONFIG["READINESS_STRICT_AI"] = "true"
+        client = self._client_with(llm_ready=False)
+        ready = client.get("/api/health/ready")
+        self.assertEqual(ready.status_code, 503)
+        self.assertIn("llm", ready.get_json()["readiness"]["failures"])
+
+
 if __name__ == "__main__":
     unittest.main()
