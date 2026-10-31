@@ -24,6 +24,10 @@ def get_provider() -> LLMProvider:
         from common.llm.bedrock import BedrockLLMProvider
 
         _PROVIDER = BedrockLLMProvider()
+    elif name == "bedrock_mantle":
+        from common.llm.bedrock_mantle import BedrockMantleLLMProvider
+
+        _PROVIDER = BedrockMantleLLMProvider()
     else:
         raise RuntimeError(f"Unsupported LLM_PROVIDER: {name}")
     return _PROVIDER
