@@ -2693,6 +2693,37 @@ def _pipeline_failure_response(result, ollama_diagnostics):
     return jsonify(payload), status
 
 
+def _load_stored_resume_text(resume_id, user_id):
+    """Re-extract text from a saved resume file (regenerate has no upload). '' if unavailable."""
+    row = query_one(
+        "SELECT file_url, stored_path FROM resumes WHERE id=%s AND user_id=%s",
+        (resume_id, user_id),
+    )
+    if not row:
+        return ""
+    stored_path = (row.get('stored_path') or "").strip() or None
+    relative = (validated_protected_relative_path(stored_path) or stored_path) if stored_path else None
+    if not relative and row.get('file_url'):
+        relative = resolve_relative_path(row['file_url'])
+    if not relative:
+        return ""
+    try:
+        data = read_bytes(relative)
+    except FileNotFoundError:
+        return ""
+    ext = relative.rsplit('.', 1)[-1] if '.' in relative else 'pdf'
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
+        tf.write(data)
+        path = tf.name
+    try:
+        return (extract_text_from_uploaded_document(path, ext) or "").strip()
+    except ValueError:
+        return ""
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
@@ -2800,6 +2831,12 @@ def generate_questions():
             "resume_text": None,
             "exclude_questions": exclude_questions or None,
         }
+
+        if is_regenerate:
+            # Questions are written from the raw resume, so re-read the saved file.
+            pipeline_kwargs["resume_text"] = (
+                _load_stored_resume_text(resume_id, request.user["id"]) or None
+            )
 
         temp_resume = None
         # First build only: materialize resume file for dossier construction.

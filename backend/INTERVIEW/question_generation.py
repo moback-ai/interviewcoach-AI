@@ -25,6 +25,7 @@ from INTERVIEW.Resumeparser import (
     build_structured_data_from_skills,
     extract_text_from_resume,
 )
+from INTERVIEW.direct_question_generation import generate_direct_questions, mix_instruction
 from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION, load_dossier, save_dossier
 from INTERVIEW.question_mix import (
     allocate_type_counts_by_difficulty_targets,
@@ -308,6 +309,7 @@ def _empty_dossier(job_title, prep_slice=None, reason="llm_failed"):
         "gap_skills": [],
         "transferable_bridges": [],
         "resume_anchors": [],
+        "technical_topics": [],
         "jd_highlights": [],
         "schema_version": DOSSIER_SCHEMA_VERSION,
         "source": reason,
@@ -454,6 +456,37 @@ def _coerce_resume_anchors(value, limit=10):
     return out
 
 
+def _coerce_technical_topics(value, limit=8):
+    """Normalize LLM technical_topics into [{topic, source, tech, jd_tie}] (strings accepted)."""
+    out = []
+    if not isinstance(value, list):
+        return out
+    seen = set()
+    for item in value:
+        if isinstance(item, str):
+            item = {"topic": item}
+        if not isinstance(item, dict):
+            continue
+        topic = _shorten_text(str(item.get("topic") or item.get("name") or "").strip(), 80)
+        if not topic or topic.lower() in seen:
+            continue
+        seen.add(topic.lower())
+        tech = item.get("tech") or item.get("tools") or []
+        if isinstance(tech, str):
+            tech = [t.strip() for t in tech.split(",") if t.strip()]
+        out.append(
+            {
+                "topic": topic,
+                "source": _shorten_text(str(item.get("source") or item.get("from") or ""), 60),
+                "tech": _coerce_str_list(tech, limit=4, item_max=30),
+                "jd_tie": _shorten_text(str(item.get("jd_tie") or item.get("jd") or ""), 60),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _dossier_grounding_ok(dossier: dict) -> bool:
     """True when dossier has enough resume grounding for quality question gen."""
     if not isinstance(dossier, dict):
@@ -517,6 +550,7 @@ def _shrink_dossier_to_target(dossier):
     dossier["resume_highlights"] = (dossier.get("resume_highlights") or [])[:5]
     dossier["responsibilities"] = (dossier.get("responsibilities") or [])[:5]
     dossier["transferable_bridges"] = (dossier.get("transferable_bridges") or [])[:5]
+    dossier["technical_topics"] = (dossier.get("technical_topics") or [])[:6]
     compact = json.dumps(dossier, separators=(",", ":"))
     return dossier, compact
 
@@ -565,6 +599,14 @@ def _dossier_json_contract_block():
       "tech": ["..."],
       "actions": ["specific artifact or ownership worth asking about"]
     }}
+  ],
+  "technical_topics": [
+    {{
+      "topic": "core technical subject, named as a concept/feature/technique (not the project)",
+      "source": "company or project where the candidate worked on it",
+      "tech": ["tools involved"],
+      "jd_tie": "JD skill/duty it supports, or empty"
+    }}
   ]
 }}
 
@@ -574,7 +616,7 @@ Rules:
 - Prefer precise skill/tool names over vague soft skills (do not let Agile dominate overlap_skills).
 - Keep lists short: max 5 companies, 5 experience, 5 projects, 8 must_have_skills, 5 nice_to_have,
   6 responsibilities, 8 jd_highlights, 6 tools, 5 resume_highlights, 10 overlap_skills, 8 gap_skills,
-  6 transferable_bridges, 10 resume_anchors, 20 resume_skills.
+  6 transferable_bridges, 10 resume_anchors, 8 technical_topics, 20 resume_skills.
 - SELECT highlights — do not dump every resume line. Prefer fewer strong bullets over padded ones.
   Aim for 2-4 per experience/project; use 1-2 if that is all that is concrete; omit fluff rather than fill.
 - Each experience/project highlight MUST be interview-useful: concrete action + object/system + tech when present
@@ -586,6 +628,13 @@ Rules:
   Do NOT restate the entire JD or soft-collaboration filler. Prefer 4-8 strong points.
 - For resume_anchors: only specific companies/projects/artifacts the interviewer can cite; actions must be concrete.
 - For transferable_bridges: only real resume capability -> JD expectation links (tech/system), not soft skills.
+- For technical_topics: for each major experience/project, name the 1-2 core technical subjects a strong
+  practitioner of that work must understand, as concepts, features or techniques an interviewer could test
+  (e.g. "LOD expressions vs table calculations", "extract vs live connection tuning",
+  "idempotent consumers and the outbox pattern", "reconciling aggregates after a data migration").
+  Name the TOPIC, not the project ("data migration validation", not "the Quest Global migration").
+  Prefer topics that overlap the JD; set jd_tie when they do. Only topics grounded in tools/work that appear in
+  the resume or JD. Max 8, no soft skills.
 - Output a single raw JSON object only. No markdown fences. No ```json. No commentary.
 - Keep total JSON under ~{DOSSIER_TARGET_MAX_CHARS} characters.
 """
@@ -634,6 +683,7 @@ def _normalize_parsed_dossier(parsed, job_title, resume_skills_fallback=None, so
             parsed.get("transferable_bridges"), limit=6, item_max=140
         ),
         "resume_anchors": _coerce_resume_anchors(parsed.get("resume_anchors"), limit=10),
+        "technical_topics": _coerce_technical_topics(parsed.get("technical_topics"), limit=8),
         "jd_highlights": jd_highlights,
         "schema_version": DOSSIER_SCHEMA_VERSION,
         "source": source,
@@ -931,47 +981,84 @@ def _dossier_json(dossier):
     return json.dumps(dossier or {}, separators=(",", ":"))
 
 
+def _question_style_rules_text():
+    """Brevity, depth and grammar rules shared by every theory prompt."""
+    return """QUESTION STYLE (strict):
+- ONE ask per question. A short concrete setup is welcome, but end with a single question
+  (no "how did you X, what did you Y, and how did you Z").
+- Length: 25-50 words normally; a hard scenario may run to 75 words if the extra words are concrete
+  technical detail (data size, feature names, symptoms), never filler or background story.
+- TECHNICAL DEPTH: each question must have a checkable technical answer - a named feature, setting,
+  function, query pattern, trade-off or diagnostic step that a strong candidate would state.
+  Prefer "what would you check / which feature or setting / why does it behave this way" over
+  "what drove your decision".
+- Use the resume only as a springboard: name at most ONE company/project, and only when it makes
+  the scenario sharper. Never use a company or project name as a possessive or a modifier like
+  "On The Acme dashboard work"; write it naturally ("In your work at Acme, ...").
+- No stage chains ("from clarifying X through delivering Y and validating Z") and no checklists of
+  dimensions ("tradeoffs around A, B, C, D and E").
+- Be concrete: name the specific feature, function, technique or concept from the JD tools/skills
+  (not just the tool's name), and use realistic numbers (e.g. "30-second load", "5M rows").
+- GRAMMAR: every question must be natural, grammatical spoken English that a person could read
+  aloud. Use complete sentences, one main clause, no repeated words or openers (never "When ...,
+  when ..."), no telegraphic fragments, no filler like "Given your X work" unless it adds a fact.
+  Re-read each question once before returning it and fix awkward wording.
+- Vary the question shape: at most one in three questions may be "Which X would you ..., and why?".
+  Mix in "How would you diagnose/verify ...", "What would you expect ... if ...", "Why does ... happen when ...",
+  "What is the risk of ...", "How would you decide between ...", and "Suppose ... what do you check first?"."""
+
+
 def _shared_interview_contract_text():
     return """SHARED RULES (strict):
 - Write REAL interview probes a hiring manager would ask in a live interview for THIS job title.
 - Adapt tone to the role domain in the dossier (technical, business, creative, operations, etc.).
-- BAN definition/textbook stems: "What is", "Explain", "Define", "List advantages", "Describe the difference between".
+- BAN pure textbook stems: "What is", "Define", "List advantages". A short applied comparison
+  is allowed and encouraged for easy/concept questions when tied to a use case
+  (e.g. "Which would you pick, X or Y, to ... and why?" / "How does X differ from Y when ...?").
 - BAN soft/vague stems: "Tell us about your experience with", "What was your approach to",
   "What strategies would you employ", "How did you handle X" when X is only a bare skill name,
   "Describe your role in" with no concrete artifact.
-- Every question MUST name at least one concrete resume artifact from the dossier:
-  company, project/initiative, outcome/metric, method, or tool named in the dossier —
-  AND tie to a JD expectation (must_have_skills, tools, responsibilities, or transferable_bridges).
+- Ground every question in the dossier: a resume artifact (company, project, outcome, method, tool)
+  and/or a JD expectation (must_have_skills, tools, responsibilities, transferable_bridges).
+  Experience-style probes must name one concrete resume artifact; knowledge and scenario probes
+  may use the resume only as a springboard or skip it.
 - ONE anchor bundle per question: do not combine project from one story with outcome from another.
 - Prefer experience/projects details (company, actions, outcomes) over vague soft skills.
 - Prefer overlap_skills and transferable_bridges.
 - gap_skills: NEVER claim the candidate already used them. Phrase as transfer:
   "Given your <resume work>, how would you approach <gap skill / JD need> for this role?"
+  Use gap_skills in at most ONE hard question, and only if it stays inside the job title's own
+  discipline (do not turn a reporting/BI/analyst question into data-pipeline or infrastructure design).
 - Never treat hiring_company as the candidate's past employer unless it also appears in companies/experience.
 - No coding tasks, puzzles, algorithms, or leetcode unless the role clearly requires coding questions
   (those are handled separately). For these theory questions, stay non-leetcode.
 - Use ONLY the dossier. Do not invent employers, projects, skills, or past usage of gap tools.
 
+""" + _question_style_rules_text() + """
+
 DIFFICULTY LADDER (must get deeper; do not rephrase the same anecdote):
-- beginner/easy: walk through ONE concrete thing they did — name project/outcome/tool from dossier.
-- medium: how/why/process, ownership, failure modes, or measurement — still on THEIR past work, aimed at JD.
-- hard: tradeoffs and judgment applying THEIR past work to THIS role's constraints; what they would change and why.
+- beginner/easy: ONE small thing - either a walkthrough of a named artifact, or a short applied
+  knowledge check on a JD tool/skill (when to use X vs Y, what a feature does in a tiny example).
+- medium: how/why, ownership, failure modes, or measurement - diagnosing or deciding with real
+  numbers/constraints, aimed at a JD expectation.
+- hard: tradeoffs and judgment in a realistic scenario using THIS role's own tools and constraints;
+  advanced features of the JD tools (not new, unrelated stacks).
 """
 
 
 def _difficulty_depth_hint(level):
     hints = {
         "beginner": (
-            "Ask them to walk through one concrete past artifact "
-            "(named project/outcome/tool from the dossier)."
+            "Ask ONE small thing: a walkthrough of one named artifact, or a short applied "
+            "knowledge check on a JD tool/skill."
         ),
         "medium": (
             "Ask how/why they built or decided something, including failure modes or measurement, "
             "linked to a JD expectation."
         ),
         "hard": (
-            "Ask for tradeoffs/judgment applying their concrete past work to this role's "
-            "constraints (prefer transferable_bridges); not a generic strategy essay."
+            "Ask for judgment in ONE realistic scenario on this role's own tools "
+            "(advanced JD features, real constraints); not a generic strategy essay."
         ),
     }
     return hints.get(level, hints["medium"])
@@ -989,7 +1076,6 @@ def _is_generic_definition_question(question_text):
         "define ",
         "list the ",
         "list advantages",
-        "describe the difference",
         "tell me about yourself",
         "why should we hire",
         "tell us about your experience",
@@ -1529,7 +1615,9 @@ def _exclude_questions_block(exclude_questions) -> str:
         "or ask the same interview intent):\n"
         + "\n".join(lines)
         + "\n"
-        "A near-paraphrase of any item above is INVALID. Change the ask, not just the wording.\n"
+        "A near-paraphrase of any item above is INVALID. Change the ask, not just the wording. "
+        "Also do not test the same underlying technical concept as any item above (e.g. if one asks how to "
+        "detect duplicate rows after a migration, do not ask another duplicate-row or same-feature question).\n"
     )
 
 
@@ -1770,7 +1858,8 @@ UNIQUENESS (strict — enforced by you, not post-processing):
 - Spread questions across the RESUME ANCHOR POOL before reusing any project.
 - gap_skills: NEVER as past experience — only transfer ("how would you approach…").
 - Soft skills (communication, teamwork, Agile) in at most ONE question total across the whole batch.
-- beginner = walkthrough; medium = mechanism/failure/measurement; hard = tradeoffs/judgment for THIS role.
+- beginner = one small walkthrough or short applied knowledge check; medium = mechanism/failure/measurement with real numbers; hard = judgment in one realistic scenario on THIS role's own tools.
+- MIX the set roughly in thirds: (a) the candidate's own work, asked as a technical mechanism question; (b) technical_topics - a core subject from their projects, asked as a technical question about the topic (project named at most as a clause); (c) JD requirements/tools not covered by (a) or (b).
 {exclude_block}{regeneration_block}
 CANDIDATE/ROLE DOSSIER (use ONLY this; do not invent employers/projects not listed):
 {dossier_blob}
@@ -2296,9 +2385,9 @@ def _typed_levels_request_counts(beginner_count, medium_count, hard_count, only_
 
 def _typed_difficulty_ladder_text() -> str:
     return """DIFFICULTY LADDER (must get deeper; do not rephrase the same ask):
-- beginner/easy: concrete walkthrough or applied starter probe.
-- medium: how/why, ownership, failure modes, measurement, or decision process.
-- hard: tradeoffs and judgment under this role's constraints."""
+- beginner/easy: one small applied probe - a short knowledge check or a single walkthrough.
+- medium: how/why, ownership, failure modes, measurement, or decision process with real numbers.
+- hard: judgment in ONE realistic scenario using this role's own tools and constraints."""
 
 
 def _concepts_domain_hint(domain: str) -> str:
@@ -2342,6 +2431,7 @@ def _dossier_slice_for_type(dossier: dict | None, question_type: str) -> dict:
             "resume_highlights": (d.get("resume_highlights") or [])[:5],
             "overlap_skills": (d.get("overlap_skills") or [])[:6],
             "responsibilities": (d.get("responsibilities") or [])[:3],
+            "technical_topics": (d.get("technical_topics") or [])[:8],
         }
     if question_type == "concepts":
         return {
@@ -2354,6 +2444,26 @@ def _dossier_slice_for_type(dossier: dict | None, question_type: str) -> dict:
             "responsibilities": (d.get("responsibilities") or [])[:6],
             "tools": (d.get("tools") or [])[:6],
             "nice_to_have_skills": (d.get("nice_to_have_skills") or [])[:5],
+            "technical_topics": (d.get("technical_topics") or [])[:8],
+            # Fallback source of topics for dossiers cached before technical_topics existed.
+            "project_tech": [
+                {
+                    "name": p.get("name") or p.get("project") or "",
+                    "tech": (p.get("tech") or [])[:4],
+                    "highlights": (p.get("highlights") or [])[:2],
+                }
+                for p in (d.get("projects") or [])[:4]
+                if isinstance(p, dict)
+            ]
+            + [
+                {
+                    "name": e.get("company") or "",
+                    "tech": (e.get("tech") or [])[:4],
+                    "highlights": (e.get("highlights") or [])[:2],
+                }
+                for e in (d.get("experience") or [])[:3]
+                if isinstance(e, dict)
+            ],
         }
     if question_type == "situational":
         return {
@@ -2365,6 +2475,7 @@ def _dossier_slice_for_type(dossier: dict | None, question_type: str) -> dict:
             "responsibilities": (d.get("responsibilities") or [])[:4],
             "resume_anchors": (d.get("resume_anchors") or [])[:5],
             "experience": (d.get("experience") or [])[:3],
+            "technical_topics": (d.get("technical_topics") or [])[:6],
         }
     return {"job_title": job_title, "domain": domain}
 
@@ -2394,8 +2505,25 @@ RULES (strict):
 - BAN definition/textbook stems: "What is", "Explain", "Define", "List advantages".
 - BAN soft stems: "Tell us about your experience with" + bare skill name.
 - ONE resume anchor per question; spread across the RESUME ANCHOR POOL before reusing.
+- Ask for ONE technical thing about that anchor: what exactly they built/configured/queried, the specific
+  technique they chose over an alternative, or the measurement that proved it - not the whole story arc.
+  The answer must contain a technical mechanism, not just a motive.
+- Match difficulty to depth: beginner = what they configured; medium = how they measured or isolated a problem;
+  hard = the trade-off between two techniques in that work, or why one alternative fits better - never just
+  "which setting did you build".
+- NEVER invent incidents, failures, numbers or outcomes for the candidate's past work that the dossier does not
+  state (no "when an output did not match...", no made-up percentages). Put hypothetical symptoms or numbers
+  only in questions framed as "Suppose ..." / "A report shows ...", not as things the candidate lived through.
+- TOPIC OVER STORY: after naming the work, test the core technical topic that work involved (see technical_topics;
+  if empty, infer it from that anchor's tech and actions). At most ONE question in this batch may ask only what they
+  did or achieved; every other question must require them to explain a technical mechanism of that topic.
+- BAN vague stems: "what drove your choice", "what decision led you", "describe the decision you made",
+  "describe the test-case decision", "what was the most consequential change". Ask which technique, setting,
+  query or check they used, and what result it produced.
+- Do not open every question with "At <company>..."; vary the openers.
 - Briefly aim the probe at role relevance using overlap_skills / responsibilities when natural.
 - No coding tasks. Use ONLY the dossier slice. Invent nothing.
+{_question_style_rules_text()}
 {_typed_difficulty_ladder_text()}
 
 {anchor_block}
@@ -2426,13 +2554,27 @@ def _build_concepts_batch_prompt(
 
 TYPE: concepts (applied domain knowledge from the JD — not a difficulty label).
 RULES (strict):
-- Ground every question in must_have_skills, overlap_skills, jd_highlights, tools, or responsibilities.
+- SOURCES (mix them): about half of the questions test a technical_topics entry - a core subject from the
+  candidate's own projects - and about half test JD requirements (must_have_skills, jd_highlights, tools,
+  responsibilities) not already covered. If technical_topics is empty, infer topics from project_tech.
+  For a topic question, mention the project at most as a short clause ("In your dashboard-tuning work, ...")
+  and ask a technical question about the TOPIC, not about the story.
+- Ground every question in technical_topics, must_have_skills, overlap_skills, jd_highlights, tools, or responsibilities.
 - Ask for APPLIED understanding: how they would use, choose, measure, or reason about a JD concept in THIS role.
-- BAN pure textbook stems: "What is X", "Define X", "List advantages of X", "Explain the difference between".
-- Resume stories are OPTIONAL — do not force a resume project into every question.
+- BAN pure textbook stems: "What is X", "Define X", "List advantages of X".
+- DO ask specific, checkable knowledge: name the exact feature/function/technique of a JD tool
+  (e.g. a particular calculation type, join, setting, order of operations) and ask when or why to use it,
+  how two options differ in a concrete use case, or what happens in a small example.
+- Beginner questions should be short knowledge checks (e.g. "How does X differ from Y when ...?", "Which of X or Y
+  fits ... and why?", "What does X return if ...?"). Do not reuse the same stem twice and never start a question
+  with "When" if "when" appears again in the same sentence.
+- Medium/hard: add a realistic scenario with numbers and ask what they would check or choose.
+- Resume stories are OPTIONAL — do not force a resume project into every question. If you mention one, keep it
+  to a clause, not the premise.
 - Prefer overlap_skills when present; otherwise probe must_have_skills as role expectations.
 - No coding tasks / leetcode. Use ONLY the dossier slice. Invent nothing.
 {domain_hint}
+{_question_style_rules_text()}
 {_typed_difficulty_ladder_text()}
 
 {exclude_block}
@@ -2466,7 +2608,16 @@ RULES (strict):
   "Given your <nearest resume work>, how would you approach <gap skill / JD need>?"
 - Prefer transferable_bridges that link a resume capability to a JD expectation.
 - BAN definition/textbook stems. BAN pure past-story behavioral walks with no scenario.
+- Build scenarios from the JD's responsibilities/tools or from a technical_topics entry (a realistic problem in
+  that topic area), not from a recap of the candidate's past project.
+- One decision per question (diagnose, choose, or prioritise) with realistic numbers/constraints.
+- Every scenario must have a technical answer a strong candidate would state: name the symptom, the data
+  size or setting, and ask which check, feature or fix they would use and why.
+- Stay inside the job title's own discipline and the JD's tools. Do NOT escalate into unrelated
+  architecture or infrastructure design (e.g. do not ask a reporting/BI/analyst role to design a data pipeline).
+- Use gap_skills in at most ONE hard question across this set; otherwise scenario on overlap_skills/tools.
 - No coding tasks. Use ONLY the dossier slice. Invent nothing.
+{_question_style_rules_text()}
 {_typed_difficulty_ladder_text()}
 
 {exclude_block}
@@ -2662,6 +2813,9 @@ def generate_core_questions(
 
     theory_types = ("behavioral", "concepts", "situational")
     results_by_type = {}
+    # Each type is a separate LLM call over the same dossier, so without this they
+    # all gravitate to the same top anchor. Feed earlier types' questions forward.
+    covered_questions = list(_normalize_exclude_question_texts(exclude_questions))
     for question_type in theory_types:
         levels = type_difficulty.get(question_type) or {}
         needed = sum(int(levels.get(k) or 0) for k in ("beginner", "medium", "hard"))
@@ -2680,8 +2834,12 @@ def generate_core_questions(
             dossier,
             levels,
             model,
-            exclude_questions=exclude_questions,
+            exclude_questions=covered_questions or None,
         )
+        for lvl in ("beginner", "medium", "hard"):
+            covered_questions.extend(
+                _normalize_exclude_question_texts(results_by_type[question_type].get(lvl))
+            )
 
     # Generation shortfall: ask next eligible type for missing counts.
     for question_type in theory_types:
@@ -2774,16 +2932,19 @@ def generate_coding_questions(
     model="llama3",
     dossier=None,
     exclude_questions=None,
+    resume_text=None,
 ):
     """
-    Generate coding/programming interview questions from compact dossier skills.
+    Generate coding/programming interview questions from the raw resume text and JD
+    (or, when no resume text is given, from compact dossier skills).
     Weights: 1=beginner, 3=medium, 5=hard.
     """
     if coding_count <= 0:
         return []
 
-    if dossier is None:
-        raise ValueError("dossier is required for coding question generation")
+    if dossier is None and not (resume_text or "").strip():
+        raise ValueError("resume text or dossier is required for coding question generation")
+    dossier = dossier or {}
 
     # Prefer overlap, then resume languages/skills, then must-haves/tools from LLM dossier
     coding_focus = {
@@ -2803,6 +2964,11 @@ def generate_coding_questions(
         ],
     }
     focus_blob = json.dumps(coding_focus, separators=(",", ":"))
+    if (resume_text or "").strip():
+        focus_blob = (
+            f"CANDIDATE RESUME\n{resume_text.strip()[:10000]}\n\n"
+            f"JOB DESCRIPTION\n{(job_description or '').strip()[:5000]}"
+        )
 
     # Spread weights across the requested count
     weights = []
@@ -2823,19 +2989,33 @@ def generate_coding_questions(
 
 Generate CLEAR, PRECISE, IMPLEMENTABLE coding tasks (NOT theory).
 
-SKILL FOCUS from LLM interview dossier (prioritize overlap_skills, language from resume_skills):
+SKILL FOCUS (prefer the language and tools both the resume and the job description name):
 {focus_blob}
 
 RULES:
 1. Every item MUST be a direct coding task: "Write a function…", "Write SQL…", "Parse…", "Given X return Y…".
 2. Prefer languages/tools the candidate lists in resume_skills/overlap_skills. If JD language differs, prioritize resume language but use JD-style logic from must_have_skills/tools.
-3. Unambiguous tasks with a clear expected output; short example I/O when helpful.
-4. Difficulty by weight:
-   - weight 1 (easy): simple transform/filter/parse/basic SQL
-   - weight 3 (medium): joins/aggregation, API filter, regex, multi-step transform
-   - weight 5 (hard): mini utility (retry/pagination), complex SQL, branching + error handling
+3. Write each task as plain prose in one or two complete sentences, then the table/input definition
+   (max ~70 words). No bullets, dashes, markdown or newlines. Never start with a bare fragment like
+   "Write SQL Server SQL." - say what to return ("Write a SQL Server query that returns ..."). Do not spell
+   out every column alias, rounding rule, NULL rule or sort key unless it is the point of the question.
+4. Difficulty by weight (calibrate strictly):
+   - weight 1 (easy): ONE concept, but never a bare one-line lookup such as "count rows where a flag is
+     set": add one small decision or edge case (grouping, a threshold, empty or duplicate input, a tie).
+     No window functions, CTEs, multiple joins, or multi-key sorting.
+   - weight 3 (medium): a join plus group-by/having, a date-range or "previous period" filter, regex, or a
+     multi-step transform.
+   - weight 5 (hard): window functions / ranking / running totals / dedupe, or a mini utility
+     (retry/pagination) with branching and error handling.
 5. BAN: vague discussion, system design essays, unrelated LeetCode puzzles, multi-day projects.
 6. Do not invent languages or libraries not present in the skill focus.
+7. State limits and boundary semantics unambiguously: for retries say "up to N retries after the first
+   attempt" (or "N attempts in total"), and say whether ranges and thresholds are inclusive.
+8. Make the contract explicit in one short clause. Define every qualifying word the task uses: if it says
+   "retryable", "valid", "active" or "successful", state exactly what qualifies (for example "retry only
+   on TimeoutError"). Say how null or empty input is handled. For any date column give its type and how
+   both boundaries apply (for example "created_at is a timestamp; include all of the end date").
+   Tasks must be solvable in 10-15 minutes.
 {exclude_block}{regeneration_block}
 Return ONLY a JSON array with EXACTLY {coding_count} items. Use these weights in order: {weights}
 [
@@ -2843,7 +3023,7 @@ Return ONLY a JSON array with EXACTLY {coding_count} items. Use these weights in
 ]
 No markdown. JSON ONLY."""
 
-    print(f"[INFO] Generating {coding_count} coding questions (dossier-backed)...")
+    print(f"[INFO] Generating {coding_count} coding questions (from resume + JD)...")
     best = []
     for attempt in range(QUESTION_GEN_MAX_RETRIES):
         try:
@@ -3208,8 +3388,18 @@ def run_pipeline_from_api(
                     resume_path and os.path.exists(resume_path)
                 )
 
+                # Every mode writes from the raw resume text, not the dossier.
+                direct_text = ""
+                question_pipeline = "direct"
+                if preextracted_resume_text:
+                    direct_text = preextracted_resume_text
+                elif skills_list:
+                    direct_text = "Candidate skills: " + ", ".join(str(s) for s in skills_list)
+                elif resume_path and os.path.exists(resume_path):
+                    direct_text = (extract_text_from_resume(resume_path) or "").strip()
+
                 # Single dossier load — regenerate never re-parses resume/skills.
-                can_cache = bool((resume_id or "").strip() and (jd_id or "").strip())
+                can_cache =bool((resume_id or "").strip() and (jd_id or "").strip())
                 dossier = None
                 if can_cache:
                     dossier = load_dossier(resume_id, jd_id, user_id=user_id)
@@ -3331,62 +3521,43 @@ def run_pipeline_from_api(
                 )
 
                 # === Generate questions ===
-                if split and blend:
-                    core_questions = generate_hybrid_questions(
-                        structured_data,
-                        job_title,
-                        job_description,
-                        question_counts.get('beginner', 1),
-                        question_counts.get('medium', 1),
-                        question_counts.get('hard', 1),
-                        resume_pct,
-                        jd_pct,
+                if not direct_text and not (dossier.get("experience") or dossier.get("projects")):
+                    # Skills-only profile regenerated by ids: the saved skills are its whole resume.
+                    saved_skills = dossier.get("resume_skills") or []
+                    if saved_skills:
+                        direct_text = "Candidate skills: " + ", ".join(str(s) for s in saved_skills)
+                if not direct_text:
+                    return {
+                        "success": False,
+                        "code": "RESUME_TEXT_MISSING",
+                        "error": (
+                            "The saved resume could not be read, so questions were not generated. "
+                            "Please upload the resume again."
+                        ),
+                    }
+                n_beginner = question_counts.get('beginner', 1)
+                n_medium = question_counts.get('medium', 1)
+                n_hard = question_counts.get('hard', 1)
+                core_questions = generate_direct_questions(
+                    direct_text,
+                    job_title,
+                    job_description,
+                    n_beginner,
+                    n_medium,
+                    n_hard,
+                    model=resolved_model,
+                    exclude_questions=exclude_questions,
+                    mix=mix_instruction(
+                        mode_label,
+                        (n_beginner or 0) + (n_medium or 0) + (n_hard or 0),
+                        resume_pct=resume_pct,
+                        jd_pct=jd_pct,
                         blend_pct_resume=blend_pct_resume,
                         blend_pct_jd=blend_pct_jd,
-                        model=resolved_model,
-                        dossier=dossier,
-                        exclude_questions=exclude_questions,
-                    )
-                elif split:
-                    core_questions = generate_split_questions(
-                        structured_data,
-                        job_title,
-                        job_description,
-                        question_counts.get('beginner', 1),
-                        question_counts.get('medium', 1),
-                        question_counts.get('hard', 1),
-                        resume_pct,
-                        jd_pct,
-                        model=resolved_model,
-                        dossier=dossier,
-                        exclude_questions=exclude_questions,
-                    )
-                elif blend:
-                    core_questions = generate_blend_questions(
-                        structured_data,
-                        job_title,
-                        job_description,
-                        question_counts.get('beginner', 1),
-                        question_counts.get('medium', 1),
-                        question_counts.get('hard', 1),
-                        blend_pct_resume,
-                        blend_pct_jd,
-                        model=resolved_model,
-                        dossier=dossier,
-                        exclude_questions=exclude_questions,
-                    )
-                else:
-                    core_questions = generate_core_questions(
-                        structured_data,
-                        job_title,
-                        job_description,
-                        question_counts.get('beginner', 1),
-                        question_counts.get('medium', 1),
-                        question_counts.get('hard', 1),
-                        model=resolved_model,
-                        dossier=dossier,
-                        exclude_questions=exclude_questions,
-                    )
+                    ),
+                )
+                if not _count_level_dict(core_questions):
+                    raise RuntimeError("Question generation returned no questions. Please retry.")
 
                 # Generate coding questions if requested
                 coding_count = question_counts.get('coding', 0)
@@ -3400,6 +3571,7 @@ def run_pipeline_from_api(
                         model=resolved_model,
                         dossier=dossier,
                         exclude_questions=exclude_questions,
+                        resume_text=direct_text,
                     )
 
                     # Categorize coding questions by weight and merge into existing categories
@@ -3461,6 +3633,7 @@ def run_pipeline_from_api(
                 token_usage = token_tracker.as_dict()
                 token_usage["mode"] = mode_label
                 token_usage["dossier_cache"] = dossier_cache_status
+                token_usage["question_pipeline"] = question_pipeline
 
                 return {
                     "success": True,

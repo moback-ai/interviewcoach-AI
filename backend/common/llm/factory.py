@@ -20,6 +20,10 @@ def get_provider() -> LLMProvider:
     name = _configured_provider()
     if name == "ollama":
         _PROVIDER = OllamaLLMProvider()
+    elif name == "openrouter":
+        from common.llm.openrouter_provider import OpenRouterLLMProvider
+
+        _PROVIDER = OpenRouterLLMProvider()
     elif name == "bedrock":
         from common.llm.bedrock import BedrockLLMProvider
 
