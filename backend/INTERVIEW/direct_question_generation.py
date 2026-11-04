@@ -269,6 +269,13 @@ def _call(prompt, model, temperature, label):
     raw = (response.get("message") or {}).get("content") or ""
     questions = _parse_questions(raw)
     print(f"[INFO] Direct {label}: parsed {len(questions)} question(s)")
+    if not questions:
+        print(
+            f"[WARN] Direct {label}: nothing parsed "
+            f"finish_reason={response.get('finish_reason')} chars={len(raw)} "
+            f"out_tokens={(response.get('usage') or {}).get('output_tokens')} "
+            f"head={raw[:160]!r}"
+        )
     return questions
 
 

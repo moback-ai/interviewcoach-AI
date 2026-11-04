@@ -81,7 +81,8 @@ def _payload(
         body["temperature"] = _temperature(temperature)
     # Reasoning models spend completion tokens on hidden thinking; "low" keeps
     # answers inside the budget and latency reasonable for interactive calls.
-    effort = optional_env("OPENROUTER_REASONING_EFFORT", "").strip().lower()
+    # Default to "low" so an unset env var cannot let thinking eat the whole output budget.
+    effort = (optional_env("OPENROUTER_REASONING_EFFORT", "low") or "low").strip().lower()
     if effort in ("minimal", "low", "medium", "high"):
         body["reasoning"] = {"effort": effort}
     return body

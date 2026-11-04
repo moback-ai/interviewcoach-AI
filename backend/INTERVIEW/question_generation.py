@@ -26,7 +26,7 @@ from INTERVIEW.Resumeparser import (
     extract_text_from_resume,
 )
 from INTERVIEW.direct_question_generation import generate_direct_questions, mix_instruction
-from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION, load_dossier, save_dossier
+from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION
 from INTERVIEW.question_mix import (
     allocate_type_counts_by_difficulty_targets,
     compute_question_plan,
@@ -3029,6 +3029,11 @@ No markdown. JSON ONLY."""
         try:
             response = try_ollama_chat(prompt.strip(), model=model)
             raw = response["message"]["content"]
+            if response.get("finish_reason") == "length":
+                print(
+                    f"[WARN] Coding questions hit the token limit "
+                    f"(out_tokens={(response.get('usage') or {}).get('output_tokens')}, chars={len(raw)})"
+                )
             questions = extract_json_array(raw)
             normalized = []
             for i, item in enumerate(questions or []):
@@ -3383,125 +3388,31 @@ def run_pipeline_from_api(
                 preextracted_resume_text = (resume_text or "").strip()
                 resume_text = ""
                 candidate_name = "candidate"
-                dossier_cache_status = "skip"
-                has_source = bool(skills_list) or bool(preextracted_resume_text) or bool(
-                    resume_path and os.path.exists(resume_path)
-                )
-
-                # Every mode writes from the raw resume text, not the dossier.
-                direct_text = ""
+                # Questions are written from the raw resume + JD only; no dossier is built or loaded.
+                dossier_cache_status = "not_used"
                 question_pipeline = "direct"
+                direct_text = ""
                 if preextracted_resume_text:
                     direct_text = preextracted_resume_text
+                    candidate_name = _candidate_name_from_text(direct_text)
                 elif skills_list:
+                    structured_from_skills = build_structured_data_from_skills(skills_list)
+                    skills_list = (structured_from_skills or {}).get("skills") or []
+                    if not skills_list:
+                        return {
+                            "success": False,
+                            "error": "Please provide at least one skill (comma-separated).",
+                        }
                     direct_text = "Candidate skills: " + ", ".join(str(s) for s in skills_list)
                 elif resume_path and os.path.exists(resume_path):
                     direct_text = (extract_text_from_resume(resume_path) or "").strip()
+                    from common.document_validation import validate_resume_text
+                    is_valid_resume, resume_validation_error = validate_resume_text(direct_text)
+                    if not is_valid_resume:
+                        raise ResumeParseError(resume_validation_error)
+                    candidate_name = _candidate_name_from_text(direct_text)
 
-                # Single dossier load — regenerate never re-parses resume/skills.
-                can_cache =bool((resume_id or "").strip() and (jd_id or "").strip())
-                dossier = None
-                if can_cache:
-                    dossier = load_dossier(resume_id, jd_id, user_id=user_id)
-                    if dossier:
-                        dossier_cache_status = "hit"
-                        print(
-                            f"[INFO] Dossier cache hit resume_id={resume_id} jd_id={jd_id} "
-                            "(skipping resume/skills parse)"
-                        )
-                    else:
-                        dossier_cache_status = "miss"
-                        print(
-                            f"[INFO] Dossier cache miss resume_id={resume_id} jd_id={jd_id}"
-                        )
-                else:
-                    print("[INFO] Dossier cache skipped (missing resume_id or jd_id)")
-
-                if not dossier:
-                    if not has_source:
-                        return {
-                            "success": False,
-                            "code": "DOSSIER_MISSING",
-                            "error": (
-                                "Interview dossier not found for this resume/JD pair. "
-                                "Re-run question generation from upload."
-                            ),
-                        }
-
-                    if skills_list:
-                        structured_from_skills = build_structured_data_from_skills(skills_list)
-                        if not structured_from_skills or not structured_from_skills.get("skills"):
-                            return {
-                                "success": False,
-                                "error": "Please provide at least one skill (comma-separated).",
-                            }
-                        skills_list = structured_from_skills.get("skills") or skills_list
-                        print(
-                            f"[INFO] Building dossier from skills-based profile "
-                            f"({len(skills_list)} skills)"
-                        )
-                    elif preextracted_resume_text:
-                        # Already extracted+validated by the API — avoid a second parse.
-                        print("[INFO] Building dossier from pre-extracted resume text")
-                        resume_text = preextracted_resume_text
-                        candidate_name = _candidate_name_from_text(resume_text)
-                    elif resume_path and os.path.exists(resume_path):
-                        print("[INFO] Building dossier from resume file")
-                        resume_text = extract_text_from_resume(resume_path)
-                        from common.document_validation import validate_resume_text
-                        is_valid_resume, resume_validation_error = validate_resume_text(resume_text)
-                        if not is_valid_resume:
-                            raise ResumeParseError(resume_validation_error)
-                        candidate_name = _candidate_name_from_text(resume_text)
-                    else:
-                        return {
-                            "success": False,
-                            "code": "DOSSIER_MISSING",
-                            "error": (
-                                "Interview dossier not found for this resume/JD pair. "
-                                "Re-run question generation from upload."
-                            ),
-                        }
-
-                    dossier = build_interview_dossier_from_text(
-                        resume_text,
-                        job_title,
-                        job_description,
-                        model=resolved_model,
-                        skills_list=skills_list,
-                    )
-                    # Hard gate: never generate questions from a failed dossier.
-                    if (dossier or {}).get("source") == "llm_failed":
-                        print(
-                            "[ERROR] Dossier build failed (source=llm_failed); "
-                            "aborting question generation"
-                        )
-                        return {
-                            "success": False,
-                            "code": "DOSSIER_BUILD_FAILED",
-                            "error": (
-                                "Failed to build the interview dossier from your profile. "
-                                "No questions were generated. Please retry."
-                            ),
-                        }
-                    if can_cache:
-                        saved = save_dossier(
-                            resume_id,
-                            jd_id,
-                            dossier,
-                            job_title=job_title,
-                            user_id=user_id,
-                        )
-                        if not saved:
-                            return {
-                                "success": False,
-                                "code": "DOSSIER_BUILD_FAILED",
-                                "error": (
-                                    "Interview dossier was built but could not be saved. "
-                                    "No questions were generated. Please retry."
-                                ),
-                            }
-
+                dossier = {}
                 structured_data = _stub_structured_from_dossier(
                     dossier, candidate_name, skills_list=skills_list
                 )
@@ -3514,18 +3425,9 @@ def run_pipeline_from_api(
                 parsed_resume_path = os.path.join(temp_dir, "parsed_resume.json")
                 questions_path = os.path.join(temp_dir, "questions.csv")
 
-                # Save stub + dossier for debugging
-                save_json_output(
-                    {"stub": structured_data, "dossier": dossier},
-                    parsed_resume_path,
-                )
+                save_json_output({"stub": structured_data}, parsed_resume_path)
 
                 # === Generate questions ===
-                if not direct_text and not (dossier.get("experience") or dossier.get("projects")):
-                    # Skills-only profile regenerated by ids: the saved skills are its whole resume.
-                    saved_skills = dossier.get("resume_skills") or []
-                    if saved_skills:
-                        direct_text = "Candidate skills: " + ", ".join(str(s) for s in saved_skills)
                 if not direct_text:
                     return {
                         "success": False,

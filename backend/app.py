@@ -467,6 +467,8 @@ def ensure_questions_schema():
 def ensure_dossier_and_content_hash_schema():
     """Idempotent: content_hash columns + interview_dossiers table."""
     execute("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS content_hash TEXT")
+    # Skills-based profiles have no file; keep their skills so regenerate needs no dossier.
+    execute("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS skills_text TEXT")
     execute("ALTER TABLE job_descriptions ADD COLUMN IF NOT EXISTS content_hash TEXT")
     execute(
         """
@@ -2696,11 +2698,14 @@ def _pipeline_failure_response(result, ollama_diagnostics):
 def _load_stored_resume_text(resume_id, user_id):
     """Re-extract text from a saved resume file (regenerate has no upload). '' if unavailable."""
     row = query_one(
-        "SELECT file_url, stored_path FROM resumes WHERE id=%s AND user_id=%s",
+        "SELECT file_url, stored_path, skills_text FROM resumes WHERE id=%s AND user_id=%s",
         (resume_id, user_id),
     )
     if not row:
         return ""
+    saved_skills = (row.get('skills_text') or "").strip()
+    if saved_skills:
+        return "Candidate skills: " + saved_skills
     stored_path = (row.get('stored_path') or "").strip() or None
     relative = (validated_protected_relative_path(stored_path) or stored_path) if stored_path else None
     if not relative and row.get('file_url'):
@@ -2757,14 +2762,14 @@ def generate_questions():
                 "success": False,
                 "message": "Provide either resume_url or skills_text, not both",
             }), 400
-        # Regenerate: resume_id + jd_id only (pipeline loads dossier once).
+        # Regenerate: resume_id + jd_id only (re-reads the saved resume or skills).
         # First build: resume_url or skills_text (+ ids for save).
         if not has_ids and not resume_url and not skills_text:
             return jsonify({
                 "success": False,
                 "message": (
                     "Missing required fields: provide resume_id and jd_id to regenerate "
-                    "from the cached dossier, or resume_url / skills_text for a new build"
+                    "from the saved resume or skills, or resume_url / skills_text for a new build"
                 ),
             }), 400
         if not has_ids:
@@ -2791,12 +2796,16 @@ def generate_questions():
                     "message": "Please provide at most 10 skills.",
                 }), 400
             print(f"[DEBUG] Skills-based profile: {len(skills_list)} skills")
+            execute(
+                "UPDATE resumes SET skills_text=%s WHERE id=%s AND user_id=%s",
+                (", ".join(skills_list), resume_id, request.user["id"]),
+            )
 
         is_regenerate = has_ids and not skills_list and not resume_url
         if is_regenerate:
             print(
                 f"[INFO] generate-questions regenerate mode "
-                f"resume_id={resume_id} jd_id={jd_id} (dossier-only, no pre-load)"
+                f"resume_id={resume_id} jd_id={jd_id} (from saved resume text or skills)"
             )
 
         raw_exclude = data.get("exclude_question_texts") or []
@@ -2839,8 +2848,8 @@ def generate_questions():
             )
 
         temp_resume = None
-        # First build only: materialize resume file for dossier construction.
-        # Regenerate never downloads — pipeline loads the saved dossier once.
+        # First build only: materialize the resume file.
+        # Regenerate never downloads; it re-reads the saved resume text.
         if resume_url:
             relative = resolve_relative_path(resume_url)
             if relative:
@@ -3048,16 +3057,34 @@ def generate_answers_for_question_set():
         )
 
         dossier = load_dossier(resume_id, jd_id, user_id=user_id)
-        if not dossier:
-            return jsonify({
-                "success": False,
-                "message": (
-                    "Interview dossier not found for this resume and job description. "
-                    "Regenerate questions for this pair first, then generate sample answers."
-                ),
-            }), 404
-
         dossier_cache = "hit"
+        if not dossier:
+            # Questions no longer build a dossier; sample answers still ground on one, so build it now.
+            from INTERVIEW.dossier_store import save_dossier
+            from INTERVIEW.question_generation import build_interview_dossier_from_text
+            resume_text = _load_stored_resume_text(resume_id, user_id)
+            if not resume_text:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "The saved resume could not be read, so sample answers cannot be generated. "
+                        "Please upload the resume again."
+                    ),
+                }), 404
+            dossier = build_interview_dossier_from_text(
+                resume_text,
+                job_title,
+                (jd_row.get("description") or "").strip(),
+                model=get_ollama_model_name(),
+            )
+            if (dossier or {}).get("source") == "llm_failed":
+                return jsonify({
+                    "success": False,
+                    "code": "DOSSIER_BUILD_FAILED",
+                    "message": "Could not prepare the profile for sample answers. Please retry.",
+                }), 422
+            save_dossier(resume_id, jd_id, dossier, job_title=job_title, user_id=user_id)
+            dossier_cache = "built"
         existing_rows = [dict(row) for row in existing]
         unique_rows = _dedupe_question_rows(existing_rows)
         if not unique_rows:
