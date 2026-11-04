@@ -1734,6 +1734,8 @@ function UploadPage() {
                       </span>
                     </div>
 
+                    {/* Paste mode already shows editable title/description above; avoid a duplicate set */}
+                    {jobDescInputMode !== 'paste' && (<>
                     {/* Job Title Input */}
                     <div>
                       <label className={`block text-sm font-medium mb-2 ${
@@ -1786,6 +1788,7 @@ function UploadPage() {
                         required
                       />
                     </div>
+                    </>)}
 
                     {/* Question Generation Settings */}
                     <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl p-6">
