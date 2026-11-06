@@ -280,6 +280,40 @@ def _fit_to_counts(questions, counts):
     return out
 
 
+def _top_up(draft, counts, job_title, resume_text, job_description, exclude, model, mix):
+    """Fill levels that came back short (models often get the difficulty split wrong).
+
+    One extra call asks only for the missing questions, told to avoid what is already written.
+    """
+    have = {lvl: sum(1 for q in draft if q["difficulty"] == lvl) for lvl in _LEVELS}
+    need = {lvl: max(0, counts[lvl] - have[lvl]) for lvl in _LEVELS}
+    if not any(need.values()):
+        return draft
+    avoid = list(exclude) + [q["question"] for q in draft]
+    prompt = _build_plan_prompt(job_title, resume_text, job_description, need, avoid, mix)
+    try:
+        extra = _call(prompt, model, DIRECT_QUESTION_TEMPERATURE, "top-up", effort=write_effort())
+    except Exception as e:
+        print(f"[WARN] Direct top-up failed; keeping the shorter set: {e}")
+        return draft
+    # The top-up asked only for the missing levels, so keep a question even if the model labelled it
+    # with a different level: use matching labels first, then hand the rest to the levels still short.
+    pool = list(extra)
+    added = []
+    for lvl in _LEVELS:
+        take = [q for q in pool if q["difficulty"] == lvl][: need[lvl]]
+        for q in take:
+            pool.remove(q)
+        added.extend(take)
+        need[lvl] -= len(take)
+    for lvl in _LEVELS:
+        while need[lvl] > 0 and pool:
+            q = pool.pop(0)
+            added.append({**q, "difficulty": lvl})
+            need[lvl] -= 1
+    return draft + added
+
+
 def _call(prompt, model, temperature, label, effort=None):
     response = try_ollama_chat(
         prompt.strip(),
@@ -350,7 +384,15 @@ def generate_direct_questions(
         if _counts_ok(candidate, counts):
             draft = candidate
             break
+        if len(candidate) >= sum(counts.values()):
+            # Right number of questions but the wrong difficulty split: retrying rarely helps and
+            # costs a full call, so top up the short levels below instead.
+            break
     draft = _fit_to_counts(draft, counts)
+    if draft and not _counts_ok(draft, counts):
+        draft = _top_up(
+            draft, counts, job_title, resume_text, job_description, exclude, model, mix
+        )
     if not draft:
         if last_error is not None:
             # Surface the provider's reason (e.g. out of credits) instead of "no questions".
