@@ -63,9 +63,23 @@ def _parse_bool_flag(raw: str, key: str):
 def _llm_bool_classify(prompt: str, key: str, model: str):
     from INTERVIEW.generation_utils import try_ollama_chat
 
-    response = try_ollama_chat(prompt.strip(), model=model, max_retries=2, max_tokens=80)
+    # The answer is a few tokens, but reasoning models spend hidden thinking tokens out of the same
+    # budget; 80 left an empty reply, which then fell through to the strict keyword check and could
+    # reject a genuine resume or JD. Leave room for the thinking.
+    # temperature 0: the same document must get the same verdict every time.
+    response = try_ollama_chat(
+        prompt.strip(), model=model, max_retries=2, max_tokens=600, temperature=0.0
+    )
     raw = ((response or {}).get("message") or {}).get("content") or ""
-    return _parse_bool_flag(raw, key), raw
+    if not raw.strip():
+        print(
+            f"[WARN] Document-type check returned an empty reply "
+            f"(finish_reason={(response or {}).get('finish_reason')}, "
+            f"out_tokens={((response or {}).get('usage') or {}).get('output_tokens')})"
+        )
+    verdict = _parse_bool_flag(raw, key)
+    print(f"[INFO] Document-type check {key}={verdict} raw={raw.strip()[:80]!r}")
+    return verdict, raw
 
 
 def classify_is_resume(resume_text: str, model: str = "llama3"):

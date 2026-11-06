@@ -73,17 +73,19 @@ class TokenUsageTracker:
         self.estimated_calls = 0
         self.provider = ""
         self.model = ""
+        self._lock = threading.Lock()
 
     def record(self, response, prompt_text: str = ""):
         inp, out, estimated = _usage_from_response(response, prompt_text)
-        self.input_tokens += inp
-        self.output_tokens += out
-        self.calls += 1
-        if estimated:
-            self.estimated_calls += 1
-        if isinstance(response, dict):
-            self.provider = response.get("provider") or self.provider
-            self.model = response.get("model") or self.model
+        with self._lock:
+            self.input_tokens += inp
+            self.output_tokens += out
+            self.calls += 1
+            if estimated:
+                self.estimated_calls += 1
+            if isinstance(response, dict):
+                self.provider = response.get("provider") or self.provider
+                self.model = response.get("model") or self.model
 
     @property
     def total_tokens(self) -> int:
@@ -221,11 +223,12 @@ def save_json_output(data, output_path):
     print(f"[DONE] Parsed resume saved to: {output_path}")
 
 
-def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temperature=None):
+def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temperature=None, reasoning_effort=None):
     from common.llm.factory import chat as llm_chat
 
     resolved_model = resolve_ollama_model_name(model)
     messages = [{"role": "user", "content": prompt}]
+    last_error = None
     for attempt in range(max_retries):
         try:
             kwargs = {"model": resolved_model, "messages": messages}
@@ -233,14 +236,20 @@ def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temp
                 kwargs["max_tokens"] = max_tokens
             if temperature is not None:
                 kwargs["temperature"] = temperature
+            if reasoning_effort:
+                kwargs["reasoning_effort"] = reasoning_effort
             response = llm_chat(**kwargs)
             tracker = getattr(_token_tls, "tracker", None)
             if tracker is not None:
                 tracker.record(response, prompt_text=prompt)
             return response
         except Exception as e:
+            last_error = e
             print(f"[WARNING] LLM attempt {attempt+1} failed for model '{resolved_model}': {e}")
-    raise RuntimeError("LLM API failed after multiple attempts.")
+            # Billing / auth errors will not fix themselves on retry; fail fast with the real reason.
+            if any(code in str(e) for code in ("HTTP 402", "HTTP 401", "HTTP 403")):
+                break
+    raise RuntimeError(f"LLM API failed: {last_error}" if last_error else "LLM API failed after multiple attempts.")
 
 
 def save_questions_to_csv(questions_by_level, output_path):

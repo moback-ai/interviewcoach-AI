@@ -76,6 +76,9 @@ function UploadPage() {
   const pendingPairContinueRef = useRef(null);
   const pendingDossierRetryRef = useRef(null);
   const lastGenerateAttemptRef = useRef(null);
+  // Document validation + "already used pair" check runs right after upload, not on Generate.
+  const preCheckRef = useRef({ key: null, result: null, promise: null });
+  const [checkedKey, setCheckedKey] = useState(null); // last input set the early check finished for
   const [lastCreatedIds, setLastCreatedIds] = useState({ resumeId: null, jdId: null, questionSet: null });
   const [lastGeneratedQuestions, setLastGeneratedQuestions] = useState(null);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -146,8 +149,9 @@ function UploadPage() {
         
         const response = await fetch(`${backendUrl}/api/classify-technical-role`, {
           method: 'POST',
+          credentials: 'include',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(requestPayload),
@@ -313,8 +317,9 @@ function UploadPage() {
 
       const response = await fetch(`${backendUrl}/api/parse-job-description`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -370,8 +375,9 @@ function UploadPage() {
 
       const response = await fetch(`${backendUrl}/api/extract-job-from-url`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({ url: trimmedUrl })
@@ -446,8 +452,9 @@ function UploadPage() {
       const backendOrigin = getBackendOrigin();
       const jdResponse = await fetch(`${backendOrigin}/api/job-descriptions`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -479,8 +486,9 @@ function UploadPage() {
     const backendOrigin = getBackendOrigin();
     const resumeResponse = await fetch(`${backendOrigin}/api/resumes`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        'Authorization': `Bearer ${session.access_token}`,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -516,8 +524,9 @@ function UploadPage() {
     }
     const response = await fetch(`${backendOrigin}/api/check-resume-jd-pair`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       },
       body: formData,
     });
@@ -544,8 +553,9 @@ function UploadPage() {
     }
     const response = await fetch(`${backendOrigin}/api/validate-upload-documents`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       },
       body: formData,
       signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
@@ -554,8 +564,12 @@ function UploadPage() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.success) {
+      if (response.status === 401) {
+        // An auth failure is not a verdict on the document; keep it distinct from "Invalid document".
+        throw new Error('Your session has expired. Please sign in again.');
+      }
       const err = new Error(payload.message || 'Document validation failed');
-      err.code = payload.code || 'INVALID_DOCUMENT';
+      err.code = payload.code || (response.status === 400 ? 'INVALID_DOCUMENT' : undefined);
       throw err;
     }
     return payload.data || {};
@@ -575,6 +589,119 @@ function UploadPage() {
       details: undefined,
     });
   };
+
+  const buildPreCheckKey = () => {
+    const jd = `${jobTitle.trim()}|${jobDescription.trim()}`;
+    if (profileInputMode === 'skills') {
+      return selectedSkills.length ? `skills|${selectedSkills.join(',')}|${jd}` : null;
+    }
+    return resume ? `${resume.name}|${resume.size}|${resume.lastModified}|${jd}` : null;
+  };
+
+  const runPreCheck = (key) => {
+    const isSkillsMode = profileInputMode === 'skills';
+    const skillsTextForApi = selectedSkills.length ? selectedSkills.join(', ') : '';
+    const entry = { key, result: null, promise: null };
+    entry.promise = (async () => {
+      try {
+        await validateUploadDocuments({ isSkillsMode, skillsTextForApi });
+        const match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
+        let resumeId = null;
+        let resumeUrl = null;
+        // Put the resume in storage now so Generate only has to generate. Skipped when the pair
+        // already exists (that resume is stored) or for skills profiles (no file).
+        if (!match.questions_exist && !isSkillsMode) {
+          if (match.resume_id && match.content_match_resume) {
+            resumeId = match.resume_id;
+            resumeUrl = match.resume_url || null;
+          } else {
+            ({ resumeId, resumeUrl } = await uploadResume(resume));
+            trackEvents.resumeUploaded({
+              file_name: resume.name,
+              file_size: resume.size,
+              file_type: resume.type,
+              upload_timestamp: new Date().toISOString(),
+            });
+          }
+        }
+        entry.result = { match, resumeId, resumeUrl };
+      } catch (error) {
+        entry.result = { error };
+        // Only a real validation verdict is cached; a network/server hiccup is retried on Generate.
+        if (!error?.code && preCheckRef.current === entry) {
+          preCheckRef.current = { key: null, result: null, promise: null };
+        }
+      }
+      return entry.result;
+    })();
+    preCheckRef.current = entry;
+    return entry;
+  };
+
+  const showExistingPairModal = (match, key, onSecondary) => {
+    const setCount = match.question_set_count || 1;
+    const roleLabel = (match.job_title || jobTitle || '').trim();
+    setNoticeModal({
+      isOpen: true,
+      title: 'You already have questions for this pair',
+      message:
+        setCount === 1
+          ? 'A question set is ready on your Dashboard. Jump there to practice, or create another set if you want fresh questions.'
+          : `You already have ${setCount} question sets for this resume and job description. Open the Dashboard to practice, or generate another set.`,
+      variant: 'existing',
+      primaryLabel: 'Go to Dashboard',
+      secondaryLabel: 'Generate new set anyway',
+      details: [
+        ...(roleLabel ? [{ label: 'Role', value: roleLabel }] : []),
+        { label: 'Question sets', value: String(setCount) },
+        ...(match.latest_question_set
+          ? [{ label: 'Latest set', value: `#${match.latest_question_set}` }]
+          : []),
+      ],
+      onSecondary,
+    });
+  };
+
+  const showDocumentError = (error) => {
+    const msg = error instanceof Error ? error.message : String(error || '');
+    setNoticeModal({
+      isOpen: true,
+      title: 'Invalid document',
+      message: mapEmptyUploadFileError(msg),
+      variant: 'error',
+      primaryLabel: 'OK',
+      secondaryLabel: undefined,
+      onSecondary: undefined,
+    });
+  };
+
+  // Run the checks as soon as a resume file and a parsed JD are both in place.
+  useEffect(() => {
+    const hasProfile = profileInputMode === 'skills' ? selectedSkills.length > 0 : !!resume;
+    if (
+      !hasProfile ||
+      !jobDescParsed ||
+      !jobTitle.trim() ||
+      !jobDescription.trim() ||
+      loading
+    ) {
+      return undefined;
+    }
+    const key = buildPreCheckKey();
+    if (!key || preCheckRef.current.key === key) return undefined;
+
+    const timer = setTimeout(async () => {
+      const entry = runPreCheck(key);
+      const result = await entry.promise;
+      setCheckedKey(key); // Generate stays disabled until this settles
+      if (preCheckRef.current.key !== key) return; // inputs changed meanwhile, or retry needed
+      // An invalid document is reported right away. An existing pair is NOT announced here:
+      // its popup is shown from this saved result when the user presses Generate.
+      if (result.error?.code) showDocumentError(result.error);
+    }, profileInputMode === 'skills' ? 1500 : 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, selectedSkills, jobTitle, jobDescription, jobDescParsed, profileInputMode, loading]);
 
   const handleGenerateQuestions = async (e) => {
     e.preventDefault();
@@ -662,54 +789,50 @@ function UploadPage() {
         let resumeId = reuseResumeId;
         let jdId = reuseJdId;
         let resumeUrl = reuseResumeUrl;
+        let pairMatch = null;
         // "Generate new set anyway" → dossier-only (pair already has questions + dossier).
         const dossierOnly = Boolean(forceNew);
 
         if (!forceNew && !resumeId && !jdId) {
-          // 1) Resume/JD type checks (LLM + heuristic fallback)
-          await validateUploadDocuments({ isSkillsMode, skillsTextForApi });
+          // Resume/JD type check + existing-pair check. For a resume file these already ran right
+          // after upload (see the pre-check effect), so reuse that result instead of repeating them.
+          const preKey = buildPreCheckKey();
+          const cachedCheck = preKey && preCheckRef.current.key === preKey ? preCheckRef.current : null;
+          let match;
+          let precheckedResume = null;
+          if (cachedCheck) {
+            const cached = cachedCheck.result || (await cachedCheck.promise);
+            if (cached.error) throw cached.error;
+            match = cached.match;
+            precheckedResume = cached.resumeId
+              ? { resumeId: cached.resumeId, resumeUrl: cached.resumeUrl }
+              : null;
+          } else {
+            // 1) Resume/JD type checks (LLM + heuristic fallback)
+            await validateUploadDocuments({ isSkillsMode, skillsTextForApi });
+            // 2) Existing pair / question-set check
+            match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
+          }
+          pairMatch = match;
 
-          // 2) Existing pair / question-set check
-          const match = await checkResumeJdPair({ isSkillsMode, skillsTextForApi });
           if (match.questions_exist) {
-            setLoading(false);
-            setIsOperationInProgress(false);
-            pendingPairContinueRef.current = () => {
-              closeNoticeModal();
-              setLoading(true);
-              setIsOperationInProgress(true);
+            const continueAsNewSet = () =>
               runWorkflow({
                 reuseResumeId: match.resume_id,
                 reuseJdId: match.jd_id,
                 reuseResumeUrl: match.resume_url || null,
                 forceNew: true,
               });
+            setLoading(false);
+            setIsOperationInProgress(false);
+            pendingPairContinueRef.current = () => {
+              closeNoticeModal();
+              setLoading(true);
+              setIsOperationInProgress(true);
+              continueAsNewSet();
             };
-            const setCount = match.question_set_count || 1;
-            const roleLabel = (match.job_title || jobTitle || '').trim();
-            setNoticeModal({
-              isOpen: true,
-              title: 'You already have questions for this pair',
-              message:
-                setCount === 1
-                  ? 'A question set is ready on your Dashboard. Jump there to practice, or create another set if you want fresh questions.'
-                  : `You already have ${setCount} question sets for this resume and job description. Open the Dashboard to practice, or generate another set.`,
-              variant: 'existing',
-              primaryLabel: 'Go to Dashboard',
-              secondaryLabel: 'Generate new set anyway',
-              details: [
-                ...(roleLabel ? [{ label: 'Role', value: roleLabel }] : []),
-                {
-                  label: 'Question sets',
-                  value: String(setCount),
-                },
-                ...(match.latest_question_set
-                  ? [{ label: 'Latest set', value: `#${match.latest_question_set}` }]
-                  : []),
-              ],
-              onSecondary: () => {
-                if (pendingPairContinueRef.current) pendingPairContinueRef.current();
-              },
+            showExistingPairModal(match, preKey, () => {
+              if (pendingPairContinueRef.current) pendingPairContinueRef.current();
             });
             return;
           }
@@ -733,52 +856,22 @@ function UploadPage() {
               jdId = match.jd_id;
             }
           }
+          if (!resumeId && precheckedResume) {
+            resumeId = precheckedResume.resumeId;
+            resumeUrl = precheckedResume.resumeUrl;
+          }
         }
 
-        if (isSkillsMode) {
-          if (!resumeId) {
-            devLog('[DEBUG] Step 1: Creating skills profile record...');
-            resumeId = await createSkillsResumeRecord(skillsTextForApi);
-          }
-          if (!jdId) {
-            devLog('[DEBUG] Step 2: Saving job description...');
-            ({ jdId } = await saveJobDescription());
-          }
-          trackEvents.jobDescriptionSaved({
-            job_title: jobTitle,
-            job_description_length: jobDescription.length,
-            resume_id: resumeId,
-            jd_id: jdId,
-            save_timestamp: new Date().toISOString(),
-          });
-        } else {
-          if (!resumeId) {
-            // Step 1: Upload resume (stored under resumes/{user_id}/ and saved to DB)
-            devLog('[DEBUG] Step 1: Uploading resume file...');
-            ({ resumeId, resumeUrl } = await uploadResume(resume));
-
-            // Track resume upload
-            trackEvents.resumeUploaded({
-              file_name: resume.name,
-              file_size: resume.size,
-              file_type: resume.type,
-              upload_timestamp: new Date().toISOString(),
-            });
-          }
-
-          if (!jdId) {
-            // Step 2: Save job description to database
-            devLog('[DEBUG] Step 2: Saving job description...');
-            ({ jdId } = await saveJobDescription());
-          }
-
-          // Track job description save
-          trackEvents.jobDescriptionSaved({
-            job_title: jobTitle,
-            job_description_length: jobDescription.length,
-            resume_id: resumeId,
-            jd_id: jdId,
-            save_timestamp: new Date().toISOString(),
+        // Fallback only: the resume is normally uploaded by the pre-check right after upload.
+        // The job description and the skills record are saved after generation, not before.
+        if (!isSkillsMode && !resumeId) {
+          devLog('[DEBUG] Uploading resume file...');
+          ({ resumeId, resumeUrl } = await uploadResume(resume));
+          trackEvents.resumeUploaded({
+            file_name: resume.name,
+            file_size: resume.size,
+            file_type: resume.type,
+            upload_timestamp: new Date().toISOString(),
           });
         }
 
@@ -842,8 +935,23 @@ function UploadPage() {
           throw err;
         }
 
-        // Step 4–5: Save questions and show success
-        devLog('[DEBUG] Step 4: Saving questions to database...');
+        // Save what generation did not need: skills record and job description.
+        if (isSkillsMode && !resumeId) {
+          resumeId = await createSkillsResumeRecord(skillsTextForApi);
+        }
+        if (!jdId) {
+          ({ jdId } = await saveJobDescription());
+        }
+        trackEvents.jobDescriptionSaved({
+          job_title: jobTitle,
+          job_description_length: jobDescription.length,
+          resume_id: resumeId,
+          jd_id: jdId,
+          save_timestamp: new Date().toISOString(),
+        });
+
+        // Save questions and show success
+        devLog('[DEBUG] Saving questions to database...');
         await finishSuccessfulGeneration({
           resumeId,
           jdId,
@@ -852,6 +960,28 @@ function UploadPage() {
           resumeName: resume?.name,
           jobTitle,
         });
+        // A set now exists for this pair. Seed the cache with that fact (same key, so the early
+        // check does not run again and pop the "already exists" message after generation).
+        const doneKey = buildPreCheckKey();
+        if (doneKey) {
+          preCheckRef.current = {
+            key: doneKey,
+            promise: null,
+            result: {
+              match: {
+                questions_exist: true,
+                resume_id: resumeId,
+                jd_id: jdId,
+                resume_url: resumeUrl || null,
+                question_set_count: (pairMatch?.question_set_count || 0) + 1,
+                job_title: jobTitle,
+              },
+              resumeId: null,
+              resumeUrl: null,
+            },
+          };
+          setCheckedKey(doneKey);
+        }
 
       } catch (error) {
         console.error('Error in complete workflow:', error);
@@ -945,8 +1075,9 @@ function UploadPage() {
 
       const response = await fetch(`${backendUrl}/api/generate-questions`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json',
         },
         signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
@@ -1137,8 +1268,9 @@ function UploadPage() {
       // First, get the current highest question set number for this specific resume_id + jd_id combination
       const getCurrentQuestionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeId}&jd_id=${jdId}`, {
         method: 'GET',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -1164,8 +1296,9 @@ function UploadPage() {
       // Now save the new questions with the incremented question set number
       const response = await fetch(`${backendOrigin}/functions/v1/questions`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -1188,11 +1321,19 @@ function UploadPage() {
     }
   };
 
+  const preCheckReady =
+    (profileInputMode === 'skills' ? selectedSkills.length > 0 : !!resume) &&
+    jobDescParsed &&
+    !!jobTitle.trim() &&
+    !!jobDescription.trim();
+  const currentPreCheckKey = preCheckReady ? buildPreCheckKey() : null;
+  const precheckPending = !!currentPreCheckKey && checkedKey !== currentPreCheckKey;
+
   const canGenerateQuestions = useMemo(() => {
     const hasProfile = profileInputMode === 'resume'
       ? !!resume
       : selectedSkills.length > 0;
-    if (!hasProfile || !jobTitle.trim() || !jobDescription.trim() || !jobDescParsed || loading || parsingJobDesc || jobUrlLoading) {
+    if (!hasProfile || !jobTitle.trim() || !jobDescription.trim() || !jobDescParsed || loading || parsingJobDesc || jobUrlLoading || precheckPending) {
       return false;
     }
 
@@ -1212,6 +1353,7 @@ function UploadPage() {
     loading,
     parsingJobDesc,
     jobUrlLoading,
+    precheckPending,
     splitMode,
     blendMode,
     easyQuestions,
@@ -2107,6 +2249,11 @@ function UploadPage() {
                   'Generate Interview Questions'
                 )}
                 </button>
+                {precheckPending && !loading && (
+                  <p className="text-xs text-center text-[var(--color-text-secondary)] flex items-center justify-center gap-1.5">
+                    <FiLoader className="w-3 h-3 animate-spin" /> Checking your documents...
+                  </p>
+                )}
           </form>
         </div>
       </PageWavesShell>

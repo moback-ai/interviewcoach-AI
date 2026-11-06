@@ -66,6 +66,8 @@ def _payload(
     *,
     stream: bool = False,
     with_temperature: bool = True,
+    with_reasoning: bool = True,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "model": model,
@@ -82,14 +84,18 @@ def _payload(
     # Reasoning models spend completion tokens on hidden thinking; "low" keeps
     # answers inside the budget and latency reasonable for interactive calls.
     # Default to "low" so an unset env var cannot let thinking eat the whole output budget.
-    effort = (optional_env("OPENROUTER_REASONING_EFFORT", "low") or "low").strip().lower()
-    if effort in ("minimal", "low", "medium", "high"):
+    effort = (reasoning_effort or optional_env("OPENROUTER_REASONING_EFFORT", "low") or "low").strip().lower()
+    if with_reasoning and effort in ("minimal", "low", "medium", "high"):
         body["reasoning"] = {"effort": effort}
     return body
 
 
 def _rejects_temperature(status: int, text: str) -> bool:
     return status == 400 and "temperature" in (text or "").lower()
+
+
+def _rejects_reasoning(status: int, text: str) -> bool:
+    return status == 400 and "reason" in (text or "").lower()
 
 
 class OpenRouterLLMProvider:
@@ -115,18 +121,33 @@ class OpenRouterLLMProvider:
         messages: list[dict[str, Any]],
         max_tokens: int | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         resolved = resolve_chat_model(model)
         response = None
-        for with_temperature in (True, False):
+        with_temperature, with_reasoning = True, True
+        for _ in range(3):
             body = _payload(
-                resolved, messages, max_tokens, temperature, with_temperature=with_temperature
+                resolved,
+                messages,
+                max_tokens,
+                temperature,
+                with_temperature=with_temperature,
+                with_reasoning=with_reasoning,
+                reasoning_effort=reasoning_effort,
             )
             try:
                 response = self._post(body)
             except Exception as exc:
                 raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
             if with_temperature and _rejects_temperature(response.status_code, response.text):
+                with_temperature = False
+                continue
+            # Some models reject a reasoning setting they do not support; retry without it
+            # instead of failing the whole generation.
+            if with_reasoning and _rejects_reasoning(response.status_code, response.text):
+                print(f"[WARN] OpenRouter rejected the reasoning setting for {resolved}; retrying without it")
+                with_reasoning = False
                 continue
             break
         if response.status_code >= 400:

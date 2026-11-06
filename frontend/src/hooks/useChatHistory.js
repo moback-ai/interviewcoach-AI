@@ -35,8 +35,9 @@ export const useChatHistory = () => {
         `${getBackendOrigin()}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'GET',
+          credentials: 'include',
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json',
           },
         },
@@ -112,8 +113,9 @@ export const useChatHistory = () => {
         `${getBackendOrigin()}/functions/v1/chat-history`,
         {
           method: 'POST',
+          credentials: 'include',
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -160,8 +162,9 @@ export const useChatHistory = () => {
         `${getBackendOrigin()}/functions/v1/chat-history`,
         {
           method: 'POST',
+          credentials: 'include',
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
@@ -205,8 +208,9 @@ export const useChatHistory = () => {
         `${getBackendOrigin()}/functions/v1/chat-history?interview_id=${interviewId}`,
         {
           method: 'DELETE',
+          credentials: 'include',
           headers: {
-            Authorization: `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json',
           },
         },

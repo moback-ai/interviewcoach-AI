@@ -426,8 +426,9 @@ export default function QuestionsPage() {
         // First, get all available question sets for this specific resume_id + jd_id combination
         const questionSetsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeIdFromUrl}&jd_id=${jdIdFromUrl}`, {
           method: 'GET',
+          credentials: 'include',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json'
           }
         });
@@ -465,8 +466,9 @@ export default function QuestionsPage() {
           // Fetch questions from the specific question set for this combination
           const questionsResponse = await fetch(`${backendOrigin}/functions/v1/questions?resume_id=${resumeIdFromUrl}&jd_id=${jdIdFromUrl}&question_set=${targetQuestionSet}`, {
             method: 'GET',
+            credentials: 'include',
             headers: {
-              'Authorization': `Bearer ${session.access_token}`,
+              ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
               'Content-Type': 'application/json'
             }
           });
@@ -541,8 +543,9 @@ export default function QuestionsPage() {
       // Fetch interview history for this specific question set
       const response = await fetch(`${backendOrigin}/functions/v1/dashboard`, {
         method: 'GET',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${accessToken}`,
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -660,8 +663,9 @@ export default function QuestionsPage() {
     const backendOrigin = getBackendOrigin();
     const response = await fetch(`${backendOrigin}/api/generate-questions`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -703,8 +707,9 @@ export default function QuestionsPage() {
     const backendOrigin = getBackendOrigin();
     const response = await fetch(`${backendOrigin}/functions/v1/questions`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -950,8 +955,9 @@ export default function QuestionsPage() {
       const backendOrigin = getBackendOrigin();
       const response = await fetch(`${backendOrigin}/api/generate-answers`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          Authorization: `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json',
         },
         signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'

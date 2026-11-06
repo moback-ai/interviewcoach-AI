@@ -280,8 +280,9 @@ function InterviewFeedbackPage() {
       // Fetch feedback data using the interview_id
       const response = await fetch(`${backendOrigin}/functions/v1/interview-feedback?interview_id=${interviewId}`, {
         method: 'GET',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -458,8 +459,9 @@ function InterviewFeedbackPage() {
         
         const transcriptResponse = await fetch(`${backendOrigin}/functions/v1/transcripts?interview_id=${feedbackData.interview_id}`, {
           method: 'GET',
+          credentials: 'include',
           headers: {
-            'Authorization': `Bearer ${session.access_token}`,
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
             'Content-Type': 'application/json'
           }
         });

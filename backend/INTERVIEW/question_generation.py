@@ -3027,7 +3027,12 @@ No markdown. JSON ONLY."""
     best = []
     for attempt in range(QUESTION_GEN_MAX_RETRIES):
         try:
-            response = try_ollama_chat(prompt.strip(), model=model)
+            from common.runtime_config import optional_env as _opt_env
+            response = try_ollama_chat(
+                prompt.strip(),
+                model=model,
+                reasoning_effort=(_opt_env("QUESTION_CODING_REASONING", "") or "").strip().lower() or None,
+            )
             raw = response["message"]["content"]
             if response.get("finish_reason") == "length":
                 print(
@@ -3440,42 +3445,61 @@ def run_pipeline_from_api(
                 n_beginner = question_counts.get('beginner', 1)
                 n_medium = question_counts.get('medium', 1)
                 n_hard = question_counts.get('hard', 1)
-                core_questions = generate_direct_questions(
-                    direct_text,
-                    job_title,
-                    job_description,
-                    n_beginner,
-                    n_medium,
-                    n_hard,
-                    model=resolved_model,
-                    exclude_questions=exclude_questions,
-                    mix=mix_instruction(
-                        mode_label,
-                        (n_beginner or 0) + (n_medium or 0) + (n_hard or 0),
-                        resume_pct=resume_pct,
-                        jd_pct=jd_pct,
-                        blend_pct_resume=blend_pct_resume,
-                        blend_pct_jd=blend_pct_jd,
-                    ),
-                )
-                if not _count_level_dict(core_questions):
-                    raise RuntimeError("Question generation returned no questions. Please retry.")
+                coding_count = question_counts.get('coding', 0) or 0
+                import time
+                from concurrent.futures import ThreadPoolExecutor
+                from INTERVIEW.generation_utils import _token_tls
 
-                # Generate coding questions if requested
-                coding_count = question_counts.get('coding', 0)
-                if coding_count > 0:
-                    print(f"[INFO] Generating {coding_count} coding questions...")
-                    coding_questions = generate_coding_questions(
-                        structured_data,
+                def _coding_job():
+                    # Coding questions only need the resume text and JD, so they run alongside the
+                    # core write+review calls instead of after them.
+                    _token_tls.tracker = token_tracker
+                    started = time.time()
+                    try:
+                        return generate_coding_questions(
+                            structured_data,
+                            job_title,
+                            job_description,
+                            coding_count,
+                            model=resolved_model,
+                            dossier=dossier,
+                            exclude_questions=exclude_questions,
+                            resume_text=direct_text,
+                        )
+                    finally:
+                        print(f"[TIMING] coding questions {time.time() - started:.1f}s")
+
+                gen_started = time.time()
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    coding_future = None
+                    if coding_count > 0:
+                        print(f"[INFO] Generating {coding_count} coding questions (in parallel)...")
+                        coding_future = pool.submit(_coding_job)
+                    core_questions = generate_direct_questions(
+                        direct_text,
                         job_title,
                         job_description,
-                        coding_count,
+                        n_beginner,
+                        n_medium,
+                        n_hard,
                         model=resolved_model,
-                        dossier=dossier,
                         exclude_questions=exclude_questions,
-                        resume_text=direct_text,
+                        mix=mix_instruction(
+                            mode_label,
+                            (n_beginner or 0) + (n_medium or 0) + (n_hard or 0),
+                            resume_pct=resume_pct,
+                            jd_pct=jd_pct,
+                            blend_pct_resume=blend_pct_resume,
+                            blend_pct_jd=blend_pct_jd,
+                        ),
                     )
+                    print(f"[TIMING] core questions {time.time() - gen_started:.1f}s")
+                    if not _count_level_dict(core_questions):
+                        raise RuntimeError("Question generation returned no questions. Please retry.")
+                    coding_questions = coding_future.result() if coding_future else []
+                print(f"[TIMING] total generation {time.time() - gen_started:.1f}s")
 
+                if coding_count > 0:
                     # Categorize coding questions by weight and merge into existing categories
                     # weight 1 → beginner, weight 3 → medium, weight 5 → hard
                     for q in coding_questions:

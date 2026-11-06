@@ -43,12 +43,18 @@ def chat(
     messages: list[dict[str, Any]],
     max_tokens: int | None = None,
     temperature: float | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict[str, Any]:
-    return get_provider().chat(
+    provider = get_provider()
+    extra: dict[str, Any] = {}
+    if reasoning_effort and getattr(provider, "name", "") == "openrouter":
+        extra["reasoning_effort"] = reasoning_effort
+    return provider.chat(
         model=model,
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
+        **extra,
     )
 
 

@@ -17,6 +17,27 @@ DIRECT_QUESTION_MAX_TOKENS = 4096
 DIRECT_QUESTION_TEMPERATURE = 0.4
 DIRECT_REVIEW_TEMPERATURE = 0.2
 DIRECT_MAX_ATTEMPTS = 3
+# Optional speed knobs (env). With nothing set, behavior is unchanged from before.
+# QUESTION_REVIEW_PASS=off skips the second call entirely.
+
+
+def _env(name, default=""):
+    from common.runtime_config import optional_env
+
+    return (optional_env(name, default) or default).strip().lower()
+
+
+def write_effort():
+    """None = use the provider default (same as before); set QUESTION_WRITE_REASONING to override."""
+    return _env("QUESTION_WRITE_REASONING") or None
+
+
+def review_effort():
+    return _env("QUESTION_REVIEW_REASONING") or None
+
+
+def review_enabled() -> bool:
+    return _env("QUESTION_REVIEW_PASS", "on") not in ("off", "false", "0", "no")
 RESUME_CHARS_MAX = 14000
 JD_CHARS_MAX = 7000
 
@@ -259,12 +280,13 @@ def _fit_to_counts(questions, counts):
     return out
 
 
-def _call(prompt, model, temperature, label):
+def _call(prompt, model, temperature, label, effort=None):
     response = try_ollama_chat(
         prompt.strip(),
         model=model,
         max_tokens=DIRECT_QUESTION_MAX_TOKENS,
         temperature=temperature,
+        reasoning_effort=effort,
     )
     raw = (response.get("message") or {}).get("content") or ""
     questions = _parse_questions(raw)
@@ -288,7 +310,7 @@ def generate_direct_questions(
     hard_count=2,
     model="llama3",
     exclude_questions=None,
-    review=True,
+    review=None,
     mix=None,
 ):
     """Return {"beginner": [...], "medium": [...], "hard": [...]} in the standard question shape.
@@ -306,12 +328,22 @@ def generate_direct_questions(
     exclude = [str(q).strip() for q in (exclude_questions or []) if str(q).strip()]
 
     draft = []
+    last_error = None
     plan_prompt = _build_plan_prompt(job_title, resume_text, job_description, counts, exclude, mix)
     for attempt in range(DIRECT_MAX_ATTEMPTS):
         try:
-            candidate = _call(plan_prompt, model, DIRECT_QUESTION_TEMPERATURE, f"plan+write try {attempt + 1}")
+            candidate = _call(
+                plan_prompt,
+                model,
+                DIRECT_QUESTION_TEMPERATURE,
+                f"plan+write try {attempt + 1}",
+                effort=write_effort(),
+            )
         except Exception as e:
+            last_error = e
             print(f"[WARN] Direct plan+write failed (try {attempt + 1}): {e}")
+            if any(code in str(e) for code in ("HTTP 402", "HTTP 401", "HTTP 403")):
+                break  # billing/auth problem: retrying only wastes time
             continue
         if len(candidate) > len(draft):
             draft = candidate
@@ -320,9 +352,14 @@ def generate_direct_questions(
             break
     draft = _fit_to_counts(draft, counts)
     if not draft:
+        if last_error is not None:
+            # Surface the provider's reason (e.g. out of credits) instead of "no questions".
+            raise RuntimeError(f"The AI provider rejected the request: {last_error}")
         return result
 
     final = draft
+    if review is None:
+        review = review_enabled()
     if review:
         try:
             reviewed = _fit_to_counts(
@@ -331,6 +368,7 @@ def generate_direct_questions(
                     model,
                     DIRECT_REVIEW_TEMPERATURE,
                     "review",
+                    effort=review_effort(),
                 ),
                 counts,
             )
