@@ -24,7 +24,7 @@ def test_classify_resume_rejects_empty(monkeypatch):
 
 
 def test_classify_resume_llm_false(monkeypatch):
-    def fake_llm(prompt, model="llama3", max_retries=2, max_tokens=80):
+    def fake_llm(prompt, *args, **kwargs):
         return {"message": {"content": '{"is_resume": false}'}}
 
     monkeypatch.setattr(
@@ -43,7 +43,7 @@ def test_classify_resume_llm_false(monkeypatch):
 
 
 def test_classify_resume_llm_true(monkeypatch):
-    def fake_llm(prompt, model="llama3", max_retries=2, max_tokens=80):
+    def fake_llm(prompt, *args, **kwargs):
         return {"message": {"content": '{"is_resume": true}'}}
 
     monkeypatch.setattr(
@@ -61,7 +61,7 @@ def test_classify_resume_llm_true(monkeypatch):
 
 
 def test_classify_jd_llm_false(monkeypatch):
-    def fake_llm(prompt, model="llama3", max_retries=2, max_tokens=80):
+    def fake_llm(prompt, *args, **kwargs):
         return {"message": {"content": '{"is_job_description": false}'}}
 
     monkeypatch.setattr(

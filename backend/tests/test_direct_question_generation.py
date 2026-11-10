@@ -1,6 +1,8 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from INTERVIEW import direct_question_generation as dqg
 
 
@@ -49,14 +51,14 @@ def test_review_failure_keeps_draft():
 
 def test_retries_when_draft_count_is_wrong_and_trims_extras():
     extra = DRAFT + [_q("hard", "Another hard one?")]
-    out, chat = _run([_reply(DRAFT[:1]), _reply(extra), _reply(DRAFT), _reply(DRAFT)])
+    out, chat = _run([_reply(DRAFT[:1]), _reply(extra), _reply(DRAFT)])
     assert [len(out[k]) for k in ("beginner", "medium", "hard")] == [1, 1, 1]
-    assert chat.call_count == 4  # 3 draft attempts + 1 review
+    assert chat.call_count == 3  # 2 draft attempts + 1 review
 
 
 def test_empty_when_every_attempt_fails():
-    out, _ = _run([RuntimeError("x")] * dqg.DIRECT_MAX_ATTEMPTS)
-    assert all(out[k] == [] for k in out)
+    with pytest.raises(RuntimeError, match="The AI provider rejected the request"):
+        _run([RuntimeError("x")] * dqg.DIRECT_MAX_ATTEMPTS)
 
 
 def test_prompts_have_no_tool_or_employer_specific_examples():
