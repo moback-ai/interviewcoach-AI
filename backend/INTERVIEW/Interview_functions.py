@@ -15,8 +15,9 @@ CYAN = "\033[36m"
 RESET = "\033[0m"
 
 
-# Per-call temperatures for Bedrock Nova Lite (and Ollama). Global LLM_TEMPERATURE
-# remains the fallback when callers omit an override.
+# Per-call temperatures (Bedrock and Ollama). Global LLM_TEMPERATURE remains the
+# fallback when callers omit an override. Some Bedrock models (e.g. reasoning
+# models) reject non-default temperature; common/llm/bedrock.py drops it for those (see LLM_SEND_TEMPERATURE).
 TEMP_EVAL = 0.1       # classifiers / labelers (assess_*, evaluate_*)
 TEMP_STRUCTURED = 0.2  # JSON scoring / summaries
 TEMP_REPLY = 0.25      # short conversational interviewer replies

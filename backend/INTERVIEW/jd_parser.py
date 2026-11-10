@@ -8,6 +8,7 @@ import re
 import requests
 from html import unescape as html_unescape
 
+from common.llm.bedrock import is_fatal_llm_error
 from INTERVIEW.Resumeparser import extract_text_from_resume
 from INTERVIEW.generation_utils import resolve_ollama_model_name, try_ollama_chat
 
@@ -221,6 +222,8 @@ JSON:"""
         except Exception as e:
             last_error = e
             print(f"[WARNING] LLM job URL extraction attempt {attempt + 1}/{_LLM_JOB_URL_RETRIES} failed: {e}")
+            if is_fatal_llm_error(e):
+                break
     raise RuntimeError(f"LLM job extraction failed after {_LLM_JOB_URL_RETRIES} attempts: {last_error}")
 
 

@@ -224,6 +224,7 @@ def save_json_output(data, output_path):
 
 
 def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temperature=None, reasoning_effort=None):
+    from common.llm.bedrock import is_fatal_llm_error
     from common.llm.factory import chat as llm_chat
 
     resolved_model = resolve_ollama_model_name(model)
@@ -246,9 +247,10 @@ def try_ollama_chat(prompt, model="llama3", max_retries=3, max_tokens=None, temp
         except Exception as e:
             last_error = e
             print(f"[WARNING] LLM attempt {attempt+1} failed for model '{resolved_model}': {e}")
-            # Billing / auth errors will not fix themselves on retry; fail fast with the real reason.
-            if any(code in str(e) for code in ("HTTP 402", "HTTP 401", "HTTP 403")):
-                break
+            # Config / IAM / unknown-model errors (Bedrock) and billing / auth errors (OpenRouter 401,
+            # 402, 403) will not fix themselves on retry: stop now and surface the real reason.
+            if is_fatal_llm_error(e) or any(c in str(e) for c in ("HTTP 402", "HTTP 401", "HTTP 403")):
+                raise
     raise RuntimeError(f"LLM API failed: {last_error}" if last_error else "LLM API failed after multiple attempts.")
 
 

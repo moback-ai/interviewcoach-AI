@@ -26,6 +26,7 @@ from INTERVIEW.Resumeparser import (
     extract_text_from_resume,
 )
 from INTERVIEW.direct_question_generation import generate_direct_questions, mix_instruction
+from common.llm.bedrock import is_fatal_llm_error
 from INTERVIEW.dossier_store import DOSSIER_SCHEMA_VERSION
 from INTERVIEW.question_mix import (
     allocate_type_counts_by_difficulty_targets,
@@ -741,6 +742,8 @@ def _call_dossier_llm(prompt, model, label="dossier"):
                 f"[WARN] Dossier LLM call failed ({label}) "
                 f"attempt {attempts_used}/{DOSSIER_LLM_MAX_RETRIES}: {e}"
             )
+            if is_fatal_llm_error(e):
+                break
     print(
         f"[ERROR] Dossier LLM exhausted retries ({label}): "
         f"attempts={attempts_used} reason={last_error}"
