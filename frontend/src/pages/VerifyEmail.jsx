@@ -5,6 +5,7 @@ import Navbar from '../components/Navbar';
 import AuthSceneShell from '../components/auth/AuthSceneShell';
 import { useTheme } from '../hooks/useTheme';
 import { useAuth } from '../contexts/AuthContext';
+import { createAuthCoachNotice } from '../utils/authCoachNotice';
 
 function VerifyEmail() {
   useTheme();
@@ -25,11 +26,21 @@ function VerifyEmail() {
 
     let mounted = true;
     confirmEmail(token)
-      .then(() => {
+      .then((data) => {
         if (!mounted) return;
         setStatus('success');
-        setMessage('Email verified successfully. Redirecting to your dashboard...');
-        window.setTimeout(() => navigate('/dashboard'), 1200);
+        setMessage('Email verified successfully. Redirecting to login...');
+        window.setTimeout(() => navigate('/login', {
+          replace: true,
+          state: {
+            prefillIdentifier: data?.email || '',
+            authNotice: createAuthCoachNotice({
+              tone: 'success',
+              title: 'Email verified',
+              message: 'Your email is confirmed. Enter your password to sign in.',
+            }),
+          },
+        }), 1200);
       })
       .catch((error) => {
         if (!mounted) return;
@@ -62,7 +73,7 @@ function VerifyEmail() {
         badge={badge}
         icon={icon}
         title={title}
-        description="We’re validating your email so your account can safely move into the interview dashboard."
+        description="We’re validating your email so you can sign in to your interview dashboard."
       >
         <div className={`auth-scene-alert ${status === 'error' ? 'auth-scene-alert-error' : 'auth-scene-alert-soft'}`} role={status === 'error' ? 'alert' : undefined}>
           {status !== 'success' ? <FiMail size={15} /> : <FiCheckCircle size={15} />}

@@ -1789,11 +1789,11 @@ def verify_email():
         """.format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
         (record['user_id'],),
     )
-    token_value = create_token(str(user['id']), user['email'], user['full_name'], user['plan'])
-    return _issue_auth_response({
-        "message": "Email verified successfully.",
-        "user": serialize_user(user),
-    }, token_value)
+    # Verification only confirms the email; the user must still log in with their password.
+    return jsonify({
+        "message": "Email verified successfully. Please log in.",
+        "email": user['email'],
+    }), 200
 
 
 @app.route('/api/me', methods=['GET'])

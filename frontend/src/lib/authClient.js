@@ -207,9 +207,8 @@ export const verifyEmail = async (token) => {
   if (!response.ok) {
     throw new Error(data.error || 'Email verification failed');
   }
-  const user = normalizeUser(data.user);
-  persistAuth(data.token || null, user);
-  return { token: data.token || null, user, ...data };
+  // Verification does not log the user in; they must sign in with their password.
+  return data;
 };
 
 export const signOut = async () => {
