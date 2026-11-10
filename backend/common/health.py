@@ -56,9 +56,22 @@ def _stt_ready() -> tuple[bool, dict[str, Any]]:
     return False, diag
 
 
+def _strict_ai_readiness() -> bool:
+    """When true, LLM/STT outages fail readiness (pre-2026-10 behaviour).
+
+    Default false: the ALB target group and ASG (HealthCheckType: ELB) use
+    /api/health/ready, so failing readiness on an external AI dependency would
+    replace every healthy API instance during a Bedrock/STT blip and take down
+    login, payments and history too. AI outages are reported under `degraded`.
+    """
+    return optional_env("READINESS_STRICT_AI", "false").lower() in {"1", "true", "yes", "on"}
+
+
 def readiness_status() -> tuple[bool, dict[str, Any]]:
     failures: list[str] = []
+    degraded: list[str] = []
     checks: dict[str, Any] = {}
+    ai_bucket = failures if _strict_ai_readiness() else degraded
 
     db_ok, db_err = _db_ready()
     checks["database"] = {"ready": db_ok, "error": db_err}
@@ -79,14 +92,14 @@ def readiness_status() -> tuple[bool, dict[str, Any]]:
     llm_ok, llm_diag = _llm_ready()
     checks["llm"] = llm_diag
     if not llm_ok:
-        failures.append("llm")
+        ai_bucket.append("llm")
 
     stt_ok, stt_diag = _stt_ready()
     checks["stt"] = stt_diag
     if not stt_ok:
-        failures.append("stt")
+        ai_bucket.append("stt")
 
-    return len(failures) == 0, {"checks": checks, "failures": failures}
+    return len(failures) == 0, {"checks": checks, "failures": failures, "degraded": degraded}
 
 
 def _llm_status_block() -> dict[str, Any]:
@@ -116,7 +129,7 @@ def full_health_payload() -> dict[str, Any]:
     if provider == "ollama":
         services["ollama"] = dict(llm_status)
     return {
-        "status": "healthy" if ready else "degraded",
+        "status": "healthy" if ready and not readiness.get("degraded") else "degraded",
         "ready": ready,
         "timestamp": datetime.utcnow().isoformat(),
         "version": "2.0.0",

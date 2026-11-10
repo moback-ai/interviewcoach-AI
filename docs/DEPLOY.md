@@ -46,8 +46,8 @@ DevSecOps toggles `deploy_api` / `deploy_frontend` in the Deploy workflow.
 | Endpoint | Used by | Behavior |
 |----------|---------|----------|
 | `/api/health/live` | Docker HEALTHCHECK | Always 200 when process is up |
-| `/api/health/ready` | ALB target group, deploy smoke | 200 when DB, config, LLM, and STT are ready |
-| `/api/health` | External monitoring | Full diagnostics |
+| `/api/health/ready` | ALB target group, deploy smoke | 200 when DB, config and Redis are ready. LLM/STT outages are listed under `readiness.degraded` and do not fail it (`READINESS_STRICT_AI=true` restores the old behaviour) |
+| `/api/health` | External monitoring, deploy smoke (`services.llm.ready`) | Full diagnostics; `status: degraded` when LLM/STT are failing |
 
 ---
 
