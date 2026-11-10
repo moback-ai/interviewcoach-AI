@@ -47,6 +47,9 @@ OPTIONAL_SECRET_KEYS = (
     "OPENROUTER_STT_MODEL",
     "OPENROUTER_BASE_URL",
     "OPENROUTER_API_KEY",
+    "OPENROUTER_CHAT_MODEL",
+    "OPENROUTER_REASONING_EFFORT",
+    "OPENROUTER_TIMEOUT_SECONDS",
     "WHISPER_MODEL",
     "WHISPER_LANGUAGE",
     "STT_S3_BUCKET",
@@ -93,6 +96,11 @@ def validate_secrets_config() -> dict:
 
     present = all_config_keys()
     required = list(REQUIRED_SECRET_KEYS)
+    if (optional_env("LLM_PROVIDER", "") or "").strip().lower() == "openrouter":
+        required = [k for k in required if k not in ("BEDROCK_REGION", "BEDROCK_CHAT_MODEL")]
+        required += [
+            k for k in ("OPENROUTER_API_KEY", "OPENROUTER_CHAT_MODEL") if k not in required
+        ]
     if "openrouter" in _stt_chain() and "OPENROUTER_API_KEY" not in required:
         required.append("OPENROUTER_API_KEY")
     missing = [key for key in required if key not in present or not optional_env(key)]

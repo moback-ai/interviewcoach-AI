@@ -52,8 +52,9 @@ export default function PaymentSuccess() {
           const response = await fetch(
             `${getBackendOrigin()}/api/checkout/${checkoutIntentId}/status`,
             {
+              credentials: 'include',
               headers: {
-                Authorization: `Bearer ${session.access_token}`,
+                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
               },
             }
           );

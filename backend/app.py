@@ -467,6 +467,8 @@ def ensure_questions_schema():
 def ensure_dossier_and_content_hash_schema():
     """Idempotent: content_hash columns + interview_dossiers table."""
     execute("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS content_hash TEXT")
+    # Skills-based profiles have no file; keep their skills so regenerate needs no dossier.
+    execute("ALTER TABLE resumes ADD COLUMN IF NOT EXISTS skills_text TEXT")
     execute("ALTER TABLE job_descriptions ADD COLUMN IF NOT EXISTS content_hash TEXT")
     execute(
         """
@@ -1512,6 +1514,19 @@ def get_ollama_diagnostics(timeout_seconds=2):
     )
 
 
+def llm_info_light():
+    """Provider/model for debug output without any network call.
+
+    get_ollama_diagnostics() sends a real chat request for non-Ollama providers, which adds an
+    LLM round trip in front of every generation, so generation paths use this instead.
+    """
+    try:
+        provider = llm_provider_name()
+    except Exception:
+        provider = ""
+    return {"provider": provider, "model": get_ollama_model_name(), "checked": False}
+
+
 def _env_int(name, default):
     try:
         return int(optional_env(name, str(default)) or default)
@@ -1783,7 +1798,7 @@ def verify_email():
 
 @app.route('/api/me', methods=['GET'])
 @verify_auth_token
-@user_rate_limit(max_calls=60, window_seconds=60)
+@user_rate_limit(max_calls=300, window_seconds=60)
 def get_me():
     user = query_one(
         "SELECT {columns} FROM users WHERE id = %s".format(columns=build_user_columns(_USER_PUBLIC_FIELDS)),
@@ -2566,6 +2581,31 @@ def validate_upload_documents():
     resume_ok = True
     resume_message = ""
 
+    # A resume or JD this user already has stored passed this check before it was saved, so do
+    # not run the model on it again (a borderline document could otherwise flip to "invalid").
+    user_id = request.user['id']
+    # Match by hash, or by the normalized text itself for older rows saved before hashes existed.
+    from common.content_hash import normalize_text as _norm_text
+    jd_already_stored = bool(query_one(
+        """
+        SELECT 1 AS x FROM job_descriptions
+        WHERE user_id=%s AND (
+            content_hash=%s
+            OR (
+                lower(regexp_replace(btrim(coalesce(title, '')), '[[:space:]]+', ' ', 'g')) = %s
+                AND lower(regexp_replace(btrim(coalesce(description, '')), '[[:space:]]+', ' ', 'g')) = %s
+            )
+        )
+        LIMIT 1
+        """,
+        (
+            user_id,
+            hash_job_description(job_title, job_description),
+            _norm_text(job_title),
+            _norm_text(job_description),
+        ),
+    ))
+
     has_resume_file = (
         'file' in request.files
         and request.files['file']
@@ -2582,34 +2622,55 @@ def validate_upload_documents():
                 "message": "File type not allowed for resume",
             }), 400
         temp_path = None
+        resume_already_stored = False
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
-                upload.save(tf.name)
-                temp_path = tf.name
-            try:
-                resume_text = extract_text_from_uploaded_document(temp_path, ext)
-            except ValueError as ve:
-                return jsonify({
-                    "success": False,
-                    "code": "INVALID_RESUME",
-                    "message": str(ve),
-                }), 400
-            try:
-                resume_ok, resume_message = _run_callable_with_timeout(
-                    lambda: classify_is_resume(resume_text, model=model),
-                    45,
-                    label="Resume type classification",
+            upload_bytes = upload.read()
+            upload.stream.seek(0)
+            resume_already_stored = bool(query_one(
+                """
+                SELECT 1 AS x FROM resumes
+                WHERE user_id=%s AND (
+                    content_hash=%s
+                    OR (content_hash IS NULL AND lower(file_name)=lower(%s))
                 )
-            except Exception as classify_error:
-                print(f"[WARN] Resume type classification timed out/failed: {classify_error}")
-                # Fall back to existing heuristic-only validation
-                resume_ok, resume_message = validate_resume_text(resume_text)
-        finally:
-            if temp_path and os.path.exists(temp_path):
+                LIMIT 1
+                """,
+                (user_id, hash_resume_bytes(upload_bytes), upload.filename or ""),
+            ))
+        except Exception as hash_error:
+            print(f"[WARN] Resume hash lookup skipped: {hash_error}")
+        if resume_already_stored:
+            print("[INFO] Resume already stored for this user; skipping type check")
+            resume_ok, resume_message = True, ""
+        else:
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
+                    upload.save(tf.name)
+                    temp_path = tf.name
                 try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
+                    resume_text = extract_text_from_uploaded_document(temp_path, ext)
+                except ValueError as ve:
+                    return jsonify({
+                        "success": False,
+                        "code": "INVALID_RESUME",
+                        "message": str(ve),
+                    }), 400
+                try:
+                    resume_ok, resume_message = _run_callable_with_timeout(
+                        lambda: classify_is_resume(resume_text, model=model),
+                        45,
+                        label="Resume type classification",
+                    )
+                except Exception as classify_error:
+                    print(f"[WARN] Resume type classification timed out/failed: {classify_error}")
+                    # Fall back to existing heuristic-only validation
+                    resume_ok, resume_message = validate_resume_text(resume_text)
+            finally:
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.unlink(temp_path)
+                    except OSError:
+                        pass
     elif skills_text:
         # Skills profile mode — no resume document to classify.
         resume_ok = True
@@ -2629,15 +2690,19 @@ def validate_upload_documents():
             "data": {"resume_ok": False, "jd_ok": None},
         }), 400
 
-    try:
-        jd_ok, jd_message = _run_callable_with_timeout(
-            lambda: classify_is_job_description(job_title, job_description, model=model),
-            45,
-            label="JD type classification",
-        )
-    except Exception as classify_error:
-        print(f"[WARN] JD type classification timed out/failed: {classify_error}")
-        jd_ok, jd_message = validate_job_description_text(job_description)
+    if jd_already_stored:
+        print("[INFO] Job description already stored for this user; skipping type check")
+        jd_ok, jd_message = True, ""
+    else:
+        try:
+            jd_ok, jd_message = _run_callable_with_timeout(
+                lambda: classify_is_job_description(job_title, job_description, model=model),
+                45,
+                label="JD type classification",
+            )
+        except Exception as classify_error:
+            print(f"[WARN] JD type classification timed out/failed: {classify_error}")
+            jd_ok, jd_message = validate_job_description_text(job_description)
 
     if not jd_ok:
         return jsonify({
@@ -2693,6 +2758,40 @@ def _pipeline_failure_response(result, ollama_diagnostics):
     return jsonify(payload), status
 
 
+def _load_stored_resume_text(resume_id, user_id):
+    """Re-extract text from a saved resume file (regenerate has no upload). '' if unavailable."""
+    row = query_one(
+        "SELECT file_url, stored_path, skills_text FROM resumes WHERE id=%s AND user_id=%s",
+        (resume_id, user_id),
+    )
+    if not row:
+        return ""
+    saved_skills = (row.get('skills_text') or "").strip()
+    if saved_skills:
+        return "Candidate skills: " + saved_skills
+    stored_path = (row.get('stored_path') or "").strip() or None
+    relative = (validated_protected_relative_path(stored_path) or stored_path) if stored_path else None
+    if not relative and row.get('file_url'):
+        relative = resolve_relative_path(row['file_url'])
+    if not relative:
+        return ""
+    try:
+        data = read_bytes(relative)
+    except FileNotFoundError:
+        return ""
+    ext = relative.rsplit('.', 1)[-1] if '.' in relative else 'pdf'
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tf:
+        tf.write(data)
+        path = tf.name
+    try:
+        return (extract_text_from_uploaded_document(path, ext) or "").strip()
+    except ValueError:
+        return ""
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
 @app.route('/api/generate-questions', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-questions', methods=['POST', 'OPTIONS'])
 @verify_auth_token
@@ -2726,20 +2825,16 @@ def generate_questions():
                 "success": False,
                 "message": "Provide either resume_url or skills_text, not both",
             }), 400
-        # Regenerate: resume_id + jd_id only (pipeline loads dossier once).
-        # First build: resume_url or skills_text (+ ids for save).
+        # Regenerate: resume_id + jd_id only (re-reads the saved resume or skills).
+        # First build: resume_url or skills_text. Ids are optional here; the client saves the
+        # JD and the questions after generation.
         if not has_ids and not resume_url and not skills_text:
             return jsonify({
                 "success": False,
                 "message": (
                     "Missing required fields: provide resume_id and jd_id to regenerate "
-                    "from the cached dossier, or resume_url / skills_text for a new build"
+                    "from the saved resume or skills, or resume_url / skills_text for a new build"
                 ),
-            }), 400
-        if not has_ids:
-            return jsonify({
-                "success": False,
-                "message": "resume_id and jd_id are required for saving questions",
             }), 400
 
         is_valid_jd, jd_validation_error = validate_job_description_text(job_description)
@@ -2760,12 +2855,17 @@ def generate_questions():
                     "message": "Please provide at most 10 skills.",
                 }), 400
             print(f"[DEBUG] Skills-based profile: {len(skills_list)} skills")
+            if str(resume_id or "").strip():
+                execute(
+                    "UPDATE resumes SET skills_text=%s WHERE id=%s AND user_id=%s",
+                    (", ".join(skills_list), resume_id, request.user["id"]),
+                )
 
         is_regenerate = has_ids and not skills_list and not resume_url
         if is_regenerate:
             print(
                 f"[INFO] generate-questions regenerate mode "
-                f"resume_id={resume_id} jd_id={jd_id} (dossier-only, no pre-load)"
+                f"resume_id={resume_id} jd_id={jd_id} (from saved resume text or skills)"
             )
 
         raw_exclude = data.get("exclude_question_texts") or []
@@ -2779,7 +2879,7 @@ def generate_questions():
             print(f"[INFO] generate-questions excluding {len(exclude_questions)} prior question(s)")
 
         question_counts = data.get('question_counts', {'beginner': 2, 'medium': 2, 'hard': 2})
-        ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+        ollama_diagnostics = llm_info_light()
         pipeline_kwargs = {
             "resume_path": None,
             "job_title": job_title,
@@ -2801,9 +2901,15 @@ def generate_questions():
             "exclude_questions": exclude_questions or None,
         }
 
+        if is_regenerate:
+            # Questions are written from the raw resume, so re-read the saved file.
+            pipeline_kwargs["resume_text"] = (
+                _load_stored_resume_text(resume_id, request.user["id"]) or None
+            )
+
         temp_resume = None
-        # First build only: materialize resume file for dossier construction.
-        # Regenerate never downloads — pipeline loads the saved dossier once.
+        # First build only: materialize the resume file.
+        # Regenerate never downloads; it re-reads the saved resume text.
         if resume_url:
             relative = resolve_relative_path(resume_url)
             if relative:
@@ -2954,7 +3060,7 @@ def _persist_generated_sample_answers(generated, resume_id, jd_id, question_set)
 @app.route('/api/generate-answers', methods=['POST', 'OPTIONS'])
 @app.route('/api/api/generate-answers', methods=['POST', 'OPTIONS'])
 @verify_auth_token
-@user_rate_limit(max_calls=5, window_seconds=60)
+@user_rate_limit(max_calls=15, window_seconds=60)
 def generate_answers_for_question_set():
     """Generate sample answers for questions that still lack a usable answer."""
     if request.method == 'OPTIONS':
@@ -3011,16 +3117,34 @@ def generate_answers_for_question_set():
         )
 
         dossier = load_dossier(resume_id, jd_id, user_id=user_id)
-        if not dossier:
-            return jsonify({
-                "success": False,
-                "message": (
-                    "Interview dossier not found for this resume and job description. "
-                    "Regenerate questions for this pair first, then generate sample answers."
-                ),
-            }), 404
-
         dossier_cache = "hit"
+        if not dossier:
+            # Questions no longer build a dossier; sample answers still ground on one, so build it now.
+            from INTERVIEW.dossier_store import save_dossier
+            from INTERVIEW.question_generation import build_interview_dossier_from_text
+            resume_text = _load_stored_resume_text(resume_id, user_id)
+            if not resume_text:
+                return jsonify({
+                    "success": False,
+                    "message": (
+                        "The saved resume could not be read, so sample answers cannot be generated. "
+                        "Please upload the resume again."
+                    ),
+                }), 404
+            dossier = build_interview_dossier_from_text(
+                resume_text,
+                job_title,
+                (jd_row.get("description") or "").strip(),
+                model=get_ollama_model_name(),
+            )
+            if (dossier or {}).get("source") == "llm_failed":
+                return jsonify({
+                    "success": False,
+                    "code": "DOSSIER_BUILD_FAILED",
+                    "message": "Could not prepare the profile for sample answers. Please retry.",
+                }), 422
+            save_dossier(resume_id, jd_id, dossier, job_title=job_title, user_id=user_id)
+            dossier_cache = "built"
         existing_rows = [dict(row) for row in existing]
         unique_rows = _dedupe_question_rows(existing_rows)
         if not unique_rows:
@@ -3071,7 +3195,7 @@ def generate_answers_for_question_set():
                     f"(total_saved={len(persisted_ids)})"
                 )
 
-        ollama_diagnostics = get_ollama_diagnostics(timeout_seconds=3)
+        ollama_diagnostics = llm_info_light()
         try:
             result = _run_callable_with_timeout(
                 lambda: run_generate_answers_for_question_set(
@@ -4873,10 +4997,14 @@ def resumes_api():
             content_hash = hash_skills_text(skills_text)
         else:
             content_hash = hash_skills_list([])
+    # Skills profiles keep their skills so regenerate can re-read them (no resume file exists).
+    saved_skills_text = None
+    if file_name.strip().lower() == 'skills-based profile':
+        saved_skills_text = (data.get('skills_text') or "").strip() or None
     row = execute(
-        'INSERT INTO resumes (user_id, file_url, file_name, stored_path, content_hash) '
-        'VALUES (%s, %s, %s, %s, %s) RETURNING *',
-        (user_id, file_url, file_name, stored_path, content_hash),
+        'INSERT INTO resumes (user_id, file_url, file_name, stored_path, content_hash, skills_text) '
+        'VALUES (%s, %s, %s, %s, %s, %s) RETURNING *',
+        (user_id, file_url, file_name, stored_path, content_hash, saved_skills_text),
     )
     return jsonify({'success': True, 'data': dict(row)}), 201
 

@@ -4,8 +4,8 @@ import { getAccessToken } from '../lib/authClient';
 import { getBackendOrigin } from '../utils/apiConfig';
 
 const FRAME_INTERVAL_MS = 333;
-const MAX_FRAME_WIDTH = 640;
-const JPEG_QUALITY = 0.8;
+const MAX_FRAME_WIDTH = 320;
+const JPEG_QUALITY = 0.5;
 
 export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => {
   const [isCalibrated, setIsCalibrated] = useState(false);
@@ -37,8 +37,8 @@ export const useHeadTracking = (enabled = true, onCalibrationSuccess = null) => 
       canvasRef.current = document.createElement('canvas');
     }
     const canvas = canvasRef.current;
-    canvas.width = width;
-    canvas.height = height;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(video, 0, 0, width, height);
     return canvas.toDataURL('image/jpeg', JPEG_QUALITY);

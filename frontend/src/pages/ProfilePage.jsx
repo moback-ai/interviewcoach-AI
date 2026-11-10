@@ -357,8 +357,9 @@ const PaymentsSection = () => {
       // Fetch all payments for the user using the edge function
       const response = await fetch(`${getBackendOrigin()}/functions/v1/payments?get_all=true`, {
         method: 'GET',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${session.access_token}`,
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
           'Content-Type': 'application/json'
         }
       });
@@ -701,8 +702,9 @@ const AnalyticsSection = () => {
             // Fetch all interviews for the user using the edge function
             const response = await fetch(`${getBackendOrigin()}/functions/v1/interviews`, {
                 method: 'GET',
+                credentials: 'include',
                 headers:{
-                    'Authorization': `Bearer ${session.access_token}`,
+                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                     'Content-Type': 'application/json'
                     }
                 });
@@ -739,8 +741,9 @@ const AnalyticsSection = () => {
             // Fetch all resume uploads for the user using the edge function
             const response = await fetch(`${getBackendOrigin()}/functions/v1/resumes`, {
                 method: 'GET',
+                credentials: 'include',
                 headers:{
-                    'Authorization': `Bearer ${session.access_token}`,
+                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                     'Content-Type': 'application/json'
                     }
                 });
@@ -777,8 +780,9 @@ const AnalyticsSection = () => {
             // Fetch all uploaded job descriptions for the user using the edge function
             const response = await fetch(`${getBackendOrigin()}/functions/v1/job-descriptions`, {
                 method: 'GET',
+                credentials: 'include',
                 headers:{
-                    'Authorization': `Bearer ${session.access_token}`,
+                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                     'Content-Type': 'application/json'
                     }
                 });
@@ -1129,6 +1133,7 @@ const PaymentHistoryLink = () => {
 };
 
 function ProfilePage() {
+  const navigate = useNavigate();
   const { user, updateProfile } = useAuth();
   const [activeSection, setActiveSection] = useState('profile');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1140,6 +1145,26 @@ function ProfilePage() {
   const [savedAvatarReloadKey, setSavedAvatarReloadKey] = useState(0);
   const [avatarError, setAvatarError] = useState('');
   const [profileData, setProfileData] = useState(() => buildProfileState(user));
+
+  useEffect(() => {
+    let cancelled = false;
+    const verifyUserSession = async () => {
+      try {
+        const session = await getSession();
+        if (!session && !cancelled) {
+          navigate('/login?expired=true', { replace: true });
+        }
+      } catch {
+        if (!cancelled) {
+          navigate('/login?expired=true', { replace: true });
+        }
+      }
+    };
+    verifyUserSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   useEffect(() => {
     setProfileData(buildProfileState(user));
@@ -1191,8 +1216,9 @@ function ProfilePage() {
 
     const response = await fetch(`${getBackendOrigin()}/functions/v1/upload-file`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       },
       body: formData,
     });

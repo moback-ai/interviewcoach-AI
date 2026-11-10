@@ -81,25 +81,52 @@ export const persistAuth = (token, user) => {
   }
 };
 
-export const fetchCurrentUser = async () => {
+const requestCurrentUser = async () => {
   const response = await fetch(`${API_BASE}/me`, {
     ...FETCH_CREDENTIALS,
     headers: getAuthHeaders(),
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) return null;
+  if (!response.ok) return { ok: false, status: response.status, user: null };
   const user = normalizeUser(payload.user);
   persistAuth(getAccessToken(), user);
-  return user;
+  return { ok: true, status: response.status, user };
 };
 
-export const getSession = async () => {
-  const user = await fetchCurrentUser();
-  if (!user) {
-    clearStoredAuth();
-    return null;
+// Many components and API helpers ask for the session at the same moment. Share one in-flight
+// /me request between them instead of firing a request each (that burst hit the rate limit).
+let inflightCurrentUser = null;
+const loadCurrentUser = () => {
+  if (!inflightCurrentUser) {
+    inflightCurrentUser = requestCurrentUser().finally(() => {
+      inflightCurrentUser = null;
+    });
   }
-  return { user, access_token: getAccessToken() };
+  return inflightCurrentUser;
+};
+
+export const fetchCurrentUser = async () => (await loadCurrentUser()).user;
+
+export const getSession = async () => {
+  let result;
+  try {
+    result = await loadCurrentUser();
+  } catch {
+    result = { ok: false, status: 0, user: null };
+  }
+  if (result.ok && result.user) {
+    return { user: result.user, access_token: getAccessToken() };
+  }
+  // Only an auth rejection means "logged out". A rate limit (429), server error or network blip
+  // must not wipe the login; fall back to the stored session while the token is still valid.
+  if (![401, 403, 404].includes(result.status)) {
+    const storedUser = getStoredUser();
+    if (storedUser) {
+      return { user: storedUser, access_token: getAccessToken() };
+    }
+  }
+  clearStoredAuth();
+  return null;
 };
 
 export const getAuthHeaders = (headers = {}) => {

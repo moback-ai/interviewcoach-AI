@@ -16,9 +16,9 @@ DIFFICULTY_LEVELS = ("beginner", "medium", "hard")
 # Ticket percentages; coding zeroed for non-technical roles after normalization.
 DOMAIN_PRESETS: dict[str, dict[str, float]] = {
     "technical": {
-        "behavioral": 0.45,
-        "concepts": 0.30,
-        "situational": 0.15,
+        "behavioral": 0.30,
+        "concepts": 0.40,
+        "situational": 0.20,
         "coding": 0.10,
     },
     "product": {

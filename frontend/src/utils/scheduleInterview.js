@@ -4,18 +4,18 @@ import { trackEvents } from '../services/mixpanel';
 
 async function authHeaders() {
   const session = await getSession();
-  if (!session?.access_token) {
+  if (!session) {
     throw new Error('No active session');
   }
   return {
-    Authorization: `Bearer ${session.access_token}`,
+    ...(session.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
     'Content-Type': 'application/json',
   };
 }
 
 export async function fetchInterviewQuota() {
   const headers = await authHeaders();
-  const response = await fetch(`${getBackendOrigin()}/api/interview-quota`, { headers });
+  const response = await fetch(`${getBackendOrigin()}/api/interview-quota`, { headers, credentials: 'include' });
   const result = await response.json();
   if (!response.ok || !result.success) {
     throw new Error(result.message || 'Failed to load interview quota');
@@ -58,6 +58,7 @@ export async function scheduleInterview({
 
     const response = await fetch(`${getBackendOrigin()}/api/checkout`, {
       method: 'POST',
+      credentials: 'include',
       headers,
       body: JSON.stringify(body),
     });
@@ -75,6 +76,7 @@ export async function scheduleInterview({
 
   const response = await fetch(`${getBackendOrigin()}/api/interviews/start`, {
     method: 'POST',
+    credentials: 'include',
     headers,
     body: JSON.stringify(body),
   });

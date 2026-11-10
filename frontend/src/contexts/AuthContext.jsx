@@ -20,10 +20,26 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const clearAuth = () => {
+    clearStoredAuth();
+    setUser(null);
+  };
+
   useEffect(() => {
     let cancelled = false;
 
     const bootstrap = async () => {
+      // If arrived at /login with expired query param, immediately purge auth state
+      const isExpiredQuery = typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).get('expired') === 'true';
+
+      if (isExpiredQuery) {
+        clearStoredAuth();
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
       const cachedUser = getStoredUser();
       if (cachedUser) {
         setUser(cachedUser);
@@ -39,7 +55,7 @@ export const AuthProvider = ({ children }) => {
           setUser(null);
         }
       } catch {
-        if (!cancelled && !cachedUser) {
+        if (!cancelled) {
           clearStoredAuth();
           setUser(null);
         }
@@ -51,8 +67,17 @@ export const AuthProvider = ({ children }) => {
     };
 
     bootstrap();
+
+    const handleSessionExpired = () => {
+      clearStoredAuth();
+      setUser(null);
+    };
+
+    window.addEventListener('ic-session-expired', handleSessionExpired);
+
     return () => {
       cancelled = true;
+      window.removeEventListener('ic-session-expired', handleSessionExpired);
     };
   }, []);
 
@@ -81,7 +106,12 @@ export const AuthProvider = ({ children }) => {
   const resendVerificationEmail = async (email) => resendVerification(email);
 
   const logout = async ({ expired = false } = {}) => {
-    await signOut();
+    try {
+      await signOut();
+    } catch {
+      // Ignore network errors during sign out
+    }
+    clearStoredAuth();
     setUser(null);
     if (expired) {
       redirectToExpiredLogin();
@@ -105,6 +135,7 @@ export const AuthProvider = ({ children }) => {
     confirmEmail,
     resendVerificationEmail,
     logout,
+    clearAuth,
     updateProfile,
     apiBase: API_BASE,
   }), [user, loading]);
