@@ -2972,16 +2972,19 @@ def generate_coding_questions(
             f"CANDIDATE RESUME\n{resume_text.strip()[:10000]}\n\n"
             f"JOB DESCRIPTION\n{(job_description or '').strip()[:5000]}"
         )
+    elif (job_description or "").strip():
+        # Dossier-only path: the skill JSON alone hides what the job actually does.
+        focus_blob += f"\n\nJOB DESCRIPTION\n{job_description.strip()[:5000]}"
 
-    # Spread weights across the requested count
-    weights = []
-    for i in range(coding_count):
-        if i % 3 == 0:
-            weights.append(1)
-        elif i % 3 == 1:
-            weights.append(3)
-        else:
-            weights.append(5)
+    # Coding is only ~10% of a set, so usually 1-2 questions. The old 1/3/5 cycle gave a lone
+    # coding question weight 1 (easy) and never produced a hard one below 3 questions.
+    # Bias small counts upward so the hardest coding question is genuinely hard.
+    if coding_count == 1:
+        weights = [3]
+    elif coding_count == 2:
+        weights = [3, 5]
+    else:
+        weights = [(1, 3, 5)[i % 3] for i in range(coding_count)]
 
     exclude_block = _exclude_questions_block(exclude_questions)
     regeneration_block = _regeneration_mode_block(exclude_questions)
@@ -2990,35 +2993,94 @@ def generate_coding_questions(
 
     prompt = f"""You are an expert technical interviewer for **{job_title}**.
 
-Generate CLEAR, PRECISE, IMPLEMENTABLE coding tasks (NOT theory).
+Generate CLEAR, PRECISE, IMPLEMENTABLE coding tasks (NOT theory) that test mastery of the PROGRAMMING
+LANGUAGE itself, the way a real interviewer would in a live coding round.
 
 SKILL FOCUS (prefer the language and tools both the resume and the job description name):
 {focus_blob}
 
 RULES:
-1. Every item MUST be a direct coding task: "Write a function…", "Write SQL…", "Parse…", "Given X return Y…".
-2. Prefer languages/tools the candidate lists in resume_skills/overlap_skills. If JD language differs, prioritize resume language but use JD-style logic from must_have_skills/tools.
-3. Write each task as plain prose in one or two complete sentences, then the table/input definition
-   (max ~70 words). No bullets, dashes, markdown or newlines. Never start with a bare fragment like
-   "Write SQL Server SQL." - say what to return ("Write a SQL Server query that returns ..."). Do not spell
-   out every column alias, rounding rule, NULL rule or sort key unless it is the point of the question.
-4. Difficulty by weight (calibrate strictly):
-   - weight 1 (easy): ONE concept, but never a bare one-line lookup such as "count rows where a flag is
-     set": add one small decision or edge case (grouping, a threshold, empty or duplicate input, a tie).
-     No window functions, CTEs, multiple joins, or multi-key sorting.
-   - weight 3 (medium): a join plus group-by/having, a date-range or "previous period" filter, regex, or a
-     multi-step transform.
-   - weight 5 (hard): window functions / ranking / running totals / dedupe, or a mini utility
-     (retry/pagination) with branching and error handling.
-5. BAN: vague discussion, system design essays, unrelated LeetCode puzzles, multi-day projects.
-6. Do not invent languages or libraries not present in the skill focus.
+1. Every item MUST be a direct coding task: "Write a function…", "Implement a class…", "Write SQL…", "Given X return Y…".
+2. GROUNDED IN THE JD AND RESUME, TESTED AT LANGUAGE LEVEL. Pick the primary language: the JD's required
+   language if the candidate also lists it, otherwise the candidate's language that best fits the JD. Then
+   choose each task's TOPIC from the skills, tools and responsibilities named in the JOB DESCRIPTION and
+   the resume (overlap skills first, then JD must-haves). Never pick a random textbook topic that neither
+   mentions. Turn each named framework or tool into the plain language concept behind it and test THAT in
+   a small self-contained program, for example: FastAPI/async services -> async/await, decorators,
+   dependency-style closures; Django/Flask/REST APIs -> JSON parsing and validation, pagination, request
+   batching; PostgreSQL/Django ORM/SQL -> a SQL query (joins, grouping, window functions); Celery/queues ->
+   retry with backoff, idempotent de-duplication; pandas/data work -> grouping and aggregation with plain
+   Python; caching -> LRU/TTL logic; logging/monitoring -> log parsing; testing -> mocks and fixtures as
+   functions. Language topics to draw from, by language:
+   - Python: generators and lazy iteration, decorators (with arguments, with state), context managers,
+     closures, iterators and itertools/functools, dataclasses, __slots__, descriptors and properties, magic
+     methods, metaclasses, asyncio (gather, semaphores, cancellation), threading vs multiprocessing, memory
+     and mutability pitfalls, collections (deque, Counter, defaultdict, heapq, bisect), typing/Protocol.
+   - Java: streams and collectors, generics and bounded types, concurrency (ExecutorService,
+     CompletableFuture, locks, ConcurrentHashMap), immutability, equals/hashCode, Optional, records, sealed types.
+   - JavaScript/TypeScript: closures, promises and async/await ordering, event loop, debounce/throttle,
+     prototypes, iterators and generators, Proxy, deep clone/equality, TypeScript generics and mapped types.
+   - C#/.NET: LINQ, async/await and Task, IEnumerable/yield, generics with constraints, delegates and
+     events, IDisposable, Span and memory.
+   - Go: goroutines and channels, worker pools, context cancellation, sync primitives, interfaces, slices.
+   - SQL: joins, window functions, CTEs, gaps-and-islands, ranking, de-duplication, running totals.
+   Other languages: use their equivalent advanced features.
+3. BAN framework or infrastructure tasks: no web endpoints or apps (FastAPI, Flask, Django, Express,
+   Spring, ASP.NET), no ORMs or database connections, no Celery/queues/Kafka, no Docker/cloud/CI, no file
+   or network setup, no "build a service/API/app". Every task must run as a single file with only the
+   standard library and plain input/output.
+4. SHORT AND SHARP. Length is NOT difficulty. Difficulty must come from the depth of the concept, never
+   from a long description. Write each task as ONE or TWO sentences, at most about 35 words (a weight 5
+   task at most about 45), plain prose with no bullets, dashes, markdown or newlines. State only the
+   function or class to write, the input/output, and the one constraint or edge case that makes it hard.
+   Do not describe a business scenario, table schemas with many columns, or step-by-step requirements.
+   A strong short example: "Write a decorator factory retry(n, exceptions) that works on both sync and
+   async functions and re-raises the last error after n tries." Never start with a bare fragment like
+   "Write SQL Server SQL." - say what to return ("Write a SQL Server query that returns ...").
+5. Difficulty by weight (calibrate strictly):
+   - weight 1 (easy): a 3-5 minute fundamentals task, ONE pass over the input with ONE basic concept
+     (loops, strings, lists, dicts, sets, comprehensions) and ONE small decision such as counting or
+     skipping invalid input (None or empty). Never a bare mapping like "return each string with its
+     length". Good: "Write a Python function that returns the frequency of each valid string in a list,
+     skipping None and empty strings."
+   - weight 3 (medium): a 10-15 minute task that is CLEARLY HARDER than any easy task: the solver must know
+     and apply a recognised pattern, not just loop and count. Use ONE of: sliding window, two pointers,
+     stack, heap (heapq), hash-map grouping with a custom key, interval merging, recursion on nested
+     data, binary search, a decorator using *args/**kwargs and functools.wraps, a generator pipeline
+     (filter then batch), or a SQL join with group-by and having. It should have 2-3 genuine edge cases
+     and about 10-25 lines of code. Good: "Write a function that returns the length of the longest
+     substring without repeating characters.", "Write a function that merges overlapping intervals.",
+     "Write a function that returns the k most frequent words using heapq.", "Write a function that
+     checks whether brackets of three kinds are balanced.", "Write a decorator that caches results by
+     arguments and preserves the function's name and docstring."
+     Medium must NOT need asyncio, threads, complexity bounds, metaclasses, descriptors, streaming of huge
+     input or a stateful class design; those belong to hard.
+   - LADDER CHECK before you answer: for every set, each higher weight must be clearly harder than the one
+     below it (easy < medium < hard) in concept depth and solving time. A medium task that is a single
+     built-in call, one loop, or simpler than the easy example is WRONG: replace it with a pattern-based
+     task. A medium task that needs concurrency or class design is too hard: simplify it.
+   - weight 5 (hard): an ADVANCED language topic that a senior candidate must reason about, not solvable by
+     one built-in call or a single loop. Express the difficulty as ONE tight requirement, in a SHORT
+     statement, drawn from: lazy or streaming processing of input too
+     large for memory, concurrency or ordering guarantees, a non-obvious data-structure or algorithm choice
+     with a stated time/memory bound, a small stateful component (LRU cache, rate limiter, retry with
+     backoff, async worker pool with a concurrency limit), subtle language semantics (closures,
+     descriptors, iterator protocol, cancellation), several interacting edge cases.
+   - If the resume or JD points to a senior role (about 5+ years, lead, architect), raise each level one
+     notch of difficulty.
+6. BAN overused warm-up puzzles at EVERY level: palindrome check, reverse a string, FizzBuzz, Fibonacci,
+   factorial, prime check, two-sum, anagram check, vowel or character counting, max/min of a list, sum of
+   digits, "remove duplicates from a list". They are not tied to the job and any candidate has memorised
+   them. Every task must be traceable to a skill, tool or responsibility named in the JD or resume (rule 2);
+   if you cannot name that skill, pick a different task.
+   BAN also: vague discussion, system design essays, theory questions, multi-day projects. Do not invent
+   languages or libraries not present in the skill focus.
 7. State limits and boundary semantics unambiguously: for retries say "up to N retries after the first
    attempt" (or "N attempts in total"), and say whether ranges and thresholds are inclusive.
-8. Make the contract explicit in one short clause. Define every qualifying word the task uses: if it says
-   "retryable", "valid", "active" or "successful", state exactly what qualifies (for example "retry only
-   on TimeoutError"). Say how null or empty input is handled. For any date column give its type and how
-   both boundaries apply (for example "created_at is a timestamp; include all of the end date").
-   Tasks must be solvable in 10-15 minutes.
+8. Keep the contract tight but unambiguous in a few words: define any qualifying word you use (for
+   example "retry only on TimeoutError"), say how empty input behaves only if it matters, and state a time
+   or memory bound only when it is the point of the question. Each task must be solvable in 10-20
+   minutes; hard tasks are hard because of the concept, not the amount of code.
 {exclude_block}{regeneration_block}
 Return ONLY a JSON array with EXACTLY {coding_count} items. Use these weights in order: {weights}
 [

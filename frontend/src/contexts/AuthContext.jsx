@@ -98,9 +98,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const confirmEmail = async (token) => {
-    const data = await verifyEmail(token);
-    setUser(data.user);
-    return data;
+    return verifyEmail(token);
   };
 
   const resendVerificationEmail = async (email) => resendVerification(email);

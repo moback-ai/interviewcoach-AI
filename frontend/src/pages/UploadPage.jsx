@@ -19,6 +19,7 @@ import { getSession } from '../lib/authClient';
 import { unlockBodyScroll } from '../utils/unlockBodyScroll';
 import { devLog, devWarn } from '../utils/devLog';
 import generateQuestionsPDF from '../utils/generateQuestionsPDF';
+import { createCleanPasteHandler } from '../utils/stripMarkdown';
 
 const JD_FETCH_ERROR_MESSAGE =
   "We couldn't fetch this job description from the link. Please paste it manually or upload the JD file.";
@@ -1802,6 +1803,7 @@ function UploadPage() {
                     <textarea
                       value={jobDescription}
                       onChange={(e) => setJobDescription(e.target.value)}
+                      onPaste={createCleanPasteHandler(() => jobDescription, setJobDescription)}
                       placeholder="Paste the full job description here..."
                       rows={6}
                       disabled={loading || parsingJobDesc}
@@ -1917,6 +1919,7 @@ function UploadPage() {
                       <textarea
                         value={jobDescription}
                         onChange={(e) => setJobDescription(e.target.value)}
+                        onPaste={createCleanPasteHandler(() => jobDescription, setJobDescription)}
                         placeholder="Paste the job description here or upload a file to parse the job description..."
                         rows={6}
                         disabled={loading}
