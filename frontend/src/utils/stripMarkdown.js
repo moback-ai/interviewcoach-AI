@@ -56,3 +56,9 @@ export function createCleanPasteHandler(getValue, setValue) {
     });
   };
 }
+
+/**
+ * Alias for stripMarkdown — strips Markdown syntax for plain-text display.
+ * Use this when you want to render interviewer/AI text without Markdown markers.
+ */
+export const stripMarkdownForDisplay = stripMarkdown;
